@@ -94,10 +94,13 @@ pub extern "C" fn _start() -> ! {
                 }
                 kprintln_style!(
                     crate::tty::ConsoleStyle::Success,
-                    "HXNU: tty console online id={} outputs={} framebuffer={}",
+                    "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
                     tty.console_id,
                     tty.output_count,
                     yes_no(tty.framebuffer_output),
+                    tty.virtual_console_count,
+                    tty.columns,
+                    tty.rows,
                 );
             }
             Err(error) => {
@@ -108,10 +111,13 @@ pub extern "C" fn _start() -> ! {
                     error.as_str()
                 );
                 kprintln!(
-                    "HXNU: tty console online id={} outputs={} framebuffer={}",
+                    "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
                     tty.console_id,
                     tty.output_count,
                     yes_no(tty.framebuffer_output),
+                    tty.virtual_console_count,
+                    tty.columns,
+                    tty.rows,
                 );
             }
         },
@@ -119,10 +125,13 @@ pub extern "C" fn _start() -> ! {
             let tty = tty::initialize(false);
             kprintln!("HXNU: framebuffer response missing");
             kprintln!(
-                "HXNU: tty console online id={} outputs={} framebuffer={}",
+                "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
                 tty.console_id,
                 tty.output_count,
                 yes_no(tty.framebuffer_output),
+                tty.virtual_console_count,
+                tty.columns,
+                tty.rows,
             );
         }
     }
@@ -465,6 +474,40 @@ pub extern "C" fn _start() -> ! {
             kprintln_style!(
                 crate::tty::ConsoleStyle::Error,
                 "HXNU: devfs offline reason={}",
+                error.as_str()
+            );
+            halt();
+        }
+    }
+    for console_id in 1..tty::VIRTUAL_CONSOLE_COUNT as u32 {
+        let _ = tty::write_to_console(
+            console_id,
+            crate::tty::ConsoleStyle::Accent,
+            "HXNU virtual console ready\n",
+        );
+        let _ = tty::write_to_console(
+            console_id,
+            crate::tty::ConsoleStyle::Muted,
+            "Framebuffer redraw path prepared for multi-screen TTY\n",
+        );
+    }
+    match tty::switch_active_console(1) {
+        Ok(()) => {
+            let _ = tty::switch_active_console(0);
+            let tty = tty::stats();
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Success,
+                "HXNU: tty virtual consoles online active=tty{} total={} geometry={}x{} switch-smoke=yes",
+                tty.console_id,
+                tty.virtual_console_count,
+                tty.columns,
+                tty.rows,
+            );
+        }
+        Err(error) => {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Error,
+                "HXNU: tty virtual console switch failed reason={}",
                 error.as_str()
             );
             halt();

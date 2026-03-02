@@ -5,9 +5,12 @@ use core::fmt::Write;
 use crate::tty;
 
 const DEVFS_DIRECTORIES: [&str; 2] = ["/", "/dev"];
-const DEVFS_NODES: [&str; 5] = [
+const DEVFS_NODES: [&str; 8] = [
     "/dev/console",
     "/dev/tty0",
+    "/dev/tty1",
+    "/dev/tty2",
+    "/dev/tty3",
     "/dev/null",
     "/dev/zero",
     "/dev/kmsg",
@@ -84,6 +87,9 @@ pub fn read(path: &str) -> Option<String> {
         "/dev" => Some(render_root()),
         "/dev/console" => Some(render_console(state, "/dev/console")),
         "/dev/tty0" => Some(render_console(state, "/dev/tty0")),
+        "/dev/tty1" => Some(render_console(state, "/dev/tty1")),
+        "/dev/tty2" => Some(render_console(state, "/dev/tty2")),
+        "/dev/tty3" => Some(render_console(state, "/dev/tty3")),
         "/dev/null" => Some(render_null()),
         "/dev/zero" => Some(render_zero()),
         "/dev/kmsg" => Some(render_kmsg()),

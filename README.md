@@ -75,6 +75,7 @@ Current bring-up logs also include:
 - HHDM and memory map summary
 - UEFI framebuffer or GOP handoff summary
 - output-only TTY console bootstrap with serial and framebuffer sinks
+- multiple virtual TTY screen foundation with framebuffer redraw and active-console switching
 - styled framebuffer console output for accent, success, warning, error, and fatal paths
 - frame allocator and heap bootstrap summary
 - GDT and IDT activation summary

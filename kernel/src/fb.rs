@@ -63,6 +63,21 @@ pub enum ConsoleStyle {
     Muted,
 }
 
+#[derive(Copy, Clone)]
+pub struct ConsoleGlyph {
+    pub byte: u8,
+    pub style: ConsoleStyle,
+}
+
+impl ConsoleGlyph {
+    pub const fn empty() -> Self {
+        Self {
+            byte: b' ',
+            style: ConsoleStyle::Default,
+        }
+    }
+}
+
 struct GlobalFramebufferConsole(UnsafeCell<Option<FramebufferConsole>>);
 
 unsafe impl Sync for GlobalFramebufferConsole {}
@@ -125,6 +140,28 @@ pub fn write_style(style: ConsoleStyle, text: &str) {
 
 pub fn console_probe() -> Option<u32> {
     unsafe { (&*FRAMEBUFFER_CONSOLE.get()).as_ref().map(FramebufferConsole::first_ink_sample) }
+}
+
+pub fn console_dimensions() -> Option<(usize, usize)> {
+    unsafe {
+        (&*FRAMEBUFFER_CONSOLE.get())
+            .as_ref()
+            .map(|console| (console.columns as usize, console.rows as usize))
+    }
+}
+
+pub fn render_console(
+    cells: &[ConsoleGlyph],
+    columns: usize,
+    rows: usize,
+    cursor_column: usize,
+    cursor_row: usize,
+) {
+    unsafe {
+        if let Some(console) = &mut *FRAMEBUFFER_CONSOLE.get() {
+            console.render_console(cells, columns, rows, cursor_column, cursor_row);
+        }
+    }
 }
 
 struct FramebufferConsole {
@@ -301,6 +338,30 @@ impl FramebufferConsole {
         self.cursor_row = 0;
     }
 
+    fn render_console(
+        &mut self,
+        cells: &[ConsoleGlyph],
+        columns: usize,
+        rows: usize,
+        cursor_column: usize,
+        cursor_row: usize,
+    ) {
+        let render_columns = columns.min(self.columns as usize);
+        let render_rows = rows.min(self.rows as usize);
+        self.clear_log_region();
+
+        for row in 0..render_rows {
+            for column in 0..render_columns {
+                let index = row.saturating_mul(columns).saturating_add(column);
+                let glyph = cells.get(index).copied().unwrap_or_else(ConsoleGlyph::empty);
+                self.draw_console_cell(row as u64, column as u64, glyph);
+            }
+        }
+
+        self.cursor_column = (cursor_column.min(render_columns)) as u64;
+        self.cursor_row = (cursor_row.min(render_rows.saturating_sub(1))) as u64;
+    }
+
     fn first_ink_sample(&self) -> u32 {
         let end_y = self.log_origin_y + (CHAR_HEIGHT * 2).min(self.log_height);
         let end_x = self.log_origin_x + (CHAR_WIDTH * 32).min(self.log_width);
@@ -324,6 +385,21 @@ impl FramebufferConsole {
             ConsoleStyle::Error => self.error,
             ConsoleStyle::Fatal => self.fatal,
             ConsoleStyle::Muted => self.muted,
+        }
+    }
+
+    fn draw_console_cell(&mut self, row: u64, column: u64, glyph: ConsoleGlyph) {
+        let x = self.log_origin_x + column * CHAR_WIDTH;
+        let y = self.log_origin_y + row * CHAR_HEIGHT;
+        self.fill_rect(x, y, CHAR_WIDTH, CHAR_HEIGHT, self.background);
+        if glyph.byte != b' ' {
+            self.draw_glyph(
+                x + FONT_SCALE,
+                y + FONT_SCALE,
+                normalize_glyph_byte(glyph.byte),
+                self.style_color(glyph.style),
+                FONT_SCALE,
+            );
         }
     }
 

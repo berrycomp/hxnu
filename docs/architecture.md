@@ -107,6 +107,8 @@ The early display and terminal path should also stay layered:
 - UEFI framebuffer or GOP should provide the first graphical framebuffer path on `x86_64`
 - framebuffer console support should exist before a full window system
 - TTY core belongs in kernel
+- multiple virtual TTY screens should be supported before full userspace terminal management
+- active framebuffer redraw should follow the selected virtual console, while serial remains a global debug sink
 - PTY and richer terminal semantics can be added with the POSIX personality layer
 
 This keeps early boot and recovery usable without forcing the full userspace terminal stack into the kernel.

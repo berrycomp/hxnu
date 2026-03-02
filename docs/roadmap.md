@@ -38,6 +38,7 @@ Current status:
 - SMP topology inventory and AP bring-up target discovery are online on `x86_64`
 - Read-only `procfs` snapshot bootstrap is online on `x86_64`
 - Read-only `devfs` namespace bootstrap is online on `x86_64`
+- Multiple virtual TTY screen foundation is online on `x86_64`
 - Scheduler thread table and runqueue skeleton are online on `x86_64`
 - Bootstrap to idle-thread context switching is online on `x86_64`
 - Styled framebuffer console output is online on `x86_64`
@@ -59,6 +60,7 @@ Current status:
 - `devfs`
 - `procfs`
 - TTY core and console plumbing
+- Multiple virtual TTY screens or virtual consoles
 - Early keyboard or console input path
 - UEFI framebuffer or GOP handoff and framebuffer console
 - Block device layer
@@ -81,6 +83,7 @@ Current status:
 - Core virtualization or LVE hooks
 - Linux or Unix-like `init` startup contract
 - PTY and POSIX terminal semantics
+- Active TTY switching and console session routing
 - Driver object model
 - Device enumeration and bus framework
 - Driver loading infrastructure for external driver directories
@@ -124,6 +127,7 @@ Current status:
 - ext4 and exFAT are expected to work well as separate drivers or service modules
 - `devfs` and `procfs` should arrive early with the VFS core
 - TTY and framebuffer console support should be available before broader userspace compatibility work
+- Multiple virtual TTY screens should sit between the early console path and full PTY/session semantics
 - UEFI framebuffer support should be treated as a boot-critical display path
 - Minimal ACPI discovery and power-state plumbing belong in kernel
 - Full power-policy logic should stay outside the kernel when practical
