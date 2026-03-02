@@ -79,6 +79,7 @@ Current bring-up logs also include:
 - frame allocator and heap bootstrap summary
 - GDT and IDT activation summary
 - CPUID vendor, brand, leaf, and feature summary
+- CPUID topology leaf summary from `0x0B/0x1F`
 - local APIC capability and base-address probe
 - local APIC timer one-shot self-test summary
 - minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` summaries

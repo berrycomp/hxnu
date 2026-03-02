@@ -10,6 +10,7 @@ pub struct CpuInfo {
     pub max_basic_leaf: u32,
     pub max_extended_leaf: u32,
     pub hypervisor_present: bool,
+    pub topology: Option<cpuid::CpuTopologyInfo>,
     pub local_apic_supported: bool,
     pub x2apic_supported: bool,
     pub tsc_deadline_supported: bool,
@@ -40,6 +41,7 @@ impl CpuInfo {
 
 pub fn probe() -> CpuInfo {
     let identity = cpuid::read_identity();
+    let topology = cpuid::read_topology(identity.max_basic_leaf);
     let leaf_1 = cpuid::query(1);
     let local_apic_supported = (leaf_1.edx & (1 << 9)) != 0;
     let x2apic_supported = (leaf_1.ecx & (1 << 21)) != 0;
@@ -69,6 +71,7 @@ pub fn probe() -> CpuInfo {
         max_basic_leaf: identity.max_basic_leaf,
         max_extended_leaf: identity.max_extended_leaf,
         hypervisor_present: identity.hypervisor_present,
+        topology,
         local_apic_supported,
         x2apic_supported,
         tsc_deadline_supported,

@@ -235,6 +235,37 @@ pub extern "C" fn _start() -> ! {
             brand,
         );
     }
+    if let Some(topology) = cpu_info.topology {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: cpuid topology leaf={} x2apic-id={} smt-shift={} core-shift={} threads/core={} logical/package={} smt-id={} core-id={} package-id={}",
+            topology.leaf_kind.as_str(),
+            topology.x2apic_id,
+            topology.smt_shift,
+            topology.core_shift,
+            topology.threads_per_core,
+            topology.logical_processors_per_package,
+            topology.smt_id,
+            topology.core_id,
+            topology.package_id,
+        );
+        for level in topology.levels[..topology.level_count].iter() {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Muted,
+                "HXNU: cpuid topo level={} type={} shift={} logical={} x2apic-id={}",
+                level.level_number,
+                level.level_type.as_str(),
+                level.shift,
+                level.logical_processors,
+                level.x2apic_id,
+            );
+        }
+    } else {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: cpuid topology leaf unavailable"
+        );
+    }
     if cpu_info.local_apic_supported {
         kprintln!(
             "HXNU: apic base={:#010x} enabled={} x2apic-mode={} bsp={}",
