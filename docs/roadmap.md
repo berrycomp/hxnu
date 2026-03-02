@@ -33,6 +33,7 @@ Current status:
 - Minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` parsing is online on `x86_64`
 - MADT processor, IO APIC, and interrupt-override topology summaries are online on `x86_64`
 - FADT power and reset-register summaries are online on `x86_64`
+- SMP topology inventory and AP bring-up target discovery are online on `x86_64`
 - Scheduler thread table and runqueue skeleton are online on `x86_64`
 - Bootstrap to idle-thread context switching is online on `x86_64`
 - Styled framebuffer console output is online on `x86_64`

@@ -7,6 +7,7 @@ pub struct CpuInfo {
     pub local_apic_supported: bool,
     pub x2apic_supported: bool,
     pub tsc_deadline_supported: bool,
+    pub initial_apic_id: u32,
     pub apic_base: u64,
     pub apic_global_enabled: bool,
     pub x2apic_enabled: bool,
@@ -18,6 +19,7 @@ pub fn probe() -> CpuInfo {
     let local_apic_supported = (leaf_1.edx & (1 << 9)) != 0;
     let x2apic_supported = (leaf_1.ecx & (1 << 21)) != 0;
     let tsc_deadline_supported = (leaf_1.ecx & (1 << 24)) != 0;
+    let initial_apic_id = (leaf_1.ebx >> 24) & 0xff;
 
     let apic_base_msr = if local_apic_supported {
         read_msr(IA32_APIC_BASE_MSR)
@@ -29,6 +31,7 @@ pub fn probe() -> CpuInfo {
         local_apic_supported,
         x2apic_supported,
         tsc_deadline_supported,
+        initial_apic_id,
         apic_base: apic_base_msr & 0xffff_f000,
         apic_global_enabled: (apic_base_msr & (1 << 11)) != 0,
         x2apic_enabled: (apic_base_msr & (1 << 10)) != 0,

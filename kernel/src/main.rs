@@ -16,6 +16,7 @@ mod panic;
 mod power;
 mod sched;
 mod serial;
+mod smp;
 mod time;
 mod tty;
 
@@ -210,10 +211,11 @@ pub extern "C" fn _start() -> ! {
     );
     let cpu_info = arch::x86_64::probe_cpu();
     kprintln!(
-        "HXNU: cpu local-apic={} x2apic={} tsc-deadline={}",
+        "HXNU: cpu local-apic={} x2apic={} tsc-deadline={} initial-apic-id={}",
         yes_no(cpu_info.local_apic_supported),
         yes_no(cpu_info.x2apic_supported),
         yes_no(cpu_info.tsc_deadline_supported),
+        cpu_info.initial_apic_id,
     );
     if cpu_info.local_apic_supported {
         kprintln!(
@@ -294,6 +296,50 @@ pub extern "C" fn _start() -> ! {
                                 override_entry.global_system_interrupt,
                                 override_entry.flags,
                             );
+                        }
+                        match smp::initialize(&cpu_info, madt) {
+                            Ok(summary) => {
+                                kprintln_style!(
+                                    crate::tty::ConsoleStyle::Success,
+                                    "HXNU: smp topology bsp-apic={} bsp-index={} cpus={} enabled={} online={} aps={} bringup-targets={} x2apic={}",
+                                    summary.bsp_apic_id,
+                                    summary.current_cpu_index,
+                                    summary.total_cpus,
+                                    summary.enabled_cpus,
+                                    summary.online_cpus,
+                                    summary.ap_count,
+                                    summary.bringup_targets,
+                                    summary.x2apic_cpus,
+                                );
+                                if let Some(topology) = smp::topology() {
+                                    let current = topology.current_cpu();
+                                    kprintln!(
+                                        "HXNU: smp current cpu{} uid={} apic={} mode={} bsp={} online={}",
+                                        current.index,
+                                        current.processor_uid,
+                                        current.apic_id,
+                                        current.apic_mode(),
+                                        yes_no(current.is_bsp),
+                                        yes_no(current.online),
+                                    );
+                                    if let Some(target) = topology.first_bringup_target() {
+                                        kprintln_style!(
+                                            crate::tty::ConsoleStyle::Muted,
+                                            "HXNU: smp next ap target cpu{} uid={} apic={} mode={} online-capable={}",
+                                            target.index,
+                                            target.processor_uid,
+                                            target.apic_id,
+                                            target.apic_mode(),
+                                            yes_no(target.online_capable),
+                                        );
+                                    }
+                                }
+                            }
+                            Err(error) => kprintln_style!(
+                                crate::tty::ConsoleStyle::Error,
+                                "HXNU: smp topology offline reason={}",
+                                error.as_str()
+                            ),
                         }
                     }
                     if let Some(ref fadt) = discovery.fadt {

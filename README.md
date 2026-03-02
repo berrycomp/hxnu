@@ -81,6 +81,7 @@ Current bring-up logs also include:
 - local APIC capability and base-address probe
 - local APIC timer one-shot self-test summary
 - minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` summaries
+- SMP topology inventory and AP bring-up target summary from `MADT`
 - periodic scheduler tick bootstrap summary
 - scheduler thread and runqueue model summary
 - bootstrap to idle context-switch summary
