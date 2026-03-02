@@ -5,6 +5,7 @@
 
 extern crate alloc;
 
+mod acpi;
 mod arch;
 mod fb;
 #[macro_use]
@@ -15,6 +16,7 @@ mod panic;
 mod sched;
 mod serial;
 mod time;
+mod tty;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -63,6 +65,7 @@ pub extern "C" fn _start() -> ! {
     match limine::framebuffer() {
         Some(framebuffer) => match fb::initialize(framebuffer) {
             Ok(summary) => {
+                let tty = tty::initialize(true);
                 kprintln!(
                     "HXNU: framebuffer online mode={}x{} pitch={} bpp={}",
                     summary.width,
@@ -75,12 +78,37 @@ pub extern "C" fn _start() -> ! {
                     summary.sample_background,
                     summary.sample_accent,
                 );
+                if let Some(ink) = fb::console_probe() {
+                    kprintln!("HXNU: framebuffer console probe ink={:#010x}", ink);
+                }
+                kprintln!(
+                    "HXNU: tty console online id={} outputs={} framebuffer={}",
+                    tty.console_id,
+                    tty.output_count,
+                    yes_no(tty.framebuffer_output),
+                );
             }
             Err(error) => {
+                let tty = tty::initialize(false);
                 kprintln!("HXNU: framebuffer offline reason={}", error.as_str());
+                kprintln!(
+                    "HXNU: tty console online id={} outputs={} framebuffer={}",
+                    tty.console_id,
+                    tty.output_count,
+                    yes_no(tty.framebuffer_output),
+                );
             }
         },
-        None => kprintln!("HXNU: framebuffer response missing"),
+        None => {
+            let tty = tty::initialize(false);
+            kprintln!("HXNU: framebuffer response missing");
+            kprintln!(
+                "HXNU: tty console online id={} outputs={} framebuffer={}",
+                tty.console_id,
+                tty.output_count,
+                yes_no(tty.framebuffer_output),
+            );
+        }
     }
 
     match limine::memory_map() {
@@ -194,6 +222,106 @@ pub extern "C" fn _start() -> ! {
         Err(error) => kprintln!("HXNU: apic timer offline reason={}", error.as_str()),
     }
 
+    match limine::rsdp_address() {
+        Some(rsdp_address) => {
+            kprintln!("HXNU: acpi rsdp response @ {:#010x}", rsdp_address);
+            match acpi::discover(hhdm_offset, rsdp_address) {
+                Ok(discovery) => {
+                    kprintln!(
+                        "HXNU: acpi online revision={} oem={} rsdp={:#010x} root={} @ {:#010x}",
+                        discovery.revision,
+                        acpi::oem_id_str(&discovery.oem_id),
+                        discovery.rsdp_address,
+                        discovery.root_kind.as_str(),
+                        discovery.root_address,
+                    );
+                    kprintln!(
+                        "HXNU: acpi tables total={} valid={} invalid={} madt={} fadt={}",
+                        discovery.table_count,
+                        discovery.valid_table_count,
+                        discovery.invalid_table_count,
+                        yes_no(discovery.madt.is_some()),
+                        yes_no(discovery.fadt.is_some()),
+                    );
+                    if let Some(ref madt) = discovery.madt {
+                        kprintln!(
+                            "HXNU: acpi madt lapic={:#010x} flags={:#010x} cpus-enabled={}/{} ioapics={} iso={} x2apic-cpus={}",
+                            madt.local_apic_address,
+                            madt.flags,
+                            madt.enabled_processor_count(),
+                            madt.total_processor_count(),
+                            madt.io_apics.len(),
+                            madt.interrupt_source_overrides.len(),
+                            madt.local_x2apic_count(),
+                        );
+                        if let Some(processor) = madt.processors.first() {
+                            kprintln!(
+                                "HXNU: acpi cpu0 uid={} apic={} mode={} enabled={} online-capable={}",
+                                processor.processor_uid,
+                                processor.apic_id,
+                                processor.apic_mode(),
+                                yes_no(processor.enabled),
+                                yes_no(processor.online_capable),
+                            );
+                        }
+                        if let Some(io_apic) = madt.io_apics.first() {
+                            kprintln!(
+                                "HXNU: acpi ioapic0 id={} addr={:#010x} gsi-base={}",
+                                io_apic.io_apic_id,
+                                io_apic.address,
+                                io_apic.global_system_interrupt_base,
+                            );
+                        }
+                        if let Some(override_entry) = madt.interrupt_source_overrides.first() {
+                            kprintln!(
+                                "HXNU: acpi iso0 source={} gsi={} flags={:#06x}",
+                                override_entry.source,
+                                override_entry.global_system_interrupt,
+                                override_entry.flags,
+                            );
+                        }
+                    }
+                    if let Some(ref fadt) = discovery.fadt {
+                        kprintln!(
+                            "HXNU: acpi fadt revision={} length={} profile={} sci={} smi-cmd={:#x}",
+                            fadt.revision,
+                            fadt.length,
+                            fadt.preferred_pm_profile.as_str(),
+                            fadt.sci_interrupt,
+                            fadt.smi_command_port,
+                        );
+                        kprintln!(
+                            "HXNU: acpi power reset={} hw-reduced={} pm1a-ctl={:#x} pm1b-ctl={:#x}",
+                            yes_no(fadt.reset_supported()),
+                            yes_no(fadt.hardware_reduced()),
+                            fadt.pm1a_control_block,
+                            fadt.pm1b_control_block,
+                        );
+                        if let Some(reset_register) = fadt.reset_register {
+                            kprintln!(
+                                "HXNU: acpi reset-reg space={} width={} offset={} access={} addr={:#x} value={:#04x}",
+                                reset_register.address_space_str(),
+                                reset_register.bit_width,
+                                reset_register.bit_offset,
+                                reset_register.access_size,
+                                reset_register.address,
+                                fadt.reset_value,
+                            );
+                        }
+                        kprintln!(
+                            "HXNU: acpi boot-arch flags={:#06x} acpi-enable={:#04x} acpi-disable={:#04x}",
+                            fadt.boot_architecture_flags,
+                            fadt.acpi_enable,
+                            fadt.acpi_disable,
+                        );
+                    }
+                }
+                Err(error) => kprintln!("HXNU: acpi offline reason={}", error.as_str()),
+            }
+        }
+        None => kprintln!("HXNU: acpi rsdp response missing"),
+    }
+
     if let Some(test) = SELF_TEST {
         match test {
             SelfTest::Breakpoint => {
@@ -224,18 +352,48 @@ pub extern "C" fn _start() -> ! {
 
     match sched::bootstrap(hhdm_offset, &cpu_info) {
         Ok(state) => kprintln!(
-            "HXNU: scheduler bootstrap online source={} vector={:#04x} divide={} initial-count={} ticks={}",
+            "HXNU: scheduler bootstrap online source={} vector={:#04x} divide={} initial-count={} ticks={} threads={} runqueue={} current={}#{} role={} switches={} bootstrap-id={} idle-id={}",
             state.source,
             state.vector,
             state.divide_value,
             state.initial_count,
             state.ticks_observed,
+            state.thread_count,
+            state.runqueue_depth,
+            state.current_thread_name,
+            state.current_thread_id,
+            state.current_thread_role,
+            state.context_switches,
+            state.bootstrap_thread_id,
+            state.idle_thread_id,
         ),
         Err(error) => {
             kprintln!("HXNU: scheduler bootstrap offline reason={}", error.as_str());
             halt();
         }
     }
+
+    let tty_stats = tty::stats();
+    let scheduler_stats = sched::stats();
+    kprintln!(
+        "HXNU: tty stats id={} outputs={} bytes={} lines={}",
+        tty_stats.console_id,
+        tty_stats.output_count,
+        tty_stats.bytes_written,
+        tty_stats.lines_written,
+    );
+    kprintln!(
+        "HXNU: scheduler stats threads={} runqueue={} current={}#{} state={} ticks={} switches={} bootstrap-id={} idle-id={}",
+        scheduler_stats.thread_count,
+        scheduler_stats.runqueue_depth,
+        scheduler_stats.current_thread_name,
+        scheduler_stats.current_thread_id,
+        scheduler_stats.current_thread_state,
+        scheduler_stats.total_ticks,
+        scheduler_stats.context_switches,
+        scheduler_stats.bootstrap_thread_id,
+        scheduler_stats.idle_thread_id,
+    );
 
     kprintln!("HXNU: Rust kernel skeleton online");
     sched::idle_loop()

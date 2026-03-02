@@ -1,21 +1,67 @@
 use core::fmt;
 use core::fmt::Write;
+use core::arch::asm;
 
-use crate::serial::SerialWriter;
 use crate::time;
+use crate::tty;
 
 #[allow(dead_code)]
 pub fn write(args: fmt::Arguments<'_>) {
-    let mut writer = SerialWriter::new();
+    let _interrupt_guard = InterruptGuard::new();
+    let mut writer = KernelWriter;
     let _ = writer.write_fmt(args);
 }
 
 pub fn write_record(args: fmt::Arguments<'_>) {
-    let mut writer = SerialWriter::new();
+    let _interrupt_guard = InterruptGuard::new();
+    let mut writer = KernelWriter;
     let timestamp = time::timestamp();
     let _ = write!(writer, "[{}.{:09}] ", timestamp.seconds, timestamp.nanoseconds);
     let _ = writer.write_fmt(args);
     let _ = writer.write_str("\n");
+}
+
+struct KernelWriter;
+
+impl fmt::Write for KernelWriter {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        tty::write_str(text);
+        Ok(())
+    }
+}
+
+struct InterruptGuard {
+    interrupt_flag_was_set: bool,
+}
+
+impl InterruptGuard {
+    fn new() -> Self {
+        let flags = read_rflags();
+        unsafe {
+            asm!("cli", options(nomem, nostack, preserves_flags));
+        }
+        Self {
+            interrupt_flag_was_set: (flags & (1 << 9)) != 0,
+        }
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        if self.interrupt_flag_was_set {
+            unsafe {
+                asm!("sti", options(nomem, nostack, preserves_flags));
+            }
+        }
+    }
+}
+
+fn read_rflags() -> u64 {
+    let value: u64;
+    unsafe {
+        asm!("pushfq", "pop {}", out(reg) value, options(nomem, preserves_flags));
+    }
+    value
 }
 
 #[macro_export]

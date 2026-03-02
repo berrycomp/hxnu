@@ -27,8 +27,13 @@ Release target:
 Current status:
 - GDT/IDT activation is online on `x86_64`
 - UEFI framebuffer or GOP handoff is online on `x86_64`
+- Output-only TTY console bootstrap is online on `x86_64`
 - Local APIC timer one-shot bring-up is online on `x86_64`
 - Local APIC periodic tick and scheduler bootstrap are online on `x86_64`
+- Minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` parsing is online on `x86_64`
+- MADT processor, IO APIC, and interrupt-override topology summaries are online on `x86_64`
+- FADT power and reset-register summaries are online on `x86_64`
+- Scheduler thread table and runqueue skeleton are online on `x86_64`
 - Breakpoint, page fault, and general protection fault self-tests are working
 - Broader scheduler work remains next
 

@@ -74,11 +74,14 @@ Current bring-up logs also include:
 - boot-relative timestamps
 - HHDM and memory map summary
 - UEFI framebuffer or GOP handoff summary
+- output-only TTY console bootstrap with serial and framebuffer sinks
 - frame allocator and heap bootstrap summary
 - GDT and IDT activation summary
 - local APIC capability and base-address probe
 - local APIC timer one-shot self-test summary
+- minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` summaries
 - periodic scheduler tick bootstrap summary
+- scheduler thread and runqueue model summary
 - structured panic and fatal exception reports
 - controlled exception self-test output
 

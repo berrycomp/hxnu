@@ -4,6 +4,7 @@ use core::mem::size_of;
 use core::ptr;
 
 use crate::kprintln;
+use crate::panic::write_fatal_line;
 
 use super::apic;
 
@@ -197,29 +198,31 @@ fn report_fatal_exception(
     error_code: Option<u64>,
     fault_address: Option<u64>,
 ) {
-    kprintln!("HXNU: ================= FATAL EXCEPTION ==================");
-    kprintln!("HXNU: kind      {}", kind);
-    kprintln!("HXNU: rip       {:#018x}", stack_frame.instruction_pointer);
-    kprintln!("HXNU: cs        {:#06x}", stack_frame.code_segment);
-    kprintln!("HXNU: rflags    {:#018x}", stack_frame.cpu_flags);
-    kprintln!("HXNU: rsp       {:#018x}", stack_frame.stack_pointer);
-    kprintln!("HXNU: ss        {:#06x}", stack_frame.stack_segment);
+    write_fatal_line(format_args!(
+        "================= FATAL EXCEPTION =================="
+    ));
+    write_fatal_line(format_args!("kind      {}", kind));
+    write_fatal_line(format_args!("rip       {:#018x}", stack_frame.instruction_pointer));
+    write_fatal_line(format_args!("cs        {:#06x}", stack_frame.code_segment));
+    write_fatal_line(format_args!("rflags    {:#018x}", stack_frame.cpu_flags));
+    write_fatal_line(format_args!("rsp       {:#018x}", stack_frame.stack_pointer));
+    write_fatal_line(format_args!("ss        {:#06x}", stack_frame.stack_segment));
     if let Some(error_code) = error_code {
-        kprintln!("HXNU: error     {:#x}", error_code);
+        write_fatal_line(format_args!("error     {:#x}", error_code));
     }
     if let Some(fault_address) = fault_address {
-        kprintln!("HXNU: cr2       {:#018x}", fault_address);
-        kprintln!(
-            "HXNU: decode    present={} write={} user={} reserved={} instruction={}",
+        write_fatal_line(format_args!("cr2       {:#018x}", fault_address));
+        write_fatal_line(format_args!(
+            "decode    present={} write={} user={} reserved={} instruction={}",
             yes_no(error_code.unwrap_or(0) & (1 << 0) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 1) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 2) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 3) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 4) != 0),
-        );
+        ));
     }
-    kprintln!("HXNU: action    cpu halted");
-    kprintln!("HXNU: =====================================================");
+    write_fatal_line(format_args!("action    cpu halted"));
+    write_fatal_line(format_args!("===================================================="));
 }
 
 fn halt_forever() -> ! {

@@ -84,6 +84,19 @@ pub struct LimineFramebufferRequest {
     pub response: *const LimineFramebufferResponse,
 }
 
+#[repr(C)]
+pub struct LimineRsdpResponse {
+    pub revision: u64,
+    pub address: u64,
+}
+
+#[repr(C)]
+pub struct LimineRsdpRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineRsdpResponse,
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum MemoryMapEntryType {
     Usable,
@@ -242,6 +255,19 @@ static mut FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequ
 };
 
 #[used]
+#[unsafe(link_section = ".limine_requests")]
+static mut RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
+    id: [
+        0xc7b1_dd30_df4c_8b88,
+        0x0a82_e883_a194_f07b,
+        0xc5e7_7b6b_397e_7b43,
+        0x2763_7845_accd_cf3c,
+    ],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
+#[used]
 #[unsafe(link_section = ".limine_requests_start")]
 static LIMINE_REQUESTS_START_MARKER: [u64; 4] = [
     0xf6b8_f4b3_9de7_d1ae,
@@ -310,5 +336,15 @@ pub fn framebuffer() -> Option<Framebuffer> {
             blue_mask_size: framebuffer.blue_mask_size,
             blue_mask_shift: framebuffer.blue_mask_shift,
         })
+    }
+}
+
+pub fn rsdp_address() -> Option<u64> {
+    let request = ptr::addr_of!(RSDP_REQUEST);
+    let response = unsafe { (*request).response };
+    if response.is_null() {
+        None
+    } else {
+        Some(unsafe { (*response).address })
     }
 }

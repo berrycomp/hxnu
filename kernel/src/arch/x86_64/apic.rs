@@ -3,10 +3,10 @@ use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::kprintln;
-use crate::mm;
 use crate::time;
 
 use super::cpu::CpuInfo;
+use super::early_map;
 
 pub const TIMER_VECTOR: usize = 0x20;
 pub const SPURIOUS_VECTOR: usize = 0xff;
@@ -29,13 +29,6 @@ const APIC_TIMER_DIVIDE_VALUE: u32 = 16;
 const APIC_TIMER_INITIAL_TICKS: u32 = 1_000_000;
 const APIC_PERIODIC_INITIAL_TICKS: u32 = 250_000;
 const APIC_TIMER_TIMEOUT_NS: u64 = 500_000_000;
-
-const PAGE_PRESENT: u64 = 1 << 0;
-const PAGE_WRITABLE: u64 = 1 << 1;
-const PAGE_WRITE_THROUGH: u64 = 1 << 3;
-const PAGE_CACHE_DISABLE: u64 = 1 << 4;
-const PAGE_HUGE: u64 = 1 << 7;
-const PAGE_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 
 static APIC_BASE_VIRTUAL: AtomicU64 = AtomicU64::new(0);
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -76,6 +69,15 @@ impl TimerError {
             Self::MissingBaseAddress => "local APIC base address is missing",
             Self::PageTableAllocationFailed => "failed to allocate a page-table page for APIC MMIO",
             Self::Timeout => "timer interrupt did not arrive before timeout",
+        }
+    }
+}
+
+impl From<early_map::MapError> for TimerError {
+    fn from(value: early_map::MapError) -> Self {
+        match value {
+            early_map::MapError::AddressOverflow => Self::MissingBaseAddress,
+            early_map::MapError::PageTableAllocationFailed => Self::PageTableAllocationFailed,
         }
     }
 }
@@ -179,8 +181,12 @@ fn ensure_timer_ready(hhdm_offset: u64, cpu_info: &CpuInfo) -> Result<(), TimerE
         return Err(TimerError::MissingBaseAddress);
     }
 
-    let apic_base_virtual = hhdm_offset.wrapping_add(cpu_info.apic_base);
-    ensure_mmio_page_mapping(hhdm_offset, cpu_info.apic_base)?;
+    let apic_base_virtual = early_map::ensure_region_mapped(
+        hhdm_offset,
+        cpu_info.apic_base,
+        4096,
+        early_map::FLAG_WRITE_THROUGH | early_map::FLAG_CACHE_DISABLE,
+    )?;
     APIC_BASE_VIRTUAL.store(apic_base_virtual, Ordering::Release);
 
     mask_legacy_pic();
@@ -226,97 +232,6 @@ fn mask_legacy_pic() {
     }
 }
 
-fn ensure_mmio_page_mapping(hhdm_offset: u64, physical_address: u64) -> Result<(), TimerError> {
-    let virtual_address = hhdm_offset.wrapping_add(physical_address);
-    let pml4 = (hhdm_offset.wrapping_add(read_cr3() & PAGE_ADDRESS_MASK)) as *mut u64;
-    let pml4_index = page_table_index(virtual_address, 39);
-    let pdpt_index = page_table_index(virtual_address, 30);
-    let pd_index = page_table_index(virtual_address, 21);
-    let pt_index = page_table_index(virtual_address, 12);
-
-    let pdpt = match next_table(pml4, pml4_index, hhdm_offset)? {
-        NextTable::Table(table) => table,
-        NextTable::HugePage => return Ok(()),
-    };
-    let pd = match next_table(pdpt, pdpt_index, hhdm_offset)? {
-        NextTable::Table(table) => table,
-        NextTable::HugePage => return Ok(()),
-    };
-    let pt = match next_table(pd, pd_index, hhdm_offset)? {
-        NextTable::Table(table) => table,
-        NextTable::HugePage => return Ok(()),
-    };
-
-    let pte = unsafe { pt.add(pt_index) };
-    let entry = unsafe { read_volatile(pte) };
-    if entry & PAGE_PRESENT == 0 {
-        unsafe {
-            write_volatile(
-                pte,
-                (physical_address & PAGE_ADDRESS_MASK)
-                    | PAGE_PRESENT
-                    | PAGE_WRITABLE
-                    | PAGE_WRITE_THROUGH
-                    | PAGE_CACHE_DISABLE,
-            );
-        }
-        invalidate_page(virtual_address);
-    }
-
-    Ok(())
-}
-
-fn next_table(
-    table: *mut u64,
-    index: usize,
-    hhdm_offset: u64,
-) -> Result<NextTable, TimerError> {
-    let entry_ptr = unsafe { table.add(index) };
-    let entry = unsafe { read_volatile(entry_ptr) };
-    if entry & PAGE_PRESENT == 0 {
-        let frame = mm::frame::allocate_frame().ok_or(TimerError::PageTableAllocationFailed)?;
-        let table_virtual = hhdm_offset.wrapping_add(frame.start_address()) as *mut u64;
-        zero_table(table_virtual);
-        unsafe {
-            write_volatile(entry_ptr, frame.start_address() | PAGE_PRESENT | PAGE_WRITABLE);
-        }
-        return Ok(NextTable::Table(table_virtual));
-    }
-    if entry & PAGE_HUGE != 0 {
-        return Ok(NextTable::HugePage);
-    }
-
-    Ok(NextTable::Table(
-        hhdm_offset.wrapping_add(entry & PAGE_ADDRESS_MASK) as *mut u64,
-    ))
-}
-
-fn zero_table(table: *mut u64) {
-    for index in 0..512 {
-        unsafe {
-            write_volatile(table.add(index), 0);
-        }
-    }
-}
-
-fn read_cr3() -> u64 {
-    let value: u64;
-    unsafe {
-        asm!("mov {}, cr3", out(reg) value, options(nomem, nostack, preserves_flags));
-    }
-    value
-}
-
-fn invalidate_page(address: u64) {
-    unsafe {
-        asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags));
-    }
-}
-
-const fn page_table_index(address: u64, shift: u32) -> usize {
-    ((address >> shift) & 0x1ff) as usize
-}
-
 fn read_register(offset: u32) -> u32 {
     let register = register_ptr(offset);
     unsafe { read_volatile(register) }
@@ -344,9 +259,4 @@ unsafe fn outb(port: u16, value: u8) {
             options(nomem, nostack, preserves_flags),
         );
     }
-}
-
-enum NextTable {
-    Table(*mut u64),
-    HugePage,
 }

@@ -1,8 +1,27 @@
+use core::cell::UnsafeCell;
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::limine;
 
 const LIMINE_FRAMEBUFFER_RGB: u8 = 1;
+
+const HEADER_HEIGHT: u64 = 72;
+const HEADER_ACCENT_Y: u64 = 72;
+const HEADER_ACCENT_HEIGHT: u64 = 4;
+const BANNER_X: u64 = 32;
+const BANNER_Y: u64 = 112;
+const BANNER_WIDTH: u64 = 256;
+const BANNER_HEIGHT: u64 = 144;
+const LOG_ORIGIN_X: u64 = 32;
+const LOG_ORIGIN_Y: u64 = 288;
+const LOG_BOTTOM_MARGIN: u64 = 32;
+
+const FONT_SCALE: u64 = 2;
+const GLYPH_WIDTH: u64 = 5;
+const GLYPH_ADVANCE_X: u64 = 6;
+const GLYPH_ADVANCE_Y: u64 = 8;
+const CHAR_WIDTH: u64 = GLYPH_ADVANCE_X * FONT_SCALE;
+const CHAR_HEIGHT: u64 = GLYPH_ADVANCE_Y * FONT_SCALE;
 
 #[derive(Copy, Clone)]
 pub struct FramebufferSummary {
@@ -19,6 +38,7 @@ pub enum FramebufferError {
     UnsupportedMemoryModel,
     UnsupportedBitsPerPixel,
     MissingAddress,
+    ConsoleAreaTooSmall,
 }
 
 impl FramebufferError {
@@ -27,9 +47,26 @@ impl FramebufferError {
             Self::UnsupportedMemoryModel => "unsupported framebuffer memory model",
             Self::UnsupportedBitsPerPixel => "unsupported framebuffer bits-per-pixel",
             Self::MissingAddress => "framebuffer address is null",
+            Self::ConsoleAreaTooSmall => "framebuffer console area is too small",
         }
     }
 }
+
+struct GlobalFramebufferConsole(UnsafeCell<Option<FramebufferConsole>>);
+
+unsafe impl Sync for GlobalFramebufferConsole {}
+
+impl GlobalFramebufferConsole {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<FramebufferConsole> {
+        self.0.get()
+    }
+}
+
+static FRAMEBUFFER_CONSOLE: GlobalFramebufferConsole = GlobalFramebufferConsole::new();
 
 pub fn initialize(framebuffer: limine::Framebuffer) -> Result<FramebufferSummary, FramebufferError> {
     if framebuffer.address.is_null() {
@@ -44,32 +81,14 @@ pub fn initialize(framebuffer: limine::Framebuffer) -> Result<FramebufferSummary
         return Err(FramebufferError::UnsupportedBitsPerPixel);
     }
 
-    let mut writer = FramebufferWriter::new(framebuffer, bytes_per_pixel);
-    let background = writer.pack_rgb(0x09, 0x11, 0x1b);
-    let header = writer.pack_rgb(0x11, 0x2b, 0x44);
-    let accent = writer.pack_rgb(0x2d, 0xd4, 0xbf);
-    let accent_soft = writer.pack_rgb(0x79, 0xe2, 0xd0);
-    let text = writer.pack_rgb(0xf5, 0xf7, 0xfa);
+    let mut console = FramebufferConsole::new(framebuffer, bytes_per_pixel)?;
+    console.paint_boot_surface();
+    let sample_background = console.read_pixel(8, 8);
+    let sample_accent = console.read_pixel(56, 136);
 
-    writer.clear(background);
-    writer.fill_rect(0, 0, framebuffer.width, 72, header);
-    writer.fill_rect(0, 72, framebuffer.width, 4, accent);
-    writer.fill_rect(32, 112, 256, 144, header);
-    writer.fill_rect(48, 128, 32, 96, accent);
-    writer.fill_rect(96, 128, 32, 96, accent_soft);
-    writer.fill_rect(144, 128, 32, 96, accent);
-    writer.fill_rect(192, 128, 32, 96, accent_soft);
-    writer.fill_rect(240, 128, 32, 96, accent);
-
-    writer.draw_text(32, 20, "HXNU 2605", text, 3);
-    writer.draw_text(320, 32, "FB READY", text, 2);
-
-    let mut mode_line = [0u8; 32];
-    let mode_len = format_mode_line(&mut mode_line, framebuffer.width, framebuffer.height, framebuffer.bpp);
-    writer.draw_text_bytes(320, 72, &mode_line[..mode_len], accent, 2);
-
-    let sample_background = writer.read_pixel(8, 8);
-    let sample_accent = writer.read_pixel(56, 136);
+    unsafe {
+        *FRAMEBUFFER_CONSOLE.get() = Some(console);
+    }
 
     Ok(FramebufferSummary {
         width: framebuffer.width,
@@ -81,17 +100,183 @@ pub fn initialize(framebuffer: limine::Framebuffer) -> Result<FramebufferSummary
     })
 }
 
-struct FramebufferWriter {
-    framebuffer: limine::Framebuffer,
-    bytes_per_pixel: usize,
+pub fn write_str(text: &str) {
+    unsafe {
+        if let Some(console) = &mut *FRAMEBUFFER_CONSOLE.get() {
+            console.write_str(text);
+        }
+    }
 }
 
-impl FramebufferWriter {
-    const fn new(framebuffer: limine::Framebuffer, bytes_per_pixel: usize) -> Self {
-        Self {
+pub fn console_probe() -> Option<u32> {
+    unsafe { (&*FRAMEBUFFER_CONSOLE.get()).as_ref().map(FramebufferConsole::first_ink_sample) }
+}
+
+struct FramebufferConsole {
+    framebuffer: limine::Framebuffer,
+    bytes_per_pixel: usize,
+    background: u32,
+    header: u32,
+    accent: u32,
+    accent_soft: u32,
+    text: u32,
+    log_origin_x: u64,
+    log_origin_y: u64,
+    log_width: u64,
+    log_height: u64,
+    columns: u64,
+    rows: u64,
+    cursor_column: u64,
+    cursor_row: u64,
+}
+
+impl FramebufferConsole {
+    fn new(framebuffer: limine::Framebuffer, bytes_per_pixel: usize) -> Result<Self, FramebufferError> {
+        let mut console = Self {
             framebuffer,
             bytes_per_pixel,
+            background: 0,
+            header: 0,
+            accent: 0,
+            accent_soft: 0,
+            text: 0,
+            log_origin_x: LOG_ORIGIN_X,
+            log_origin_y: LOG_ORIGIN_Y,
+            log_width: framebuffer.width.saturating_sub(LOG_ORIGIN_X * 2),
+            log_height: framebuffer
+                .height
+                .saturating_sub(LOG_ORIGIN_Y)
+                .saturating_sub(LOG_BOTTOM_MARGIN),
+            columns: 0,
+            rows: 0,
+            cursor_column: 0,
+            cursor_row: 0,
+        };
+
+        if console.log_width < CHAR_WIDTH * 4 || console.log_height < CHAR_HEIGHT * 4 {
+            return Err(FramebufferError::ConsoleAreaTooSmall);
         }
+
+        console.columns = console.log_width / CHAR_WIDTH;
+        console.rows = console.log_height / CHAR_HEIGHT;
+        console.log_width = console.columns * CHAR_WIDTH;
+        console.log_height = console.rows * CHAR_HEIGHT;
+
+        console.background = console.pack_rgb(0x09, 0x11, 0x1b);
+        console.header = console.pack_rgb(0x11, 0x2b, 0x44);
+        console.accent = console.pack_rgb(0x2d, 0xd4, 0xbf);
+        console.accent_soft = console.pack_rgb(0x79, 0xe2, 0xd0);
+        console.text = console.pack_rgb(0xf5, 0xf7, 0xfa);
+
+        Ok(console)
+    }
+
+    fn paint_boot_surface(&mut self) {
+        self.clear(self.background);
+        self.fill_rect(0, 0, self.framebuffer.width, HEADER_HEIGHT, self.header);
+        self.fill_rect(0, HEADER_ACCENT_Y, self.framebuffer.width, HEADER_ACCENT_HEIGHT, self.accent);
+        self.fill_rect(BANNER_X, BANNER_Y, BANNER_WIDTH, BANNER_HEIGHT, self.header);
+        self.fill_rect(BANNER_X + 16, BANNER_Y + 16, 32, 96, self.accent);
+        self.fill_rect(BANNER_X + 64, BANNER_Y + 16, 32, 96, self.accent_soft);
+        self.fill_rect(BANNER_X + 112, BANNER_Y + 16, 32, 96, self.accent);
+        self.fill_rect(BANNER_X + 160, BANNER_Y + 16, 32, 96, self.accent_soft);
+        self.fill_rect(BANNER_X + 208, BANNER_Y + 16, 32, 96, self.accent);
+        self.draw_text(BANNER_X, 20, "HXNU 2605", self.text, 3);
+        self.draw_text(320, 32, "FB READY", self.text, 2);
+
+        let mut mode_line = [0u8; 32];
+        let mode_len = format_mode_line(
+            &mut mode_line,
+            self.framebuffer.width,
+            self.framebuffer.height,
+            self.framebuffer.bpp,
+        );
+        self.draw_text_bytes(320, 72, &mode_line[..mode_len], self.accent, 2);
+        self.clear_log_region();
+    }
+
+    fn write_str(&mut self, text: &str) {
+        for byte in text.bytes() {
+            match byte {
+                b'\r' => {}
+                b'\n' => self.new_line(),
+                b'\t' => {
+                    for _ in 0..4 {
+                        self.write_byte(b' ');
+                    }
+                }
+                byte => self.write_byte(normalize_glyph_byte(byte)),
+            }
+        }
+    }
+
+    fn write_byte(&mut self, byte: u8) {
+        if self.cursor_column >= self.columns {
+            self.new_line();
+        }
+
+        let x = self.log_origin_x + self.cursor_column * CHAR_WIDTH;
+        let y = self.log_origin_y + self.cursor_row * CHAR_HEIGHT;
+        self.fill_rect(x, y, CHAR_WIDTH, CHAR_HEIGHT, self.background);
+        self.draw_glyph(x + FONT_SCALE, y + FONT_SCALE, byte, self.text, FONT_SCALE);
+        self.cursor_column += 1;
+    }
+
+    fn new_line(&mut self) {
+        self.cursor_column = 0;
+        if self.cursor_row + 1 >= self.rows {
+            self.scroll_up();
+        } else {
+            self.cursor_row += 1;
+        }
+    }
+
+    fn scroll_up(&mut self) {
+        let destination_y = self.log_origin_y;
+        let end_y = self.log_origin_y + self.log_height - CHAR_HEIGHT;
+        let end_x = self.log_origin_x + self.log_width;
+
+        for y in destination_y..end_y {
+            for x in self.log_origin_x..end_x {
+                let color = self.read_pixel(x, y + CHAR_HEIGHT);
+                self.write_pixel(x, y, color);
+            }
+        }
+
+        self.fill_rect(
+            self.log_origin_x,
+            self.log_origin_y + self.log_height - CHAR_HEIGHT,
+            self.log_width,
+            CHAR_HEIGHT,
+            self.background,
+        );
+        self.cursor_row = self.rows - 1;
+    }
+
+    fn clear_log_region(&mut self) {
+        self.fill_rect(
+            self.log_origin_x,
+            self.log_origin_y,
+            self.log_width,
+            self.log_height,
+            self.background,
+        );
+        self.cursor_column = 0;
+        self.cursor_row = 0;
+    }
+
+    fn first_ink_sample(&self) -> u32 {
+        let end_y = self.log_origin_y + (CHAR_HEIGHT * 2).min(self.log_height);
+        let end_x = self.log_origin_x + (CHAR_WIDTH * 32).min(self.log_width);
+        for y in self.log_origin_y..end_y {
+            for x in self.log_origin_x..end_x {
+                let color = self.read_pixel(x, y);
+                if color != self.background {
+                    return color;
+                }
+            }
+        }
+        self.background
     }
 
     fn clear(&mut self, color: u32) {
@@ -116,19 +301,19 @@ impl FramebufferWriter {
     fn draw_text_bytes(&mut self, x: u64, y: u64, text: &[u8], color: u32, scale: u64) {
         let mut cursor_x = x;
         for byte in text {
-            self.draw_glyph(cursor_x, y, *byte, color, scale);
-            cursor_x = cursor_x.saturating_add(6 * scale);
+            self.draw_glyph(cursor_x, y, normalize_glyph_byte(*byte), color, scale);
+            cursor_x = cursor_x.saturating_add(GLYPH_ADVANCE_X * scale);
         }
     }
 
     fn draw_glyph(&mut self, x: u64, y: u64, byte: u8, color: u32, scale: u64) {
         let glyph = glyph(byte);
         for (row_index, row_bits) in glyph.iter().enumerate() {
-            for column in 0..5 {
-                if row_bits & (1 << (4 - column)) == 0 {
+            for column in 0..GLYPH_WIDTH {
+                if row_bits & (1 << (GLYPH_WIDTH - 1 - column)) == 0 {
                     continue;
                 }
-                let pixel_x = x.saturating_add((column as u64) * scale);
+                let pixel_x = x.saturating_add(column * scale);
                 let pixel_y = y.saturating_add((row_index as u64) * scale);
                 self.fill_rect(pixel_x, pixel_y, scale, scale, color);
             }
@@ -186,6 +371,13 @@ impl FramebufferWriter {
                 self.framebuffer.blue_mask_size,
                 self.framebuffer.blue_mask_shift,
             )
+    }
+}
+
+fn normalize_glyph_byte(byte: u8) -> u8 {
+    match byte {
+        b'a'..=b'z' => byte - 32,
+        _ => byte,
     }
 }
 
@@ -249,18 +441,47 @@ fn glyph(byte: u8) -> [u8; 7] {
         b'7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
         b'8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
         b'9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
-        b'A' | b'a' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        b'B' | b'b' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
-        b'D' | b'd' => [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e],
-        b'E' | b'e' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
-        b'F' | b'f' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
-        b'H' | b'h' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        b'N' | b'n' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
-        b'R' | b'r' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
-        b'U' | b'u' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        b'X' | b'x' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
-        b'Y' | b'y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        b'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        b'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+        b'C' => [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
+        b'D' => [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e],
+        b'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+        b'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+        b'G' => [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f],
+        b'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        b'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        b'J' => [0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0e],
+        b'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        b'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+        b'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+        b'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        b'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        b'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        b'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+        b'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+        b'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+        b'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        b'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        b'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        b'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+        b'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+        b'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        b'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
         b' ' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        b':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
+        b'.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
+        b'-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        b'/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+        b'=' => [0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00],
+        b'_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+        b'[' => [0x0e, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0e],
+        b']' => [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
+        b'(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        b')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        b'#' => [0x0a, 0x0a, 0x1f, 0x0a, 0x1f, 0x0a, 0x0a],
+        b',' => [0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c, 0x08],
+        b'?' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+        b'+' => [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00],
         _ => [0x1f, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x1f],
     }
 }

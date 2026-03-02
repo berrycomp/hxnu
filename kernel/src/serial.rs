@@ -1,5 +1,4 @@
 use core::arch::asm;
-use core::fmt;
 
 const COM1_PORT: u16 = 0x3F8;
 const DATA_REGISTER: u16 = COM1_PORT;
@@ -28,21 +27,6 @@ pub fn write_str(text: &str) {
             write_byte(b'\r');
         }
         write_byte(byte);
-    }
-}
-
-pub struct SerialWriter;
-
-impl SerialWriter {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl fmt::Write for SerialWriter {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        write_str(text);
-        Ok(())
     }
 }
 

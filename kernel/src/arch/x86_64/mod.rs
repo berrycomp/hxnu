@@ -1,5 +1,6 @@
 mod apic;
 mod cpu;
+mod early_map;
 mod gdt;
 mod interrupts;
 
@@ -12,6 +13,7 @@ pub enum ExceptionSelfTest {
 
 pub use apic::{PeriodicTimer, TimerBringUp, TimerError};
 pub use cpu::CpuInfo;
+pub use early_map::MapError;
 
 pub fn initialize() {
     gdt::initialize();
@@ -38,6 +40,15 @@ pub fn start_local_apic_periodic_timer(
     cpu_info: &CpuInfo,
 ) -> Result<PeriodicTimer, TimerError> {
     apic::start_periodic_timer(hhdm_offset, cpu_info)
+}
+
+pub fn ensure_physical_region_mapped(
+    hhdm_offset: u64,
+    physical_address: u64,
+    length: usize,
+    extra_flags: u64,
+) -> Result<u64, MapError> {
+    early_map::ensure_region_mapped(hhdm_offset, physical_address, length, extra_flags)
 }
 
 pub fn mask_local_apic_timer() {
