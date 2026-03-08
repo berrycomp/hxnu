@@ -93,6 +93,7 @@ Current bring-up logs also include:
 - normalized VFS path resolution and node lookup facade for mount-backed paths
 - `cpio` `newc` initrd module discovery and `/initrd` read path
 - `/initrd/init` executable candidate discovery with format probe
+- `/initrd/init` load-prep inspection for shebang and ELF64 program headers
 - periodic scheduler tick bootstrap summary
 - scheduler thread and runqueue model summary
 - bootstrap to idle context-switch summary

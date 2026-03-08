@@ -8,6 +8,7 @@ extern crate alloc;
 mod acpi;
 mod arch;
 mod devfs;
+mod exec;
 mod fb;
 mod initrd;
 #[macro_use]
@@ -529,6 +530,36 @@ pub extern "C" fn _start() -> ! {
         Err(error) => kprintln_style!(
             crate::tty::ConsoleStyle::Warning,
             "HXNU: init candidate offline reason={}",
+            error.as_str()
+        ),
+    }
+    match vfs::prepare_init_load() {
+        Ok(prep) => kprintln_style!(
+            crate::tty::ConsoleStyle::Accent,
+            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} interp={} interp-arg={}",
+            prep.path,
+            prep.mount.as_str(),
+            prep.format.as_str(),
+            prep.size,
+            yes_no(prep.executable),
+            vfs::format_u64_hex(prep.entry_point),
+            vfs::format_u16_hex(prep.machine),
+            vfs::format_u16_hex(prep.image_type),
+            prep.program_header_count,
+            prep.load_segment_count,
+            vfs::format_u64_hex(prep.load_base),
+            vfs::format_u64_hex(prep.load_offset),
+            prep.load_file_bytes,
+            prep.load_memory_bytes,
+            prep.writable_load_segments,
+            prep.executable_load_segments,
+            prep.max_alignment,
+            prep.interpreter.as_deref().unwrap_or("<none>"),
+            prep.interpreter_argument.as_deref().unwrap_or("<none>"),
+        ),
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Warning,
+            "HXNU: init load-prep offline reason={}",
             error.as_str()
         ),
     }

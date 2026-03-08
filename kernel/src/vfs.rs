@@ -5,6 +5,7 @@ use core::fmt::Write;
 
 use crate::devfs;
 use crate::devfs::DevfsNodeKind;
+use crate::exec;
 use crate::initrd;
 use crate::initrd::InitrdNodeKind;
 use crate::procfs;
@@ -124,6 +125,7 @@ pub enum ExecutableDiscoveryError {
     PathNotFound,
     NotAFile,
     BackendUnavailable,
+    ParseFailed(exec::ParseError),
 }
 
 impl ExecutableDiscoveryError {
@@ -133,6 +135,44 @@ impl ExecutableDiscoveryError {
             Self::PathNotFound => "executable path was not found",
             Self::NotAFile => "executable path resolved to a non-file node",
             Self::BackendUnavailable => "backend cannot provide executable bytes",
+            Self::ParseFailed(error) => error.as_str(),
+        }
+    }
+}
+
+pub struct ExecutableLoadPrep {
+    pub path: String,
+    pub mount: VfsMountKind,
+    pub format: ExecutableFormat,
+    pub size: usize,
+    pub executable: bool,
+    pub image_type: Option<u16>,
+    pub machine: Option<u16>,
+    pub entry_point: Option<u64>,
+    pub program_header_count: usize,
+    pub load_segment_count: usize,
+    pub load_base: Option<u64>,
+    pub load_offset: Option<u64>,
+    pub load_file_bytes: u64,
+    pub load_memory_bytes: u64,
+    pub writable_load_segments: usize,
+    pub executable_load_segments: usize,
+    pub max_alignment: u64,
+    pub interpreter: Option<String>,
+    pub interpreter_argument: Option<String>,
+}
+
+#[derive(Copy, Clone)]
+pub enum ExecutableLoadPrepError {
+    Discovery(ExecutableDiscoveryError),
+    Parse(exec::ParseError),
+}
+
+impl ExecutableLoadPrepError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Discovery(error) => error.as_str(),
+            Self::Parse(error) => error.as_str(),
         }
     }
 }
@@ -235,19 +275,129 @@ pub fn discover_executable(path: &str) -> Result<ExecutableCandidate, Executable
         return Err(ExecutableDiscoveryError::NotAFile);
     }
 
-    let bytes = match node.mount {
-        VfsMountKind::Initrd => initrd::read_bytes(&node.path),
-        _ => None,
-    }
-    .ok_or(ExecutableDiscoveryError::BackendUnavailable)?;
+    let bytes =
+        read_executable_bytes(node.mount, &node.path).ok_or(ExecutableDiscoveryError::BackendUnavailable)?;
+    let kind = exec::detect_kind(bytes).map_err(ExecutableDiscoveryError::ParseFailed)?;
 
     Ok(ExecutableCandidate {
         path: node.path,
         mount: node.mount,
-        format: detect_executable_format(bytes),
+        format: executable_format_from_kind(kind),
         size: node.size,
         executable: node.executable,
     })
+}
+
+pub fn prepare_init_load() -> Result<ExecutableLoadPrep, ExecutableLoadPrepError> {
+    prepare_executable_load(INIT_PATH)
+}
+
+pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, ExecutableLoadPrepError> {
+    let candidate = discover_executable(path).map_err(ExecutableLoadPrepError::Discovery)?;
+    let bytes = read_executable_bytes(candidate.mount, &candidate.path).ok_or(
+        ExecutableLoadPrepError::Discovery(ExecutableDiscoveryError::BackendUnavailable),
+    )?;
+    let image = exec::inspect(bytes).map_err(ExecutableLoadPrepError::Parse)?;
+
+    match image {
+        exec::ExecutableImage::Elf64(elf) => {
+            let mut load_segment_count = 0usize;
+            let mut load_base = None;
+            let mut load_offset = None;
+            let mut load_file_bytes = 0u64;
+            let mut load_memory_bytes = 0u64;
+            let mut writable_load_segments = 0usize;
+            let mut executable_load_segments = 0usize;
+            let mut max_alignment = 0u64;
+            for header in &elf.program_headers {
+                if !header.is_loadable() {
+                    continue;
+                }
+
+                load_segment_count += 1;
+                load_base = Some(
+                    load_base.map_or(header.virtual_address, |base: u64| {
+                        base.min(header.virtual_address)
+                    }),
+                );
+                load_offset = Some(load_offset.map_or(header.offset, |offset: u64| {
+                    offset.min(header.offset)
+                }));
+                load_file_bytes = load_file_bytes.saturating_add(header.file_size);
+                load_memory_bytes = load_memory_bytes.saturating_add(header.memory_size);
+                if header.flags & 0x2 != 0 {
+                    writable_load_segments += 1;
+                }
+                if header.flags & 0x1 != 0 {
+                    executable_load_segments += 1;
+                }
+                max_alignment = max_alignment.max(header.alignment);
+            }
+            Ok(ExecutableLoadPrep {
+                path: candidate.path,
+                mount: candidate.mount,
+                format: candidate.format,
+                size: candidate.size,
+                executable: candidate.executable,
+                image_type: Some(elf.image_type),
+                machine: Some(elf.machine),
+                entry_point: Some(elf.entry_point),
+                program_header_count: elf.program_headers.len(),
+                load_segment_count,
+                load_base,
+                load_offset,
+                load_file_bytes,
+                load_memory_bytes,
+                writable_load_segments,
+                executable_load_segments,
+                max_alignment,
+                interpreter: elf.interpreter,
+                interpreter_argument: None,
+            })
+        }
+        exec::ExecutableImage::Shebang(script) => Ok(ExecutableLoadPrep {
+            path: candidate.path,
+            mount: candidate.mount,
+            format: candidate.format,
+            size: candidate.size,
+            executable: candidate.executable,
+            image_type: None,
+            machine: None,
+            entry_point: None,
+            program_header_count: 0,
+            load_segment_count: 0,
+            load_base: None,
+            load_offset: None,
+            load_file_bytes: 0,
+            load_memory_bytes: 0,
+            writable_load_segments: 0,
+            executable_load_segments: 0,
+            max_alignment: 0,
+            interpreter: Some(script.interpreter),
+            interpreter_argument: script.argument,
+        }),
+        exec::ExecutableImage::Text | exec::ExecutableImage::Unknown => Ok(ExecutableLoadPrep {
+            path: candidate.path,
+            mount: candidate.mount,
+            format: candidate.format,
+            size: candidate.size,
+            executable: candidate.executable,
+            image_type: None,
+            machine: None,
+            entry_point: None,
+            program_header_count: 0,
+            load_segment_count: 0,
+            load_base: None,
+            load_offset: None,
+            load_file_bytes: 0,
+            load_memory_bytes: 0,
+            writable_load_segments: 0,
+            executable_load_segments: 0,
+            max_alignment: 0,
+            interpreter: None,
+            interpreter_argument: None,
+        }),
+    }
 }
 
 fn resolve_node(path: &str) -> Option<VfsNode> {
@@ -326,31 +476,62 @@ fn render_root() -> String {
     text
 }
 
-fn detect_executable_format(bytes: &[u8]) -> ExecutableFormat {
-    if bytes.starts_with(b"\x7FELF") {
-        return ExecutableFormat::Elf;
+fn executable_format_from_kind(kind: exec::ImageKind) -> ExecutableFormat {
+    match kind {
+        exec::ImageKind::Elf64 => ExecutableFormat::Elf,
+        exec::ImageKind::ShebangScript => ExecutableFormat::ShebangScript,
+        exec::ImageKind::Text => ExecutableFormat::Text,
+        exec::ImageKind::Unknown => ExecutableFormat::Unknown,
     }
-    if bytes.starts_with(b"#!") {
-        return ExecutableFormat::ShebangScript;
-    }
-    if looks_like_text(bytes) {
-        return ExecutableFormat::Text;
-    }
-
-    ExecutableFormat::Unknown
 }
 
-fn looks_like_text(bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return false;
+fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
+    match mount {
+        VfsMountKind::Initrd => initrd::read_bytes(path),
+        _ => None,
     }
+}
 
-    bytes.iter().all(|byte| {
-        matches!(
-            byte,
-            b'\n' | b'\r' | b'\t' | b' '..=b'~'
-        )
-    })
+pub fn format_u16_hex(value: Option<u16>) -> String {
+    match value {
+        Some(value) => {
+            let mut text = String::from("0x");
+            text.push_str(&hex_u16(value));
+            text
+        }
+        None => String::from("<none>"),
+    }
+}
+
+fn hex_u16(value: u16) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::new();
+    for shift in [12, 8, 4, 0] {
+        let nibble = ((value >> shift) & 0x0f) as usize;
+        text.push(HEX[nibble] as char);
+    }
+    text
+}
+
+pub fn format_u64_hex(value: Option<u64>) -> String {
+    match value {
+        Some(value) => {
+            let mut text = String::from("0x");
+            text.push_str(&hex_u64(value));
+            text
+        }
+        None => String::from("<none>"),
+    }
+}
+
+fn hex_u64(value: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::new();
+    for shift in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0] {
+        let nibble = ((value >> shift) & 0x0f) as usize;
+        text.push(HEX[nibble] as char);
+    }
+    text
 }
 
 fn normalize_path(path: &str) -> Option<String> {
