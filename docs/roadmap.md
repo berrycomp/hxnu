@@ -139,6 +139,8 @@ Cross-repo status (as of 2026-03-29):
 ## Phase 6
 - Rust cross compiler support with `x86_64` and `aarch64` as first-class targets (`x86_64` bootstrap release is online in external compiler repo)
 - C and C++ cross compiler support with `x86_64` and `aarch64` as first-class targets
+- `musl` port for HXNU targets (`x86_64-unknown-hxnu`, later `aarch64-unknown-hxnu`) including `crt1/crti/crtn` and dynamic-linker contract
+- `gcc-hxnu` cross toolchain support (`binutils` + GCC target integration) for freestanding and hosted profiles
 - Additional architectures after the main two are stable
 - PowerISA 64-bit bring-up
 - Audio stack entry point
@@ -172,6 +174,8 @@ Cross-repo status (as of 2026-03-29):
 
 - Rust cross compilation: `x86_64`, then `aarch64`
 - C and C++ cross compilation: `x86_64`, then `aarch64`
+- `musl` first-class userland libc for HXNU targets (headers, startup objects, and ABI-aligned sysroot packaging)
+- `gcc-hxnu` and `binutils` support after Rust bootstrap, with compatibility checks against HXNU syscall/personality layers
 - Other architectures only after the main two toolchains are reliable
 - Compiler development continues in a dedicated repository: `https://github.com/neonix-bmx/hxnu-rustc-compiler-x86_64`
 - Kernel repository tracks integration contract and acceptance checks, not compiler internals
