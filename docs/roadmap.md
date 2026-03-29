@@ -55,6 +55,7 @@ Current status:
 - Bootstrap anonymous `mmap/mprotect/munmap` and process-scoped `brk` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `nanosleep/gettimeofday/getrandom` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `rt_sigaction/rt_sigprocmask` syscall facades are online for Linux/Ghost/HXNU personalities
+- Bootstrap `pread64/pwrite64/readv/writev` syscall facades are online for Linux/Ghost/HXNU personalities
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)

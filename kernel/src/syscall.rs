@@ -30,6 +30,10 @@ pub const LINUX_SYS_MUNMAP: u64 = 11;
 pub const LINUX_SYS_BRK: u64 = 12;
 pub const LINUX_SYS_RT_SIGACTION: u64 = 13;
 pub const LINUX_SYS_RT_SIGPROCMASK: u64 = 14;
+pub const LINUX_SYS_PREAD64: u64 = 17;
+pub const LINUX_SYS_PWRITE64: u64 = 18;
+pub const LINUX_SYS_READV: u64 = 19;
+pub const LINUX_SYS_WRITEV: u64 = 20;
 pub const LINUX_SYS_NANOSLEEP: u64 = 35;
 pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_IOCTL: u64 = 16;
@@ -104,6 +108,10 @@ pub const GHOST_SYS_GETTIMEOFDAY: u64 = 37;
 pub const GHOST_SYS_GETRANDOM: u64 = 38;
 pub const GHOST_SYS_RT_SIGACTION: u64 = 39;
 pub const GHOST_SYS_RT_SIGPROCMASK: u64 = 40;
+pub const GHOST_SYS_PREAD64: u64 = 41;
+pub const GHOST_SYS_PWRITE64: u64 = 42;
+pub const GHOST_SYS_READV: u64 = 43;
+pub const GHOST_SYS_WRITEV: u64 = 44;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -144,6 +152,10 @@ pub const HXNU_SYS_GETTIMEOFDAY: u64 = 0x484e_0024;
 pub const HXNU_SYS_GETRANDOM: u64 = 0x484e_0025;
 pub const HXNU_SYS_RT_SIGACTION: u64 = 0x484e_0026;
 pub const HXNU_SYS_RT_SIGPROCMASK: u64 = 0x484e_0027;
+pub const HXNU_SYS_PREAD64: u64 = 0x484e_0028;
+pub const HXNU_SYS_PWRITE64: u64 = 0x484e_0029;
+pub const HXNU_SYS_READV: u64 = 0x484e_002a;
+pub const HXNU_SYS_WRITEV: u64 = 0x484e_002b;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -195,6 +207,7 @@ const SIG_SETMASK: i32 = 2;
 const MAX_SIGNAL_NUMBER: u64 = 64;
 const SIGKILL: u64 = 9;
 const SIGSTOP: u64 = 19;
+const MAX_IOVEC_COUNT: usize = 64;
 
 const SEEK_SET: i32 = 0;
 const SEEK_CUR: i32 = 1;
@@ -236,6 +249,7 @@ const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
 const ENOMEM: i64 = 12;
+const EROFS: i64 = 30;
 
 const STDOUT_FD: u64 = 1;
 const STDERR_FD: u64 = 2;
@@ -305,6 +319,10 @@ pub struct LinuxBootstrapProbe {
     pub rt_sigprocmask_result: i64,
     pub rt_sigmask_snapshot: u64,
     pub rt_sigold_handler: u64,
+    pub pread64_result: i64,
+    pub pwrite64_result: i64,
+    pub readv_result: i64,
+    pub writev_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
@@ -372,6 +390,10 @@ pub struct GhostBootstrapProbe {
     pub rt_sigprocmask_result: i64,
     pub rt_sigmask_snapshot: u64,
     pub rt_sigold_handler: u64,
+    pub pread64_result: i64,
+    pub pwrite64_result: i64,
+    pub readv_result: i64,
+    pub writev_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -435,6 +457,10 @@ pub struct HxnuBootstrapProbe {
     pub rt_sigprocmask_result: i64,
     pub rt_sigmask_snapshot: u64,
     pub rt_sigold_handler: u64,
+    pub pread64_result: i64,
+    pub pwrite64_result: i64,
+    pub readv_result: i64,
+    pub writev_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -495,6 +521,13 @@ impl LinuxKernelSigAction {
             mask: 0,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct LinuxIovec {
+    iov_base: u64,
+    iov_len: u64,
 }
 
 #[repr(C)]
@@ -798,6 +831,10 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_BRK => process_brk(args),
         LINUX_SYS_RT_SIGACTION => process_rt_sigaction(args),
         LINUX_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        LINUX_SYS_PREAD64 => process_pread64(args),
+        LINUX_SYS_PWRITE64 => process_pwrite64(args),
+        LINUX_SYS_READV => process_readv(args),
+        LINUX_SYS_WRITEV => process_writev(args),
         LINUX_SYS_NANOSLEEP => process_nanosleep(args),
         LINUX_SYS_GETDENTS64 => getdents_fd(args),
         LINUX_SYS_IOCTL => ioctl_fd(args),
@@ -843,6 +880,10 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_BRK => process_brk(args),
         GHOST_SYS_RT_SIGACTION => process_rt_sigaction(args),
         GHOST_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        GHOST_SYS_PREAD64 => process_pread64(args),
+        GHOST_SYS_PWRITE64 => process_pwrite64(args),
+        GHOST_SYS_READV => process_readv(args),
+        GHOST_SYS_WRITEV => process_writev(args),
         GHOST_SYS_NANOSLEEP => process_nanosleep(args),
         GHOST_SYS_DUP => dup_fd(args),
         GHOST_SYS_DUP2 => dup2_fd(args),
@@ -887,6 +928,10 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_BRK => process_brk(args),
         HXNU_SYS_RT_SIGACTION => process_rt_sigaction(args),
         HXNU_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        HXNU_SYS_PREAD64 => process_pread64(args),
+        HXNU_SYS_PWRITE64 => process_pwrite64(args),
+        HXNU_SYS_READV => process_readv(args),
+        HXNU_SYS_WRITEV => process_writev(args),
         HXNU_SYS_NANOSLEEP => process_nanosleep(args),
         HXNU_SYS_DUP => dup_fd(args),
         HXNU_SYS_DUP2 => dup2_fd(args),
@@ -921,6 +966,8 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
 
 pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: linux syscall write() compatibility smoke\n";
+    static WRITEV_SMOKE_A: &[u8] = b"HXNU: linux writev ";
+    static WRITEV_SMOKE_B: &[u8] = b"compatibility smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
     static ROOT_PATH: &[u8] = b"/\0";
@@ -1054,6 +1101,22 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let writev_iov = [
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_A.len() as u64,
+        },
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_B.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_B.len() as u64,
+        },
+    ];
+    let writev_result = dispatch(
+        abi,
+        LINUX_SYS_WRITEV,
+        [STDOUT_FD, writev_iov.as_ptr() as u64, writev_iov.len() as u64, 0, 0, 0],
+    )
+    .value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -1127,6 +1190,9 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     let mut fchdir_result = -EBADF;
     let mut lseek_result = -EBADF;
     let mut close_result = -EBADF;
+    let mut pread64_result = -EBADF;
+    let mut pwrite64_result = -EBADF;
+    let mut readv_result = -EBADF;
     if openat_result >= 0 {
         let fd = openat_result as u64;
         read_result = dispatch(
@@ -1140,6 +1206,37 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
             abi,
             LINUX_SYS_FSTAT,
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let mut pread_buffer = [0u8; 32];
+        pread64_result = dispatch(
+            abi,
+            LINUX_SYS_PREAD64,
+            [fd, pread_buffer.as_mut_ptr() as u64, pread_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut readv_a = [0u8; 24];
+        let mut readv_b = [0u8; 24];
+        let readv_iov = [
+            LinuxIovec {
+                iov_base: readv_a.as_mut_ptr() as u64,
+                iov_len: readv_a.len() as u64,
+            },
+            LinuxIovec {
+                iov_base: readv_b.as_mut_ptr() as u64,
+                iov_len: readv_b.len() as u64,
+            },
+        ];
+        readv_result = dispatch(
+            abi,
+            LINUX_SYS_READV,
+            [fd, readv_iov.as_ptr() as u64, readv_iov.len() as u64, 0, 0, 0],
+        )
+        .value;
+        pwrite64_result = dispatch(
+            abi,
+            LINUX_SYS_PWRITE64,
+            [fd, WRITEV_SMOKE_A.as_ptr() as u64, WRITEV_SMOKE_A.len() as u64, 0, 0, 0],
         )
         .value;
         fcntl_getfd_result = dispatch(abi, LINUX_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
@@ -1251,6 +1348,10 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        pread64_result,
+        pwrite64_result,
+        readv_result,
+        writev_result,
         ioctl_result,
         access_result,
         newfstatat_result,
@@ -1295,6 +1396,8 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
 
 pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: ghost syscall write() compatibility smoke\n";
+    static WRITEV_SMOKE_A: &[u8] = b"HXNU: ghost writev ";
+    static WRITEV_SMOKE_B: &[u8] = b"compatibility smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
     static ROOT_PATH: &[u8] = b"/\0";
@@ -1422,6 +1525,22 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let writev_iov = [
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_A.len() as u64,
+        },
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_B.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_B.len() as u64,
+        },
+    ];
+    let writev_result = dispatch(
+        abi,
+        GHOST_SYS_WRITEV,
+        [STDERR_FD, writev_iov.as_ptr() as u64, writev_iov.len() as u64, 0, 0, 0],
+    )
+    .value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -1477,6 +1596,9 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     let mut fchdir_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
+    let mut pread64_result = -EBADF;
+    let mut pwrite64_result = -EBADF;
+    let mut readv_result = -EBADF;
     if open_result >= 0 {
         let fd = open_result as u64;
         read_result = dispatch(
@@ -1490,6 +1612,37 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
             abi,
             GHOST_SYS_FSTAT,
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let mut pread_buffer = [0u8; 32];
+        pread64_result = dispatch(
+            abi,
+            GHOST_SYS_PREAD64,
+            [fd, pread_buffer.as_mut_ptr() as u64, pread_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut readv_a = [0u8; 24];
+        let mut readv_b = [0u8; 24];
+        let readv_iov = [
+            LinuxIovec {
+                iov_base: readv_a.as_mut_ptr() as u64,
+                iov_len: readv_a.len() as u64,
+            },
+            LinuxIovec {
+                iov_base: readv_b.as_mut_ptr() as u64,
+                iov_len: readv_b.len() as u64,
+            },
+        ];
+        readv_result = dispatch(
+            abi,
+            GHOST_SYS_READV,
+            [fd, readv_iov.as_ptr() as u64, readv_iov.len() as u64, 0, 0, 0],
+        )
+        .value;
+        pwrite64_result = dispatch(
+            abi,
+            GHOST_SYS_PWRITE64,
+            [fd, WRITEV_SMOKE_A.as_ptr() as u64, WRITEV_SMOKE_A.len() as u64, 0, 0, 0],
         )
         .value;
         fcntl_getfd_result = dispatch(abi, GHOST_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
@@ -1582,6 +1735,10 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        pread64_result,
+        pwrite64_result,
+        readv_result,
+        writev_result,
         ioctl_result,
         access_result,
         stat_result,
@@ -1622,6 +1779,8 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
 
 pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: native syscall log_write() bootstrap smoke\n";
+    static WRITEV_SMOKE_A: &[u8] = b"HXNU: hxnu writev ";
+    static WRITEV_SMOKE_B: &[u8] = b"compatibility smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
     static ROOT_PATH: &[u8] = b"/\0";
@@ -1742,6 +1901,22 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let writev_iov = [
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_A.len() as u64,
+        },
+        LinuxIovec {
+            iov_base: WRITEV_SMOKE_B.as_ptr() as u64,
+            iov_len: WRITEV_SMOKE_B.len() as u64,
+        },
+    ];
+    let writev_result = dispatch(
+        abi,
+        HXNU_SYS_WRITEV,
+        [STDOUT_FD, writev_iov.as_ptr() as u64, writev_iov.len() as u64, 0, 0, 0],
+    )
+    .value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -1797,6 +1972,9 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     let mut fchdir_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
+    let mut pread64_result = -EBADF;
+    let mut pwrite64_result = -EBADF;
+    let mut readv_result = -EBADF;
     if open_result >= 0 {
         let fd = open_result as u64;
         read_result = dispatch(
@@ -1810,6 +1988,37 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
             abi,
             HXNU_SYS_FSTAT,
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let mut pread_buffer = [0u8; 32];
+        pread64_result = dispatch(
+            abi,
+            HXNU_SYS_PREAD64,
+            [fd, pread_buffer.as_mut_ptr() as u64, pread_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut readv_a = [0u8; 24];
+        let mut readv_b = [0u8; 24];
+        let readv_iov = [
+            LinuxIovec {
+                iov_base: readv_a.as_mut_ptr() as u64,
+                iov_len: readv_a.len() as u64,
+            },
+            LinuxIovec {
+                iov_base: readv_b.as_mut_ptr() as u64,
+                iov_len: readv_b.len() as u64,
+            },
+        ];
+        readv_result = dispatch(
+            abi,
+            HXNU_SYS_READV,
+            [fd, readv_iov.as_ptr() as u64, readv_iov.len() as u64, 0, 0, 0],
+        )
+        .value;
+        pwrite64_result = dispatch(
+            abi,
+            HXNU_SYS_PWRITE64,
+            [fd, WRITEV_SMOKE_A.as_ptr() as u64, WRITEV_SMOKE_A.len() as u64, 0, 0, 0],
         )
         .value;
         fcntl_getfd_result = dispatch(abi, HXNU_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
@@ -1893,6 +2102,10 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        pread64_result,
+        pwrite64_result,
+        readv_result,
+        writev_result,
         ioctl_result,
         access_result,
         stat_result,
@@ -2175,6 +2388,171 @@ fn process_rt_sigaction(args: [u64; 6]) -> SyscallOutcome {
     };
     set_signal_action(signum as u8, action);
     SyscallOutcome::success(0)
+}
+
+fn process_pread64(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let count = match usize::try_from(args[2]) {
+        Ok(count) => count,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if count > MAX_READ_BYTES {
+        return SyscallOutcome::errno(ERANGE);
+    }
+    let offset = args[3] as i64;
+    if offset < 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if count == 0 {
+        return SyscallOutcome::success(0);
+    }
+
+    match read_open_file_at_offset(fd, args[1] as usize, count, offset) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_pwrite64(args: [u64; 6]) -> SyscallOutcome {
+    let fd = args[0];
+    let offset = args[3] as i64;
+    if offset < 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if fd == STDOUT_FD || fd == STDERR_FD {
+        return write_text(args[1] as usize, args[2]);
+    }
+
+    SyscallOutcome::errno(EROFS)
+}
+
+fn process_readv(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let iov_ptr = args[1] as usize;
+    let iovcnt = match usize::try_from(args[2]) {
+        Ok(count) => count,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if iovcnt == 0 {
+        return SyscallOutcome::success(0);
+    }
+    if iovcnt > MAX_IOVEC_COUNT {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let mut total = 0usize;
+    for index in 0..iovcnt {
+        let iov = match copyin_iovec_at(iov_ptr, index) {
+            Ok(iov) => iov,
+            Err(error) => return SyscallOutcome::errno(error),
+        };
+        let len = match usize::try_from(iov.iov_len) {
+            Ok(len) => len,
+            Err(_) => return SyscallOutcome::errno(ERANGE),
+        };
+        if len > MAX_READ_BYTES {
+            return SyscallOutcome::errno(ERANGE);
+        }
+        if len == 0 {
+            continue;
+        }
+
+        let segment = match read_open_file(fd, iov.iov_base as usize, len) {
+            Ok(value) => value,
+            Err(error) => {
+                if total == 0 {
+                    return SyscallOutcome::errno(error);
+                }
+                return match i64::try_from(total) {
+                    Ok(value) => SyscallOutcome::success(value),
+                    Err(_) => SyscallOutcome::errno(ERANGE),
+                };
+            }
+        };
+        let read_len = match usize::try_from(segment) {
+            Ok(value) => value,
+            Err(_) => return SyscallOutcome::errno(ERANGE),
+        };
+        total = match total.checked_add(read_len) {
+            Some(value) => value,
+            None => return SyscallOutcome::errno(ERANGE),
+        };
+        if read_len < len {
+            break;
+        }
+    }
+
+    match i64::try_from(total) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn process_writev(args: [u64; 6]) -> SyscallOutcome {
+    let fd = args[0];
+    if fd != STDOUT_FD && fd != STDERR_FD {
+        return SyscallOutcome::errno(EBADF);
+    }
+
+    let iov_ptr = args[1] as usize;
+    let iovcnt = match usize::try_from(args[2]) {
+        Ok(count) => count,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if iovcnt == 0 {
+        return SyscallOutcome::success(0);
+    }
+    if iovcnt > MAX_IOVEC_COUNT {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let mut total = 0usize;
+    for index in 0..iovcnt {
+        let iov = match copyin_iovec_at(iov_ptr, index) {
+            Ok(iov) => iov,
+            Err(error) => return SyscallOutcome::errno(error),
+        };
+        let len = match usize::try_from(iov.iov_len) {
+            Ok(len) => len,
+            Err(_) => return SyscallOutcome::errno(ERANGE),
+        };
+        if len == 0 {
+            continue;
+        }
+        let next_total = match total.checked_add(len) {
+            Some(value) => value,
+            None => return SyscallOutcome::errno(ERANGE),
+        };
+        if next_total > MAX_WRITE_BYTES {
+            return SyscallOutcome::errno(ERANGE);
+        }
+
+        let bytes = match copyin_bytes(iov.iov_base as usize, len) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if total == 0 {
+                    return SyscallOutcome::errno(error);
+                }
+                return match i64::try_from(total) {
+                    Ok(value) => SyscallOutcome::success(value),
+                    Err(_) => SyscallOutcome::errno(ERANGE),
+                };
+            }
+        };
+        tty::write_str(&sanitize_for_console(&bytes));
+        total = next_total;
+    }
+
+    match i64::try_from(total) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
 }
 
 fn process_nanosleep(args: [u64; 6]) -> SyscallOutcome {
@@ -3453,6 +3831,30 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
     i64::try_from(read_len).map_err(|_| ERANGE)
 }
 
+fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offset: i64) -> Result<i64, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .ok_or(EBADF)?;
+    if open.kind == VfsNodeKind::Directory {
+        return Err(EISDIR);
+    }
+    let start = usize::try_from(offset).map_err(|_| ERANGE)?;
+    if start >= open.content.len() {
+        return Ok(0);
+    }
+
+    let available = open.content.len().saturating_sub(start);
+    let read_len = min(count, available);
+    let bytes = &open.content[start..start + read_len];
+    uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
+
+    i64::try_from(read_len).map_err(|_| ERANGE)
+}
+
 fn close_open_file(fd: i32) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
@@ -3716,6 +4118,20 @@ fn copyin_sigaction(ptr: usize) -> Result<LinuxKernelSigAction, i64> {
         restorer,
         mask,
     })
+}
+
+fn copyin_iovec_at(iov_ptr: usize, index: usize) -> Result<LinuxIovec, i64> {
+    let record_size = size_of::<LinuxIovec>();
+    let offset = index.checked_mul(record_size).ok_or(ERANGE)?;
+    let address = iov_ptr.checked_add(offset).ok_or(ERANGE)?;
+    let bytes = copyin_bytes(address, record_size)?;
+    if bytes.len() != record_size {
+        return Err(EINVAL);
+    }
+
+    let iov_base = u64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EINVAL)?);
+    let iov_len = u64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EINVAL)?);
+    Ok(LinuxIovec { iov_base, iov_len })
 }
 
 fn copyout_struct<T: Copy>(ptr: usize, value: &T) -> Result<(), i64> {
