@@ -12,7 +12,7 @@ use crate::time;
 use crate::tty;
 use crate::uaccess::{self, UserCopyError};
 use crate::vfs;
-use crate::vfs::VfsNodeKind;
+use crate::vfs::{VfsMountKind, VfsNodeKind};
 
 pub const LINUX_ABI_NAME: &str = "linux-x86_64-bootstrap";
 pub const GHOST_ABI_NAME: &str = "ghost-bootstrap";
@@ -21,6 +21,7 @@ pub const HXNU_ABI_NAME: &str = "hxnu-native-bootstrap";
 pub const LINUX_SYS_READ: u64 = 0;
 pub const LINUX_SYS_WRITE: u64 = 1;
 pub const LINUX_SYS_CLOSE: u64 = 3;
+pub const LINUX_SYS_FSTAT: u64 = 5;
 pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
@@ -44,6 +45,7 @@ pub const GHOST_SYS_READ: u64 = 9;
 pub const GHOST_SYS_CLOSE: u64 = 10;
 pub const GHOST_SYS_SEEK: u64 = 11;
 pub const GHOST_SYS_GETPPID: u64 = 12;
+pub const GHOST_SYS_FSTAT: u64 = 13;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -56,6 +58,7 @@ pub const HXNU_SYS_READ: u64 = 0x484e_0008;
 pub const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 pub const HXNU_SYS_SEEK: u64 = 0x484e_000a;
 pub const HXNU_SYS_PROCESS_PARENT: u64 = 0x484e_000b;
+pub const HXNU_SYS_FSTAT: u64 = 0x484e_000c;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -72,6 +75,17 @@ const O_APPEND: u64 = 0x400;
 const SEEK_SET: i32 = 0;
 const SEEK_CUR: i32 = 1;
 const SEEK_END: i32 = 2;
+
+const S_IFREG: u32 = 0o100000;
+const S_IFDIR: u32 = 0o040000;
+const S_IFCHR: u32 = 0o020000;
+const MODE_REGULAR_READ_ONLY: u32 = 0o444;
+const MODE_REGULAR_EXECUTABLE: u32 = 0o555;
+const MODE_DIRECTORY: u32 = 0o555;
+const MODE_CHARACTER_DEVICE: u32 = 0o666;
+const DEFAULT_LINK_COUNT: u64 = 1;
+const STAT_BLOCK_SIZE: i64 = 4096;
+const STAT_SECTOR_SIZE: usize = 512;
 
 const MAX_WRITE_BYTES: usize = 16 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
@@ -140,6 +154,7 @@ pub struct LinuxBootstrapProbe {
     pub write_result: i64,
     pub openat_result: i64,
     pub read_result: i64,
+    pub fstat_result: i64,
     pub lseek_result: i64,
     pub close_result: i64,
     pub getpid_result: i64,
@@ -167,6 +182,7 @@ pub struct GhostBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
     pub read_result: i64,
+    pub fstat_result: i64,
     pub seek_result: i64,
     pub close_result: i64,
     pub getpid_result: i64,
@@ -192,6 +208,7 @@ pub struct HxnuBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
     pub read_result: i64,
+    pub fstat_result: i64,
     pub seek_result: i64,
     pub close_result: i64,
     pub process_self_result: i64,
@@ -209,6 +226,54 @@ pub struct HxnuBootstrapProbe {
 struct LinuxTimespec {
     tv_sec: i64,
     tv_nsec: i64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct LinuxStat {
+    st_dev: u64,
+    st_ino: u64,
+    st_nlink: u64,
+    st_mode: u32,
+    st_uid: u32,
+    st_gid: u32,
+    __pad0: u32,
+    st_rdev: u64,
+    st_size: i64,
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atime: i64,
+    st_atime_nsec: i64,
+    st_mtime: i64,
+    st_mtime_nsec: i64,
+    st_ctime: i64,
+    st_ctime_nsec: i64,
+    __unused: [i64; 3],
+}
+
+impl LinuxStat {
+    const fn empty() -> Self {
+        Self {
+            st_dev: 0,
+            st_ino: 0,
+            st_nlink: 0,
+            st_mode: 0,
+            st_uid: 0,
+            st_gid: 0,
+            __pad0: 0,
+            st_rdev: 0,
+            st_size: 0,
+            st_blksize: 0,
+            st_blocks: 0,
+            st_atime: 0,
+            st_atime_nsec: 0,
+            st_mtime: 0,
+            st_mtime_nsec: 0,
+            st_ctime: 0,
+            st_ctime_nsec: 0,
+            __unused: [0; 3],
+        }
+    }
 }
 
 #[repr(C)]
@@ -238,6 +303,9 @@ impl LinuxUtsName {
 struct OpenFile {
     fd: i32,
     owner_process_id: u64,
+    mount: VfsMountKind,
+    kind: VfsNodeKind,
+    executable: bool,
     path: String,
     offset: usize,
     content: Vec<u8>,
@@ -286,6 +354,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_READ => read_from_fd(args),
         LINUX_SYS_WRITE => write_with_fd(args),
         LINUX_SYS_CLOSE => close_fd(args),
+        LINUX_SYS_FSTAT => fstat_fd(args),
         LINUX_SYS_LSEEK => seek_fd(args),
         LINUX_SYS_OPENAT => linux_openat(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
@@ -305,6 +374,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         GHOST_SYS_READ => read_from_fd(args),
         GHOST_SYS_CLOSE => close_fd(args),
+        GHOST_SYS_FSTAT => fstat_fd(args),
         GHOST_SYS_SEEK => seek_fd(args),
         GHOST_SYS_YIELD => SyscallOutcome::success(0),
         GHOST_SYS_GETPID => process_id(),
@@ -323,6 +393,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         HXNU_SYS_READ => read_from_fd(args),
         HXNU_SYS_CLOSE => close_fd(args),
+        HXNU_SYS_FSTAT => fstat_fd(args),
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
@@ -362,6 +433,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     .value;
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
+    let mut fstat_result = -EBADF;
     let mut lseek_result = -EBADF;
     let mut close_result = -EBADF;
     if openat_result >= 0 {
@@ -370,6 +442,13 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
             abi,
             LINUX_SYS_READ,
             [fd, read_buffer.as_mut_ptr() as u64, read_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut stat = LinuxStat::empty();
+        fstat_result = dispatch(
+            abi,
+            LINUX_SYS_FSTAT,
+            [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
         lseek_result = dispatch(abi, LINUX_SYS_LSEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
@@ -414,6 +493,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         write_result,
         openat_result,
         read_result,
+        fstat_result,
         lseek_result,
         close_result,
         getpid_result,
@@ -453,6 +533,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
 
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
+    let mut fstat_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
     if open_result >= 0 {
@@ -461,6 +542,13 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
             abi,
             GHOST_SYS_READ,
             [fd, read_buffer.as_mut_ptr() as u64, read_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut stat = LinuxStat::empty();
+        fstat_result = dispatch(
+            abi,
+            GHOST_SYS_FSTAT,
+            [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
         seek_result = dispatch(abi, GHOST_SYS_SEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
@@ -491,6 +579,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         write_result,
         open_result,
         read_result,
+        fstat_result,
         seek_result,
         close_result,
         getpid_result,
@@ -521,6 +610,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
 
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
+    let mut fstat_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
     if open_result >= 0 {
@@ -529,6 +619,13 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
             abi,
             HXNU_SYS_READ,
             [fd, read_buffer.as_mut_ptr() as u64, read_buffer.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut stat = LinuxStat::empty();
+        fstat_result = dispatch(
+            abi,
+            HXNU_SYS_FSTAT,
+            [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
         seek_result = dispatch(abi, HXNU_SYS_SEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
@@ -549,6 +646,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         write_result,
         open_result,
         read_result,
+        fstat_result,
         seek_result,
         close_result,
         process_self_result,
@@ -602,7 +700,7 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
         Some(content) => content.into_bytes(),
         None => return SyscallOutcome::errno(EIO),
     };
-    match alloc_open_file(node.path, content) {
+    match alloc_open_file(node.path, node.mount, node.kind, node.executable, content) {
         Ok(fd) => SyscallOutcome::success(fd),
         Err(error) => SyscallOutcome::errno(error),
     }
@@ -634,6 +732,18 @@ fn close_fd(args: [u64; 6]) -> SyscallOutcome {
         Err(error) => return SyscallOutcome::errno(error),
     };
     match close_open_file(fd) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn fstat_fd(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let stat_ptr = args[1] as usize;
+    match stat_open_file(fd, stat_ptr) {
         Ok(value) => SyscallOutcome::success(value),
         Err(error) => SyscallOutcome::errno(error),
     }
@@ -807,6 +917,73 @@ fn exit_status(outcome: SyscallOutcome) -> (bool, i32) {
     }
 }
 
+fn build_linux_stat(open: &OpenFile) -> Result<LinuxStat, i64> {
+    let size = open.content.len();
+    let size_i64 = i64::try_from(size).map_err(|_| ERANGE)?;
+    let blocks = size.saturating_add(STAT_SECTOR_SIZE.saturating_sub(1)) / STAT_SECTOR_SIZE;
+    let blocks_i64 = i64::try_from(blocks).map_err(|_| ERANGE)?;
+    let inode = hash_path_to_ino(open.mount, &open.path);
+    let device = mount_device_id(open.mount);
+    let mode = mode_from_node(open.kind, open.executable);
+    let uptime = time::uptime_nanoseconds();
+    let secs = i64::try_from(uptime / 1_000_000_000).map_err(|_| ERANGE)?;
+    let nanos = i64::try_from(uptime % 1_000_000_000).map_err(|_| ERANGE)?;
+    let rdev = if open.kind == VfsNodeKind::Device { device } else { 0 };
+
+    Ok(LinuxStat {
+        st_dev: device,
+        st_ino: inode,
+        st_nlink: DEFAULT_LINK_COUNT,
+        st_mode: mode,
+        st_uid: 0,
+        st_gid: 0,
+        __pad0: 0,
+        st_rdev: rdev,
+        st_size: size_i64,
+        st_blksize: STAT_BLOCK_SIZE,
+        st_blocks: blocks_i64,
+        st_atime: secs,
+        st_atime_nsec: nanos,
+        st_mtime: secs,
+        st_mtime_nsec: nanos,
+        st_ctime: secs,
+        st_ctime_nsec: nanos,
+        __unused: [0; 3],
+    })
+}
+
+fn mount_device_id(mount: VfsMountKind) -> u64 {
+    match mount {
+        VfsMountKind::Root => 1,
+        VfsMountKind::Devfs => 2,
+        VfsMountKind::Initrd => 3,
+        VfsMountKind::Procfs => 4,
+    }
+}
+
+fn mode_from_node(kind: VfsNodeKind, executable: bool) -> u32 {
+    match kind {
+        VfsNodeKind::Directory => S_IFDIR | MODE_DIRECTORY,
+        VfsNodeKind::File => {
+            if executable {
+                S_IFREG | MODE_REGULAR_EXECUTABLE
+            } else {
+                S_IFREG | MODE_REGULAR_READ_ONLY
+            }
+        }
+        VfsNodeKind::Device => S_IFCHR | MODE_CHARACTER_DEVICE,
+    }
+}
+
+fn hash_path_to_ino(mount: VfsMountKind, path: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in mount_device_id(mount).to_le_bytes().into_iter().chain(path.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    if hash == 0 { 1 } else { hash }
+}
+
 fn sanitize_for_console(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len());
     for &byte in bytes {
@@ -830,7 +1007,13 @@ fn current_process_id_value() -> u64 {
     sched::stats().current_process_id
 }
 
-fn alloc_open_file(path: String, content: Vec<u8>) -> Result<i64, i64> {
+fn alloc_open_file(
+    path: String,
+    mount: VfsMountKind,
+    kind: VfsNodeKind,
+    executable: bool,
+    content: Vec<u8>,
+) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
     if table.files.len() >= MAX_OPEN_FILES {
@@ -842,6 +1025,9 @@ fn alloc_open_file(path: String, content: Vec<u8>) -> Result<i64, i64> {
     table.files.push(OpenFile {
         fd,
         owner_process_id,
+        mount,
+        kind,
+        executable,
         path,
         offset: 0,
         content,
@@ -884,6 +1070,20 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
         return Ok(0);
     }
     Err(EBADF)
+}
+
+fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .ok_or(EBADF)?;
+
+    let stat = build_linux_stat(open)?;
+    copyout_struct(stat_ptr, &stat)?;
+    Ok(0)
 }
 
 fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
