@@ -44,6 +44,9 @@ pub const LINUX_SYS_DUP: u64 = 32;
 pub const LINUX_SYS_DUP2: u64 = 33;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
+pub const LINUX_SYS_CLONE: u64 = 56;
+pub const LINUX_SYS_FORK: u64 = 57;
+pub const LINUX_SYS_VFORK: u64 = 58;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_WAIT4: u64 = 61;
 pub const LINUX_SYS_UNAME: u64 = 63;
@@ -147,6 +150,9 @@ pub const GHOST_SYS_FUTEX: u64 = 58;
 pub const GHOST_SYS_PIPE2: u64 = 59;
 pub const GHOST_SYS_POLL: u64 = 60;
 pub const GHOST_SYS_PPOLL: u64 = 61;
+pub const GHOST_SYS_CLONE: u64 = 62;
+pub const GHOST_SYS_FORK: u64 = 63;
+pub const GHOST_SYS_VFORK: u64 = 64;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -208,6 +214,9 @@ pub const HXNU_SYS_FUTEX: u64 = 0x484e_0039;
 pub const HXNU_SYS_PIPE2: u64 = 0x484e_003a;
 pub const HXNU_SYS_POLL: u64 = 0x484e_003b;
 pub const HXNU_SYS_PPOLL: u64 = 0x484e_003c;
+pub const HXNU_SYS_CLONE: u64 = 0x484e_003d;
+pub const HXNU_SYS_FORK: u64 = 0x484e_003e;
+pub const HXNU_SYS_VFORK: u64 = 0x484e_003f;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -260,8 +269,10 @@ const SIG_UNBLOCK: i32 = 1;
 const SIG_SETMASK: i32 = 2;
 const MAX_SIGNAL_NUMBER: u64 = 64;
 const SIGKILL: u64 = 9;
+const SIGCHLD: u64 = 17;
 const SIGSTOP: u64 = 19;
 const WNOHANG: i32 = 1;
+const CLONE_SIGNAL_MASK: u64 = 0xff;
 const MAX_IOVEC_COUNT: usize = 64;
 const RLIM_INFINITY: u64 = u64::MAX;
 const RLIMIT_CPU: u32 = 0;
@@ -324,6 +335,7 @@ const MAX_WRITE_BYTES: usize = 16 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
 const MAX_OPEN_FILES: usize = 64;
+const MAX_SYNTHETIC_CHILDREN: usize = 256;
 const MMAP_PAGE_SIZE: usize = 4096;
 const DEFAULT_PROCESS_BRK: usize = 0x4000_0000;
 const DEFAULT_PROCESS_UMASK: u32 = 0o022;
@@ -1052,6 +1064,43 @@ impl GlobalProcessGroupTable {
 
 static PROCESS_GROUP_TABLE: GlobalProcessGroupTable = GlobalProcessGroupTable::new();
 
+#[derive(Copy, Clone)]
+struct ChildExitState {
+    parent_process_id: u64,
+    child_process_id: u64,
+    exit_status: i32,
+}
+
+struct ChildExitTable {
+    next_child_process_id: u64,
+    children: Vec<ChildExitState>,
+}
+
+impl ChildExitTable {
+    fn new() -> Self {
+        Self {
+            next_child_process_id: 10_000,
+            children: Vec::new(),
+        }
+    }
+}
+
+struct GlobalChildExitTable(UnsafeCell<Option<ChildExitTable>>);
+
+unsafe impl Sync for GlobalChildExitTable {}
+
+impl GlobalChildExitTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<ChildExitTable> {
+        self.0.get()
+    }
+}
+
+static CHILD_EXIT_TABLE: GlobalChildExitTable = GlobalChildExitTable::new();
+
 struct ProcessRlimitState {
     process_id: u64,
     resource: u32,
@@ -1260,6 +1309,9 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_DUP3 => dup3_fd(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         LINUX_SYS_GETPID => process_id(),
+        LINUX_SYS_CLONE => process_clone(args),
+        LINUX_SYS_FORK => process_fork(args),
+        LINUX_SYS_VFORK => process_vfork(args),
         LINUX_SYS_WAIT4 => process_wait4(args),
         LINUX_SYS_GETPPID => process_parent_id(),
         LINUX_SYS_GETTID => thread_id(),
@@ -1325,6 +1377,9 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_SEEK => seek_fd(args),
         GHOST_SYS_YIELD => SyscallOutcome::success(0),
         GHOST_SYS_GETPID => process_id(),
+        GHOST_SYS_CLONE => process_clone(args),
+        GHOST_SYS_FORK => process_fork(args),
+        GHOST_SYS_VFORK => process_vfork(args),
         GHOST_SYS_WAIT4 => process_wait4(args),
         GHOST_SYS_GETPPID => process_parent_id(),
         GHOST_SYS_GETTID => thread_id(),
@@ -1390,6 +1445,9 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
+        HXNU_SYS_CLONE => process_clone(args),
+        HXNU_SYS_FORK => process_fork(args),
+        HXNU_SYS_VFORK => process_vfork(args),
         HXNU_SYS_WAIT4 => process_wait4(args),
         HXNU_SYS_PROCESS_PARENT => process_parent_id(),
         HXNU_SYS_SETPGID => process_setpgid(args),
@@ -3582,9 +3640,43 @@ fn process_brk(args: [u64; 6]) -> SyscallOutcome {
     to_address_outcome(requested)
 }
 
+fn process_clone(args: [u64; 6]) -> SyscallOutcome {
+    let flags = args[0];
+    if flags & !CLONE_SIGNAL_MASK != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let exit_signal = flags & CLONE_SIGNAL_MASK;
+    if exit_signal > MAX_SIGNAL_NUMBER {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if exit_signal != 0 && exit_signal != SIGCHLD {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    match spawn_synthetic_child(0) {
+        Ok(child_pid) => SyscallOutcome::success(child_pid),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_fork(_args: [u64; 6]) -> SyscallOutcome {
+    match spawn_synthetic_child(0) {
+        Ok(child_pid) => SyscallOutcome::success(child_pid),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_vfork(_args: [u64; 6]) -> SyscallOutcome {
+    match spawn_synthetic_child(0) {
+        Ok(child_pid) => SyscallOutcome::success(child_pid),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
 fn process_wait4(args: [u64; 6]) -> SyscallOutcome {
     let pid = args[0] as i64;
-    let _status_ptr = args[1] as usize;
+    let status_ptr = args[1] as usize;
     let options = match i32::try_from(args[2]) {
         Ok(value) => value,
         Err(_) => return SyscallOutcome::errno(EINVAL),
@@ -3593,16 +3685,24 @@ fn process_wait4(args: [u64; 6]) -> SyscallOutcome {
         return SyscallOutcome::errno(EINVAL);
     }
 
-    let current_pid = match i64::try_from(current_process_id_value()) {
+    let parent_process_id = current_process_id_value();
+    let reaped = match reap_synthetic_child(parent_process_id, pid, status_ptr) {
+        Ok(value) => value,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if let Some(child_pid) = reaped {
+        return SyscallOutcome::success(child_pid);
+    }
+
+    let current_pid = match i64::try_from(parent_process_id) {
         Ok(value) => value,
         Err(_) => return SyscallOutcome::errno(ERANGE),
     };
-    let waits_current_scope = pid == -1 || pid == 0 || pid == current_pid;
-    if !waits_current_scope {
-        return SyscallOutcome::errno(ECHILD);
-    }
     if options & WNOHANG != 0 {
-        return SyscallOutcome::success(0);
+        if pid == -1 || pid == 0 || pid == current_pid {
+            return SyscallOutcome::success(0);
+        }
+        return SyscallOutcome::errno(ECHILD);
     }
 
     SyscallOutcome::errno(ECHILD)
@@ -4926,6 +5026,7 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     purge_process_mappings(process_id);
     purge_process_brk(process_id);
     purge_process_group_state(process_id);
+    purge_child_exit_records_for_process(process_id);
     purge_process_rlimits(process_id);
     purge_process_prctl_state(process_id);
     purge_process_arch_prctl_state(process_id);
@@ -5316,6 +5417,64 @@ fn set_session_and_group_id(session_id: u64, process_group_id: u64) {
         process_group_id,
         session_id,
     });
+}
+
+fn spawn_synthetic_child(exit_status: i32) -> Result<i64, i64> {
+    let parent_process_id = current_process_id_value();
+    let table = child_exit_table_mut();
+    if table.children.len() >= MAX_SYNTHETIC_CHILDREN {
+        return Err(EAGAIN);
+    }
+
+    let child_process_id = table.next_child_process_id;
+    table.next_child_process_id = table.next_child_process_id.checked_add(1).ok_or(ERANGE)?;
+    table.children.push(ChildExitState {
+        parent_process_id,
+        child_process_id,
+        exit_status,
+    });
+
+    i64::try_from(child_process_id).map_err(|_| ERANGE)
+}
+
+fn reap_synthetic_child(parent_process_id: u64, requested_pid: i64, status_ptr: usize) -> Result<Option<i64>, i64> {
+    let table = child_exit_table_mut();
+    let Some(index) = table.children.iter().position(|child| {
+        child.parent_process_id == parent_process_id
+            && wait_request_matches_child(parent_process_id, requested_pid, child.child_process_id)
+    }) else {
+        return Ok(None);
+    };
+
+    let child = table.children[index];
+    if status_ptr != 0 {
+        let status = encode_wait_exit_status(child.exit_status);
+        copyout_struct(status_ptr, &status)?;
+    }
+    table.children.remove(index);
+
+    let child_pid = i64::try_from(child.child_process_id).map_err(|_| ERANGE)?;
+    Ok(Some(child_pid))
+}
+
+fn wait_request_matches_child(parent_process_id: u64, requested_pid: i64, child_process_id: u64) -> bool {
+    if requested_pid == -1 || requested_pid == 0 {
+        return true;
+    }
+
+    if requested_pid > 0 {
+        return requested_pid as u64 == child_process_id;
+    }
+
+    if let Ok(parent_pid) = i64::try_from(parent_process_id) {
+        return requested_pid == parent_pid;
+    }
+
+    false
+}
+
+fn encode_wait_exit_status(exit_status: i32) -> i32 {
+    (exit_status & 0xff) << 8
 }
 
 fn default_rlimit_for_resource(resource: u32) -> Option<LinuxRlimit64> {
@@ -6455,6 +6614,13 @@ fn purge_process_group_state(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
+fn purge_child_exit_records_for_process(process_id: u64) {
+    let table = child_exit_table_mut();
+    table
+        .children
+        .retain(|entry| entry.parent_process_id != process_id && entry.child_process_id != process_id);
+}
+
 fn purge_process_rlimits(process_id: u64) {
     let table = rlimit_table_mut();
     table.retain(|entry| entry.process_id != process_id);
@@ -6552,6 +6718,14 @@ fn process_group_table_mut() -> &'static mut Vec<ProcessGroupState> {
         *slot = Some(Vec::new());
     }
     slot.as_mut().expect("process group table initialized")
+}
+
+fn child_exit_table_mut() -> &'static mut ChildExitTable {
+    let slot = unsafe { &mut *CHILD_EXIT_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(ChildExitTable::new());
+    }
+    slot.as_mut().expect("child exit table initialized")
 }
 
 fn rlimit_table_mut() -> &'static mut Vec<ProcessRlimitState> {

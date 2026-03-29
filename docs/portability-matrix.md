@@ -14,7 +14,7 @@ Scope:
 | --- | --- | --- | --- | --- |
 | `L0` | `no_std` freestanding binaries (single-process style) | `Online` | Process model and rich POSIX are intentionally absent | Keep stable ABI + loader handoff wiring |
 | `L1` | Tiny static CLI tools (`read/write`, simple args, no fork) | `Mostly online` | No persistent writable filesystem; limited process/session semantics | Writable VFS subset + argv/env handoff |
-| `L2` | Small POSIX utilities (read-only FS traversal, metadata, polling) | `Partially online` | Missing `execve/fork/clone`, limited signal behavior, no PTY | Real `exec` path + process spawn primitives |
+| `L2` | Small POSIX utilities (read-only FS traversal, metadata, polling) | `Partially online` | `fork/vfork/clone` is synthetic (no child runtime yet), missing `execve`, limited signal behavior, no PTY | Real `exec` path + process spawn primitives |
 | `L3` | `musl` static apps with libc expectations (threads/signals/process control) | `Early` | libc contract incomplete (`crt`/sysroot/runtime semantics), missing scheduler/user ABI pieces | `musl` bootstrap sysroot + syscall contract hardening |
 | `L4` | Shells, package tools, service daemons | `Not yet` | Missing full job control, PTY/session semantics, many FS mutation syscalls | PTY/session model + write-capable FS + process tree semantics |
 | `L5` | Broad Linux userland compatibility | `Not yet` | Dynamic linking, large syscall surface (net, IPC, fs admin), behavioral parity | Toolchain + libc + kernel ABI conformance passes |
@@ -25,13 +25,13 @@ Online bootstrap areas:
 - FD I/O core: `read`, `write`, `close`, `dup/dup2/dup3`, `fcntl`, `readv/writev`, `pread64/pwrite64`
 - Path and metadata (read-oriented): `open/openat`, `fstat/stat/newfstatat`, `readlink/readlinkat`, `access/faccessat/faccessat2`, `getdents/getdents64`, `getcwd/chdir/fchdir`, `lseek/seek`
 - Memory and timing: `mmap/mprotect/munmap`, `brk`, `nanosleep`, `gettimeofday`, `clock_gettime`, `getrandom`
-- Process identity/session subset: `getpid/getppid/gettid`, `setpgid/getpgid`, `setsid/getsid`, `wait4`, `exit/exit_group`
+- Process identity/session subset: `getpid/getppid/gettid`, `setpgid/getpgid`, `setsid/getsid`, `fork/vfork/clone` (synthetic child records), `wait4` (reap), `exit/exit_group`
 - Signals/robustness subset: `rt_sigaction`, `rt_sigprocmask`, `set_tid_address`, `set_robust_list/get_robust_list`, `rseq`, `futex (wait/wake)`
 - Polling and pipes subset: `pipe/pipe2`, `poll/ppoll`
 - Platform/ABI support: `uname`, `prctl`, `arch_prctl`
 
 Still limiting general Unix/Linux ports:
-- Process creation and program replacement are not complete (`fork/vfork/clone/execve` class is not online as a real userspace contract).
+- Process creation and program replacement are not complete (`fork/vfork/clone` is currently synthetic and `execve` is not online as a real userspace contract).
 - Writable filesystem semantics are minimal for normal files (many apps expect create/modify/rename/unlink/mkdir/chmod/chown flows).
 - IPC/network-heavy syscall families are not in bootstrap scope yet (sockets and related flows).
 - PTY/job-control/session behavior is not at shell-grade parity yet.
@@ -54,7 +54,7 @@ Defer until next milestones:
 - Consume current `/initrd/init` materialized `PT_LOAD` images and hand off entry safely.
 
 2. Spawn contract:
-- Introduce minimal `clone/fork+exec` path sufficient for parent/child orchestration tests.
+- Synthetic `fork/vfork/clone` + `wait4` reap baseline is online; next step is real child runtime + `exec` handoff path.
 
 3. Writable VFS baseline:
 - Add constrained create/write/truncate/unlink/rename behavior for userland smoke tests.
