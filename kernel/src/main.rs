@@ -537,7 +537,7 @@ pub extern "C" fn _start() -> ! {
     match &init_load_prep {
         Ok(prep) => kprintln_style!(
             crate::tty::ConsoleStyle::Accent,
-            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-ok={} interp-arg={}",
+            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-src={} interp-ok={} interp-arg={}",
             prep.path,
             prep.mount.as_str(),
             prep.format.as_str(),
@@ -561,6 +561,7 @@ pub extern "C" fn _start() -> ! {
             vfs::format_u64_hex(prep.vm_map_start),
             vfs::format_u64_hex(prep.vm_map_end),
             prep.interpreter.as_deref().unwrap_or("<none>"),
+            prep.interpreter_source.as_deref().unwrap_or("<none>"),
             yes_no(prep.interpreter_resolved),
             prep.interpreter_argument.as_deref().unwrap_or("<none>"),
         ),

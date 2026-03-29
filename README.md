@@ -95,6 +95,7 @@ Current bring-up logs also include:
 - `/initrd/init` executable candidate discovery with format probe
 - `/initrd/init` load-prep inspection for shebang and ELF64 program headers
 - ELF `PT_LOAD` vm-map planning summary with RWX permissions and zero-fill (BSS) accounting
+- early Unix-like interpreter resolution fallback from `/bin/*` to `/initrd/bin/*`
 - periodic scheduler tick bootstrap summary
 - scheduler thread and runqueue model summary
 - bootstrap to idle context-switch summary

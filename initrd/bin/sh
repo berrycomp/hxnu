@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "HXNU 2605 early /bin/sh placeholder"
+echo "shell semantics and userland toolchain are pending"

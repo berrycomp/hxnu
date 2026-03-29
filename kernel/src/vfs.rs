@@ -181,6 +181,7 @@ pub struct ExecutableLoadPrep {
     pub vm_map_start: Option<u64>,
     pub vm_map_end: Option<u64>,
     pub interpreter: Option<String>,
+    pub interpreter_source: Option<String>,
     pub interpreter_argument: Option<String>,
     pub interpreter_resolved: bool,
 }
@@ -385,9 +386,10 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 });
             }
             let interpreter = elf.interpreter;
-            let interpreter_resolved = interpreter
+            let interpreter_source = interpreter
                 .as_deref()
-                .is_some_and(|path| lookup(path).is_some());
+                .and_then(resolve_runtime_path);
+            let interpreter_resolved = interpreter_source.is_some();
             Ok(ExecutableLoadPrep {
                 path: candidate.path,
                 mount: candidate.mount,
@@ -412,12 +414,14 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 vm_map_start,
                 vm_map_end,
                 interpreter,
+                interpreter_source,
                 interpreter_argument: None,
                 interpreter_resolved,
             })
         }
         exec::ExecutableImage::Shebang(script) => {
-            let interpreter_resolved = lookup(&script.interpreter).is_some();
+            let interpreter_source = resolve_runtime_path(&script.interpreter);
+            let interpreter_resolved = interpreter_source.is_some();
             Ok(ExecutableLoadPrep {
                 path: candidate.path,
                 mount: candidate.mount,
@@ -442,6 +446,7 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 vm_map_start: None,
                 vm_map_end: None,
                 interpreter: Some(script.interpreter),
+                interpreter_source,
                 interpreter_argument: script.argument,
                 interpreter_resolved,
             })
@@ -470,6 +475,7 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
             vm_map_start: None,
             vm_map_end: None,
             interpreter: None,
+            interpreter_source: None,
             interpreter_argument: None,
             interpreter_resolved: false,
         }),
@@ -540,6 +546,20 @@ fn resolve_initrd_node(path: &str) -> Option<VfsNode> {
         size: info.size,
         executable: info.executable,
     })
+}
+
+fn resolve_runtime_path(path: &str) -> Option<String> {
+    let normalized = normalize_path(path)?;
+    if let Some(node) = lookup(&normalized) {
+        return Some(node.path);
+    }
+    if normalized == ROOT_PATH || normalized.starts_with(INITRD_ROOT_PATH) {
+        return None;
+    }
+
+    let mut initrd_path = String::from(INITRD_ROOT_PATH);
+    initrd_path.push_str(&normalized);
+    lookup(&initrd_path).map(|node| node.path)
 }
 
 fn render_root() -> String {
