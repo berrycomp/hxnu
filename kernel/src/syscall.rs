@@ -25,10 +25,12 @@ pub const LINUX_SYS_FSTAT: u64 = 5;
 pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_ACCESS: u64 = 21;
+pub const LINUX_SYS_DUP: u64 = 32;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_UNAME: u64 = 63;
+pub const LINUX_SYS_FCNTL: u64 = 72;
 pub const LINUX_SYS_GETPPID: u64 = 110;
 pub const LINUX_SYS_GETTID: u64 = 186;
 pub const LINUX_SYS_GETDENTS64: u64 = 217;
@@ -38,6 +40,7 @@ pub const LINUX_SYS_OPENAT: u64 = 257;
 pub const LINUX_SYS_NEWFSTATAT: u64 = 262;
 pub const LINUX_SYS_READLINKAT: u64 = 267;
 pub const LINUX_SYS_FACCESSAT: u64 = 269;
+pub const LINUX_SYS_DUP3: u64 = 292;
 
 pub const GHOST_SYS_WRITE: u64 = 1;
 pub const GHOST_SYS_YIELD: u64 = 2;
@@ -57,6 +60,9 @@ pub const GHOST_SYS_GETDENTS: u64 = 15;
 pub const GHOST_SYS_READLINK: u64 = 16;
 pub const GHOST_SYS_ACCESS: u64 = 17;
 pub const GHOST_SYS_IOCTL: u64 = 18;
+pub const GHOST_SYS_DUP: u64 = 19;
+pub const GHOST_SYS_DUP3: u64 = 20;
+pub const GHOST_SYS_FCNTL: u64 = 21;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -75,6 +81,9 @@ pub const HXNU_SYS_GETDENTS: u64 = 0x484e_000e;
 pub const HXNU_SYS_READLINK: u64 = 0x484e_000f;
 pub const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 pub const HXNU_SYS_IOCTL: u64 = 0x484e_0011;
+pub const HXNU_SYS_DUP: u64 = 0x484e_0012;
+pub const HXNU_SYS_DUP3: u64 = 0x484e_0013;
+pub const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -83,6 +92,12 @@ const LINUX_CLOCK_MONOTONIC: i32 = 1;
 const AT_FDCWD: i64 = -100;
 const AT_EACCESS: u64 = 0x200;
 const LINUX_TIOCGWINSZ: u64 = 0x5413;
+const F_DUPFD: i32 = 0;
+const F_GETFD: i32 = 1;
+const F_SETFD: i32 = 2;
+const F_GETFL: i32 = 3;
+const F_SETFL: i32 = 4;
+const FD_CLOEXEC: u32 = 1;
 
 const F_OK: u64 = 0;
 const X_OK: u64 = 1;
@@ -91,6 +106,8 @@ const R_OK: u64 = 4;
 
 const O_ACCMODE: u64 = 0x3;
 const O_RDONLY: u64 = 0;
+const O_DIRECTORY: u64 = 0x10000;
+const O_CLOEXEC: u64 = 0x80000;
 const O_CREAT: u64 = 0x40;
 const O_TRUNC: u64 = 0x200;
 const O_APPEND: u64 = 0x400;
@@ -188,6 +205,10 @@ pub struct LinuxBootstrapProbe {
     pub newfstatat_result: i64,
     pub faccessat_result: i64,
     pub readlinkat_result: i64,
+    pub dup_result: i64,
+    pub dup3_result: i64,
+    pub fcntl_getfd_result: i64,
+    pub fcntl_getfl_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents64_result: i64,
@@ -221,6 +242,10 @@ pub struct GhostBootstrapProbe {
     pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
+    pub dup_result: i64,
+    pub dup3_result: i64,
+    pub fcntl_getfd_result: i64,
+    pub fcntl_getfl_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents_result: i64,
@@ -252,6 +277,10 @@ pub struct HxnuBootstrapProbe {
     pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
+    pub dup_result: i64,
+    pub dup3_result: i64,
+    pub fcntl_getfd_result: i64,
+    pub fcntl_getfl_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents_result: i64,
@@ -357,6 +386,7 @@ impl LinuxUtsName {
 
 struct OpenFile {
     fd: i32,
+    fd_flags: u32,
     owner_process_id: u64,
     mount: VfsMountKind,
     kind: VfsNodeKind,
@@ -409,15 +439,18 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_READ => read_from_fd(args),
         LINUX_SYS_WRITE => write_with_fd(args),
         LINUX_SYS_CLOSE => close_fd(args),
+        LINUX_SYS_DUP => dup_fd(args),
         LINUX_SYS_FSTAT => fstat_fd(args),
         LINUX_SYS_GETDENTS64 => getdents_fd(args),
         LINUX_SYS_IOCTL => ioctl_fd(args),
         LINUX_SYS_LSEEK => seek_fd(args),
         LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
+        LINUX_SYS_FCNTL => fcntl_fd(args),
         LINUX_SYS_OPENAT => linux_openat(args),
         LINUX_SYS_NEWFSTATAT => linux_newfstatat(args),
         LINUX_SYS_READLINKAT => linux_readlinkat(args),
         LINUX_SYS_FACCESSAT => linux_faccessat(args),
+        LINUX_SYS_DUP3 => dup3_fd(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         LINUX_SYS_GETPID => process_id(),
         LINUX_SYS_GETPPID => process_parent_id(),
@@ -435,6 +468,9 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         GHOST_SYS_READ => read_from_fd(args),
         GHOST_SYS_CLOSE => close_fd(args),
+        GHOST_SYS_DUP => dup_fd(args),
+        GHOST_SYS_DUP3 => dup3_fd(args),
+        GHOST_SYS_FCNTL => fcntl_fd(args),
         GHOST_SYS_FSTAT => fstat_fd(args),
         GHOST_SYS_GETDENTS => getdents_fd(args),
         GHOST_SYS_IOCTL => ioctl_fd(args),
@@ -459,6 +495,9 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         HXNU_SYS_READ => read_from_fd(args),
         HXNU_SYS_CLOSE => close_fd(args),
+        HXNU_SYS_DUP => dup_fd(args),
+        HXNU_SYS_DUP3 => dup3_fd(args),
+        HXNU_SYS_FCNTL => fcntl_fd(args),
         HXNU_SYS_FSTAT => fstat_fd(args),
         HXNU_SYS_GETDENTS => getdents_fd(args),
         HXNU_SYS_IOCTL => ioctl_fd(args),
@@ -554,6 +593,10 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
+    let mut dup_result = -EBADF;
+    let mut dup3_result = -EBADF;
+    let mut fcntl_getfd_result = -EBADF;
+    let mut fcntl_getfl_result = -EBADF;
     let mut getdents64_result = -EBADF;
     let mut lseek_result = -EBADF;
     let mut close_result = -EBADF;
@@ -572,6 +615,16 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
+        fcntl_getfd_result = dispatch(abi, LINUX_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
+        fcntl_getfl_result = dispatch(abi, LINUX_SYS_FCNTL, [fd, F_GETFL as u64, 0, 0, 0, 0]).value;
+        dup_result = dispatch(abi, LINUX_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
+        if dup_result >= 0 {
+            let _ = dispatch(abi, LINUX_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup3_result = dispatch(abi, LINUX_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
+        if dup3_result >= 0 {
+            let _ = dispatch(abi, LINUX_SYS_CLOSE, [dup3_result as u64, 0, 0, 0, 0, 0]).value;
+        }
         lseek_result = dispatch(abi, LINUX_SYS_LSEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
         close_result = dispatch(abi, LINUX_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
@@ -635,6 +688,10 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         newfstatat_result,
         faccessat_result,
         readlinkat_result,
+        dup_result,
+        dup3_result,
+        fcntl_getfd_result,
+        fcntl_getfl_result,
         read_result,
         fstat_result,
         getdents64_result,
@@ -714,6 +771,10 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
+    let mut dup_result = -EBADF;
+    let mut dup3_result = -EBADF;
+    let mut fcntl_getfd_result = -EBADF;
+    let mut fcntl_getfl_result = -EBADF;
     let mut getdents_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
@@ -732,6 +793,16 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
+        fcntl_getfd_result = dispatch(abi, GHOST_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
+        fcntl_getfl_result = dispatch(abi, GHOST_SYS_FCNTL, [fd, F_GETFL as u64, 0, 0, 0, 0]).value;
+        dup_result = dispatch(abi, GHOST_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
+        if dup_result >= 0 {
+            let _ = dispatch(abi, GHOST_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup3_result = dispatch(abi, GHOST_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
+        if dup3_result >= 0 {
+            let _ = dispatch(abi, GHOST_SYS_CLOSE, [dup3_result as u64, 0, 0, 0, 0, 0]).value;
+        }
         seek_result = dispatch(abi, GHOST_SYS_SEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
         close_result = dispatch(abi, GHOST_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
@@ -775,6 +846,10 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         access_result,
         stat_result,
         readlink_result,
+        dup_result,
+        dup3_result,
+        fcntl_getfd_result,
+        fcntl_getfl_result,
         read_result,
         fstat_result,
         getdents_result,
@@ -845,6 +920,10 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
+    let mut dup_result = -EBADF;
+    let mut dup3_result = -EBADF;
+    let mut fcntl_getfd_result = -EBADF;
+    let mut fcntl_getfl_result = -EBADF;
     let mut getdents_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
@@ -863,6 +942,16 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
             [fd, (&mut stat as *mut LinuxStat) as u64, 0, 0, 0, 0],
         )
         .value;
+        fcntl_getfd_result = dispatch(abi, HXNU_SYS_FCNTL, [fd, F_GETFD as u64, 0, 0, 0, 0]).value;
+        fcntl_getfl_result = dispatch(abi, HXNU_SYS_FCNTL, [fd, F_GETFL as u64, 0, 0, 0, 0]).value;
+        dup_result = dispatch(abi, HXNU_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
+        if dup_result >= 0 {
+            let _ = dispatch(abi, HXNU_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup3_result = dispatch(abi, HXNU_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
+        if dup3_result >= 0 {
+            let _ = dispatch(abi, HXNU_SYS_CLOSE, [dup3_result as u64, 0, 0, 0, 0, 0]).value;
+        }
         seek_result = dispatch(abi, HXNU_SYS_SEEK, [fd, 0, SEEK_SET as u64, 0, 0, 0]).value;
         close_result = dispatch(abi, HXNU_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
@@ -897,6 +986,10 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         access_result,
         stat_result,
         readlink_result,
+        dup_result,
+        dup3_result,
+        fcntl_getfd_result,
+        fcntl_getfl_result,
         read_result,
         fstat_result,
         getdents_result,
@@ -1093,6 +1186,86 @@ fn close_fd(args: [u64; 6]) -> SyscallOutcome {
     match close_open_file(fd) {
         Ok(value) => SyscallOutcome::success(value),
         Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn dup_fd(args: [u64; 6]) -> SyscallOutcome {
+    let source_fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+
+    match duplicate_fd(source_fd, 3, DuplicateTarget::LowestAvailable, 0) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn dup3_fd(args: [u64; 6]) -> SyscallOutcome {
+    let source_fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let target_fd = match parse_fd(args[1]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if source_fd == target_fd {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if target_fd < 3 {
+        return SyscallOutcome::errno(EBADF);
+    }
+    let flags = args[2];
+    if flags & !O_CLOEXEC != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    let fd_flags = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+
+    match duplicate_fd(source_fd, target_fd, DuplicateTarget::Exact, fd_flags) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn fcntl_fd(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let command = match i32::try_from(args[1]) {
+        Ok(command) => command,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+
+    match command {
+        F_DUPFD => {
+            let minimum_fd = match parse_fd(args[2]) {
+                Ok(fd) => fd.max(3),
+                Err(error) => return SyscallOutcome::errno(error),
+            };
+            match duplicate_fd(fd, minimum_fd, DuplicateTarget::LowestAvailable, 0) {
+                Ok(value) => SyscallOutcome::success(value),
+                Err(error) => SyscallOutcome::errno(error),
+            }
+        }
+        F_GETFD => match get_descriptor_flags(fd) {
+            Ok(flags) => SyscallOutcome::success(i64::from(flags as i32)),
+            Err(error) => SyscallOutcome::errno(error),
+        },
+        F_SETFD => {
+            let flags = (args[2] as u32) & FD_CLOEXEC;
+            match set_descriptor_flags(fd, flags) {
+                Ok(value) => SyscallOutcome::success(value),
+                Err(error) => SyscallOutcome::errno(error),
+            }
+        }
+        F_GETFL => match get_status_flags(fd) {
+            Ok(flags) => SyscallOutcome::success(flags),
+            Err(error) => SyscallOutcome::errno(error),
+        },
+        F_SETFL => SyscallOutcome::success(0),
+        _ => SyscallOutcome::errno(EINVAL),
     }
 }
 
@@ -1545,6 +1718,142 @@ fn current_process_id_value() -> u64 {
     sched::stats().current_process_id
 }
 
+#[derive(Copy, Clone)]
+enum DuplicateTarget {
+    LowestAvailable,
+    Exact,
+}
+
+fn duplicate_fd(
+    source_fd: i32,
+    target_or_minimum_fd: i32,
+    target: DuplicateTarget,
+    fd_flags: u32,
+) -> Result<i64, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    if !table
+        .files
+        .iter()
+        .any(|file| file.owner_process_id == owner_process_id && file.fd == source_fd)
+    {
+        return Err(EBADF);
+    }
+
+    let destination_fd = match target {
+        DuplicateTarget::LowestAvailable => {
+            find_available_fd_for_process(table, owner_process_id, target_or_minimum_fd).ok_or(EMFILE)?
+        }
+        DuplicateTarget::Exact => target_or_minimum_fd,
+    };
+    let replaced_index = if matches!(target, DuplicateTarget::Exact) {
+        table
+            .files
+            .iter()
+            .position(|file| file.owner_process_id == owner_process_id && file.fd == destination_fd)
+    } else {
+        None
+    };
+    if table.files.len() >= MAX_OPEN_FILES && replaced_index.is_none() {
+        return Err(EMFILE);
+    }
+    if let Some(index) = replaced_index {
+        table.files.remove(index);
+    }
+
+    let source = table
+        .files
+        .iter()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == source_fd)
+        .ok_or(EBADF)?;
+    let duplicate = duplicate_file_descriptor(source, destination_fd, fd_flags & FD_CLOEXEC);
+    table.files.push(duplicate);
+
+    i64::try_from(destination_fd).map_err(|_| ERANGE)
+}
+
+fn find_available_fd_for_process(table: &FdTable, owner_process_id: u64, minimum_fd: i32) -> Option<i32> {
+    let mut candidate = minimum_fd.max(3);
+    loop {
+        if !table
+            .files
+            .iter()
+            .any(|file| file.owner_process_id == owner_process_id && file.fd == candidate)
+        {
+            return Some(candidate);
+        }
+        if candidate == i32::MAX {
+            return None;
+        }
+        candidate = candidate.saturating_add(1);
+    }
+}
+
+fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u32) -> OpenFile {
+    OpenFile {
+        fd: destination_fd,
+        fd_flags,
+        owner_process_id: source.owner_process_id,
+        mount: source.mount,
+        kind: source.kind,
+        executable: source.executable,
+        path: source.path.clone(),
+        offset: source.offset,
+        content: source.content.clone(),
+    }
+}
+
+fn get_descriptor_flags(fd: i32) -> Result<u32, i64> {
+    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return Ok(0);
+    }
+
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
+        .ok_or(EBADF)?;
+    Ok(open.fd_flags)
+}
+
+fn set_descriptor_flags(fd: i32, flags: u32) -> Result<i64, i64> {
+    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return Ok(0);
+    }
+
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter_mut()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
+        .ok_or(EBADF)?;
+    open.fd_flags = flags & FD_CLOEXEC;
+    Ok(0)
+}
+
+fn get_status_flags(fd: i32) -> Result<i64, i64> {
+    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return i64::try_from(O_RDONLY).map_err(|_| ERANGE);
+    }
+
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
+        .ok_or(EBADF)?;
+    let mut flags = O_RDONLY;
+    if open.kind == VfsNodeKind::Directory {
+        flags |= O_DIRECTORY;
+    }
+
+    i64::try_from(flags).map_err(|_| ERANGE)
+}
+
 fn alloc_open_file(
     path: String,
     mount: VfsMountKind,
@@ -1562,6 +1871,7 @@ fn alloc_open_file(
     table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
     table.files.push(OpenFile {
         fd,
+        fd_flags: 0,
         owner_process_id,
         mount,
         kind,
