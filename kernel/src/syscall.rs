@@ -31,6 +31,9 @@ pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_UNAME: u64 = 63;
 pub const LINUX_SYS_FCNTL: u64 = 72;
+pub const LINUX_SYS_GETCWD: u64 = 79;
+pub const LINUX_SYS_CHDIR: u64 = 80;
+pub const LINUX_SYS_FCHDIR: u64 = 81;
 pub const LINUX_SYS_GETPPID: u64 = 110;
 pub const LINUX_SYS_GETTID: u64 = 186;
 pub const LINUX_SYS_GETDENTS64: u64 = 217;
@@ -63,6 +66,9 @@ pub const GHOST_SYS_IOCTL: u64 = 18;
 pub const GHOST_SYS_DUP: u64 = 19;
 pub const GHOST_SYS_DUP3: u64 = 20;
 pub const GHOST_SYS_FCNTL: u64 = 21;
+pub const GHOST_SYS_GETCWD: u64 = 22;
+pub const GHOST_SYS_CHDIR: u64 = 23;
+pub const GHOST_SYS_FCHDIR: u64 = 24;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -84,6 +90,9 @@ pub const HXNU_SYS_IOCTL: u64 = 0x484e_0011;
 pub const HXNU_SYS_DUP: u64 = 0x484e_0012;
 pub const HXNU_SYS_DUP3: u64 = 0x484e_0013;
 pub const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
+pub const HXNU_SYS_GETCWD: u64 = 0x484e_0015;
+pub const HXNU_SYS_CHDIR: u64 = 0x484e_0016;
+pub const HXNU_SYS_FCHDIR: u64 = 0x484e_0017;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -209,6 +218,9 @@ pub struct LinuxBootstrapProbe {
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
+    pub getcwd_result: i64,
+    pub chdir_result: i64,
+    pub fchdir_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents64_result: i64,
@@ -246,6 +258,9 @@ pub struct GhostBootstrapProbe {
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
+    pub getcwd_result: i64,
+    pub chdir_result: i64,
+    pub fchdir_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents_result: i64,
@@ -281,6 +296,9 @@ pub struct HxnuBootstrapProbe {
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
+    pub getcwd_result: i64,
+    pub chdir_result: i64,
+    pub fchdir_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
     pub getdents_result: i64,
@@ -426,6 +444,27 @@ impl GlobalFdTable {
 
 static FD_TABLE: GlobalFdTable = GlobalFdTable::new();
 
+struct ProcessCwd {
+    process_id: u64,
+    path: String,
+}
+
+struct GlobalCwdTable(UnsafeCell<Option<Vec<ProcessCwd>>>);
+
+unsafe impl Sync for GlobalCwdTable {}
+
+impl GlobalCwdTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessCwd>> {
+        self.0.get()
+    }
+}
+
+static CWD_TABLE: GlobalCwdTable = GlobalCwdTable::new();
+
 pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome {
     match abi {
         SyscallAbi::LinuxBootstrap => dispatch_linux_bootstrap(number, args),
@@ -446,6 +485,9 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_LSEEK => seek_fd(args),
         LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         LINUX_SYS_FCNTL => fcntl_fd(args),
+        LINUX_SYS_GETCWD => linux_getcwd(args),
+        LINUX_SYS_CHDIR => linux_chdir(args),
+        LINUX_SYS_FCHDIR => linux_fchdir(args),
         LINUX_SYS_OPENAT => linux_openat(args),
         LINUX_SYS_NEWFSTATAT => linux_newfstatat(args),
         LINUX_SYS_READLINKAT => linux_readlinkat(args),
@@ -471,6 +513,9 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_DUP => dup_fd(args),
         GHOST_SYS_DUP3 => dup3_fd(args),
         GHOST_SYS_FCNTL => fcntl_fd(args),
+        GHOST_SYS_GETCWD => process_getcwd(args),
+        GHOST_SYS_CHDIR => process_chdir(args),
+        GHOST_SYS_FCHDIR => process_fchdir(args),
         GHOST_SYS_FSTAT => fstat_fd(args),
         GHOST_SYS_GETDENTS => getdents_fd(args),
         GHOST_SYS_IOCTL => ioctl_fd(args),
@@ -498,6 +543,9 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_DUP => dup_fd(args),
         HXNU_SYS_DUP3 => dup3_fd(args),
         HXNU_SYS_FCNTL => fcntl_fd(args),
+        HXNU_SYS_GETCWD => process_getcwd(args),
+        HXNU_SYS_CHDIR => process_chdir(args),
+        HXNU_SYS_FCHDIR => process_fchdir(args),
         HXNU_SYS_FSTAT => fstat_fd(args),
         HXNU_SYS_GETDENTS => getdents_fd(args),
         HXNU_SYS_IOCTL => ioctl_fd(args),
@@ -520,6 +568,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: linux syscall write() compatibility smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
+    static ROOT_PATH: &[u8] = b"/\0";
     static READLINK_PATH: &[u8] = b"/proc/self/exe\0";
     let abi = SyscallAbi::LinuxBootstrap;
 
@@ -576,6 +625,14 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0],
     )
     .value;
+    let mut cwd_buffer = [0u8; 128];
+    let getcwd_result = dispatch(
+        abi,
+        LINUX_SYS_GETCWD,
+        [cwd_buffer.as_mut_ptr() as u64, cwd_buffer.len() as u64, 0, 0, 0, 0],
+    )
+    .value;
+    let chdir_result = dispatch(abi, LINUX_SYS_CHDIR, [OPEN_DIR_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
     let mut readlink_buffer = [0u8; 128];
     let readlinkat_result = dispatch(
         abi,
@@ -598,6 +655,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
     let mut getdents64_result = -EBADF;
+    let mut fchdir_result = -EBADF;
     let mut lseek_result = -EBADF;
     let mut close_result = -EBADF;
     if openat_result >= 0 {
@@ -636,6 +694,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     .value;
     if open_dir_result >= 0 {
         let fd = open_dir_result as u64;
+        fchdir_result = dispatch(abi, LINUX_SYS_FCHDIR, [fd, 0, 0, 0, 0, 0]).value;
         let mut dir_buffer = [0u8; 256];
         getdents64_result = dispatch(
             abi,
@@ -645,6 +704,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         .value;
         let _ = dispatch(abi, LINUX_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
+    let _ = dispatch(abi, LINUX_SYS_CHDIR, [ROOT_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
 
     let getpid_result = dispatch(abi, LINUX_SYS_GETPID, [0; 6]).value;
     let getppid_result = dispatch(abi, LINUX_SYS_GETPPID, [0; 6]).value;
@@ -692,6 +752,9 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
+        getcwd_result,
+        chdir_result,
+        fchdir_result,
         read_result,
         fstat_result,
         getdents64_result,
@@ -716,6 +779,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: ghost syscall write() compatibility smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
+    static ROOT_PATH: &[u8] = b"/\0";
     static READLINK_PATH: &[u8] = b"/proc/self/exe\0";
     let abi = SyscallAbi::GhostBootstrap;
 
@@ -767,6 +831,14 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         ],
     )
     .value;
+    let mut cwd_buffer = [0u8; 128];
+    let getcwd_result = dispatch(
+        abi,
+        GHOST_SYS_GETCWD,
+        [cwd_buffer.as_mut_ptr() as u64, cwd_buffer.len() as u64, 0, 0, 0, 0],
+    )
+    .value;
+    let chdir_result = dispatch(abi, GHOST_SYS_CHDIR, [OPEN_DIR_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
 
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
@@ -776,6 +848,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
     let mut getdents_result = -EBADF;
+    let mut fchdir_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
     if open_result >= 0 {
@@ -809,6 +882,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     let open_dir_result = dispatch(abi, GHOST_SYS_OPEN, [OPEN_DIR_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
     if open_dir_result >= 0 {
         let fd = open_dir_result as u64;
+        fchdir_result = dispatch(abi, GHOST_SYS_FCHDIR, [fd, 0, 0, 0, 0, 0]).value;
         let mut dir_buffer = [0u8; 256];
         getdents_result = dispatch(
             abi,
@@ -818,6 +892,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         .value;
         let _ = dispatch(abi, GHOST_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
+    let _ = dispatch(abi, GHOST_SYS_CHDIR, [ROOT_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
 
     let getpid_result = dispatch(abi, GHOST_SYS_GETPID, [0; 6]).value;
     let getppid_result = dispatch(abi, GHOST_SYS_GETPPID, [0; 6]).value;
@@ -850,6 +925,9 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
+        getcwd_result,
+        chdir_result,
+        fchdir_result,
         read_result,
         fstat_result,
         getdents_result,
@@ -872,6 +950,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     static WRITE_SMOKE: &[u8] = b"HXNU: native syscall log_write() bootstrap smoke\n";
     static OPEN_PATH: &[u8] = b"/proc/version\0";
     static OPEN_DIR_PATH: &[u8] = b"/proc\0";
+    static ROOT_PATH: &[u8] = b"/\0";
     static READLINK_PATH: &[u8] = b"/proc/self/exe\0";
     let abi = SyscallAbi::HxnuNativeBootstrap;
 
@@ -916,6 +995,14 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         ],
     )
     .value;
+    let mut cwd_buffer = [0u8; 128];
+    let getcwd_result = dispatch(
+        abi,
+        HXNU_SYS_GETCWD,
+        [cwd_buffer.as_mut_ptr() as u64, cwd_buffer.len() as u64, 0, 0, 0, 0],
+    )
+    .value;
+    let chdir_result = dispatch(abi, HXNU_SYS_CHDIR, [OPEN_DIR_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
 
     let mut read_buffer = [0u8; 64];
     let mut read_result = -EBADF;
@@ -925,6 +1012,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
     let mut getdents_result = -EBADF;
+    let mut fchdir_result = -EBADF;
     let mut seek_result = -EBADF;
     let mut close_result = -EBADF;
     if open_result >= 0 {
@@ -959,6 +1047,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         dispatch(abi, HXNU_SYS_OPEN, [OPEN_DIR_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
     if open_dir_result >= 0 {
         let fd = open_dir_result as u64;
+        fchdir_result = dispatch(abi, HXNU_SYS_FCHDIR, [fd, 0, 0, 0, 0, 0]).value;
         let mut dir_buffer = [0u8; 256];
         getdents_result = dispatch(
             abi,
@@ -968,6 +1057,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         .value;
         let _ = dispatch(abi, HXNU_SYS_CLOSE, [fd, 0, 0, 0, 0, 0]).value;
     }
+    let _ = dispatch(abi, HXNU_SYS_CHDIR, [ROOT_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
 
     let process_self_result = dispatch(abi, HXNU_SYS_PROCESS_SELF, [0; 6]).value;
     let process_parent_result = dispatch(abi, HXNU_SYS_PROCESS_PARENT, [0; 6]).value;
@@ -990,6 +1080,9 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
+        getcwd_result,
+        chdir_result,
+        fchdir_result,
         read_result,
         fstat_result,
         getdents_result,
@@ -1011,6 +1104,18 @@ fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
     open_path_at(dirfd, args[1] as usize, args[2])
 }
 
+fn linux_getcwd(args: [u64; 6]) -> SyscallOutcome {
+    process_getcwd(args)
+}
+
+fn linux_chdir(args: [u64; 6]) -> SyscallOutcome {
+    process_chdir(args)
+}
+
+fn linux_fchdir(args: [u64; 6]) -> SyscallOutcome {
+    process_fchdir(args)
+}
+
 fn linux_newfstatat(args: [u64; 6]) -> SyscallOutcome {
     let dirfd = args[0] as i64;
     stat_path_at(dirfd, args[1] as usize, args[2], args[3])
@@ -1024,6 +1129,54 @@ fn linux_faccessat(args: [u64; 6]) -> SyscallOutcome {
 fn linux_readlinkat(args: [u64; 6]) -> SyscallOutcome {
     let dirfd = args[0] as i64;
     readlink_path_at(dirfd, args[1] as usize, args[2] as usize, args[3])
+}
+
+fn process_getcwd(args: [u64; 6]) -> SyscallOutcome {
+    let destination_ptr = args[0] as usize;
+    let buffer_len = match usize::try_from(args[1]) {
+        Ok(length) => length,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if buffer_len == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let cwd = current_working_directory_path();
+    let bytes = cwd.as_bytes();
+    let required = bytes.len().saturating_add(1);
+    if required > buffer_len {
+        return SyscallOutcome::errno(ERANGE);
+    }
+
+    let mut output = Vec::with_capacity(required);
+    output.extend_from_slice(bytes);
+    output.push(0);
+    if let Err(error) = uaccess::copyout(&output, destination_ptr) {
+        return SyscallOutcome::errno(map_uaccess_error(error));
+    }
+
+    match i64::try_from(required) {
+        Ok(required) => SyscallOutcome::success(required),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn process_chdir(args: [u64; 6]) -> SyscallOutcome {
+    match change_directory_at(AT_FDCWD, args[0] as usize) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_fchdir(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    match change_directory_by_fd(fd) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
 }
 
 fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
@@ -1138,13 +1291,48 @@ fn resolve_path_at(dirfd: i64, path_ptr: usize) -> Result<String, i64> {
     if raw_path.starts_with('/') {
         return Ok(raw_path);
     }
-    if dirfd != AT_FDCWD {
-        return Err(ENOSYS);
+
+    let mut base = base_path_for_dirfd(dirfd)?;
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    base.push_str(&raw_path);
+    Ok(base)
+}
+
+fn base_path_for_dirfd(dirfd: i64) -> Result<String, i64> {
+    if dirfd == AT_FDCWD {
+        return Ok(current_working_directory_path());
     }
 
-    let mut absolute = String::from("/");
-    absolute.push_str(&raw_path);
-    Ok(absolute)
+    let fd = i32::try_from(dirfd).map_err(|_| EBADF)?;
+    let (path, kind) = open_file_path_and_kind_for_process(fd)?;
+    if kind != VfsNodeKind::Directory {
+        return Err(ENOTDIR);
+    }
+
+    Ok(path)
+}
+
+fn change_directory_at(dirfd: i64, path_ptr: usize) -> Result<i64, i64> {
+    let resolved = resolve_path_at(dirfd, path_ptr)?;
+    let node = vfs::lookup(&resolved).ok_or(ENOENT)?;
+    if node.kind != VfsNodeKind::Directory {
+        return Err(ENOTDIR);
+    }
+
+    set_working_directory_path(node.path);
+    Ok(0)
+}
+
+fn change_directory_by_fd(fd: i32) -> Result<i64, i64> {
+    let (path, kind) = open_file_path_and_kind_for_process(fd)?;
+    if kind != VfsNodeKind::Directory {
+        return Err(ENOTDIR);
+    }
+
+    set_working_directory_path(path);
+    Ok(0)
 }
 
 fn readlink_target_for_path(path: &str) -> Result<String, i64> {
@@ -1474,7 +1662,9 @@ fn write_uname(
 
 fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     let status = args[0] as i32;
-    purge_open_files_for_process(current_process_id_value());
+    let process_id = current_process_id_value();
+    purge_open_files_for_process(process_id);
+    purge_working_directory_for_process(process_id);
     SyscallOutcome {
         value: 0,
         action: SyscallAction::ExitGroup { status },
@@ -1718,6 +1908,32 @@ fn current_process_id_value() -> u64 {
     sched::stats().current_process_id
 }
 
+fn current_working_directory_path() -> String {
+    let process_id = current_process_id_value();
+    let table = cwd_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.path.clone();
+    }
+
+    let default = String::from("/");
+    table.push(ProcessCwd {
+        process_id,
+        path: default.clone(),
+    });
+    default
+}
+
+fn set_working_directory_path(path: String) {
+    let process_id = current_process_id_value();
+    let table = cwd_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.path = path;
+        return;
+    }
+
+    table.push(ProcessCwd { process_id, path });
+}
+
 #[derive(Copy, Clone)]
 enum DuplicateTarget {
     LowestAvailable,
@@ -1852,6 +2068,17 @@ fn get_status_flags(fd: i32) -> Result<i64, i64> {
     }
 
     i64::try_from(flags).map_err(|_| ERANGE)
+}
+
+fn open_file_path_and_kind_for_process(fd: i32) -> Result<(String, VfsNodeKind), i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
+        .ok_or(EBADF)?;
+    Ok((open.path.clone(), open.kind))
 }
 
 fn alloc_open_file(
@@ -2018,12 +2245,25 @@ fn purge_open_files_for_process(process_id: u64) {
     table.files.retain(|file| file.owner_process_id != process_id);
 }
 
+fn purge_working_directory_for_process(process_id: u64) {
+    let table = cwd_table_mut();
+    table.retain(|entry| entry.process_id != process_id);
+}
+
 fn fd_table_mut() -> &'static mut FdTable {
     let slot = unsafe { &mut *FD_TABLE.get() };
     if slot.is_none() {
         *slot = Some(FdTable::new());
     }
     slot.as_mut().expect("fd table initialized")
+}
+
+fn cwd_table_mut() -> &'static mut Vec<ProcessCwd> {
+    let slot = unsafe { &mut *CWD_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("cwd table initialized")
 }
 
 fn copyin_c_string(ptr: usize, max_len: usize) -> Result<String, i64> {

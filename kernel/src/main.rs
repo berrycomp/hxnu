@@ -729,7 +729,7 @@ pub extern "C" fn _start() -> ! {
     let linux_probe = syscall::run_linux_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} openat={} ioctl={} access={} newfstatat={} faccessat={} readlinkat={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} openat={} ioctl={} access={} newfstatat={} faccessat={} readlinkat={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::LinuxBootstrap.as_str(),
         linux_probe.write_result,
         linux_probe.openat_result,
@@ -742,6 +742,9 @@ pub extern "C" fn _start() -> ! {
         linux_probe.dup3_result,
         linux_probe.fcntl_getfd_result,
         linux_probe.fcntl_getfl_result,
+        linux_probe.getcwd_result,
+        linux_probe.chdir_result,
+        linux_probe.fchdir_result,
         linux_probe.read_result,
         linux_probe.fstat_result,
         linux_probe.getdents64_result,
@@ -762,7 +765,7 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
@@ -774,6 +777,9 @@ pub extern "C" fn _start() -> ! {
         ghost_probe.dup3_result,
         ghost_probe.fcntl_getfd_result,
         ghost_probe.fcntl_getfl_result,
+        ghost_probe.getcwd_result,
+        ghost_probe.chdir_result,
+        ghost_probe.fchdir_result,
         ghost_probe.read_result,
         ghost_probe.fstat_result,
         ghost_probe.getdents_result,
@@ -792,7 +798,7 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
@@ -804,6 +810,9 @@ pub extern "C" fn _start() -> ! {
         hxnu_probe.dup3_result,
         hxnu_probe.fcntl_getfd_result,
         hxnu_probe.fcntl_getfl_result,
+        hxnu_probe.getcwd_result,
+        hxnu_probe.chdir_result,
+        hxnu_probe.fchdir_result,
         hxnu_probe.read_result,
         hxnu_probe.fstat_result,
         hxnu_probe.getdents_result,
