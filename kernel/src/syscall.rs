@@ -43,18 +43,23 @@ pub const LINUX_SYS_DUP2: u64 = 33;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
+pub const LINUX_SYS_WAIT4: u64 = 61;
 pub const LINUX_SYS_UNAME: u64 = 63;
 pub const LINUX_SYS_FCNTL: u64 = 72;
 pub const LINUX_SYS_GETCWD: u64 = 79;
 pub const LINUX_SYS_CHDIR: u64 = 80;
 pub const LINUX_SYS_FCHDIR: u64 = 81;
 pub const LINUX_SYS_UMASK: u64 = 95;
+pub const LINUX_SYS_SETPGID: u64 = 109;
 pub const LINUX_SYS_GETTIMEOFDAY: u64 = 96;
 pub const LINUX_SYS_GETUID: u64 = 102;
 pub const LINUX_SYS_GETGID: u64 = 104;
 pub const LINUX_SYS_GETEUID: u64 = 107;
 pub const LINUX_SYS_GETEGID: u64 = 108;
 pub const LINUX_SYS_GETPPID: u64 = 110;
+pub const LINUX_SYS_SETSID: u64 = 112;
+pub const LINUX_SYS_GETPGID: u64 = 121;
+pub const LINUX_SYS_GETSID: u64 = 124;
 pub const LINUX_SYS_GETTID: u64 = 186;
 pub const LINUX_SYS_GETDENTS64: u64 = 217;
 pub const LINUX_SYS_SET_TID_ADDRESS: u64 = 218;
@@ -112,6 +117,11 @@ pub const GHOST_SYS_PREAD64: u64 = 41;
 pub const GHOST_SYS_PWRITE64: u64 = 42;
 pub const GHOST_SYS_READV: u64 = 43;
 pub const GHOST_SYS_WRITEV: u64 = 44;
+pub const GHOST_SYS_WAIT4: u64 = 45;
+pub const GHOST_SYS_SETPGID: u64 = 46;
+pub const GHOST_SYS_GETPGID: u64 = 47;
+pub const GHOST_SYS_SETSID: u64 = 48;
+pub const GHOST_SYS_GETSID: u64 = 49;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -156,6 +166,11 @@ pub const HXNU_SYS_PREAD64: u64 = 0x484e_0028;
 pub const HXNU_SYS_PWRITE64: u64 = 0x484e_0029;
 pub const HXNU_SYS_READV: u64 = 0x484e_002a;
 pub const HXNU_SYS_WRITEV: u64 = 0x484e_002b;
+pub const HXNU_SYS_WAIT4: u64 = 0x484e_002c;
+pub const HXNU_SYS_SETPGID: u64 = 0x484e_002d;
+pub const HXNU_SYS_GETPGID: u64 = 0x484e_002e;
+pub const HXNU_SYS_SETSID: u64 = 0x484e_002f;
+pub const HXNU_SYS_GETSID: u64 = 0x484e_0030;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -207,6 +222,7 @@ const SIG_SETMASK: i32 = 2;
 const MAX_SIGNAL_NUMBER: u64 = 64;
 const SIGKILL: u64 = 9;
 const SIGSTOP: u64 = 19;
+const WNOHANG: i32 = 1;
 const MAX_IOVEC_COUNT: usize = 64;
 
 const SEEK_SET: i32 = 0;
@@ -250,6 +266,8 @@ const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
 const ENOMEM: i64 = 12;
 const EROFS: i64 = 30;
+const ECHILD: i64 = 10;
+const ESRCH: i64 = 3;
 
 const STDOUT_FD: u64 = 1;
 const STDERR_FD: u64 = 2;
@@ -323,6 +341,11 @@ pub struct LinuxBootstrapProbe {
     pub pwrite64_result: i64,
     pub readv_result: i64,
     pub writev_result: i64,
+    pub wait4_result: i64,
+    pub setpgid_result: i64,
+    pub getpgid_result: i64,
+    pub setsid_result: i64,
+    pub getsid_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
@@ -394,6 +417,11 @@ pub struct GhostBootstrapProbe {
     pub pwrite64_result: i64,
     pub readv_result: i64,
     pub writev_result: i64,
+    pub wait4_result: i64,
+    pub setpgid_result: i64,
+    pub getpgid_result: i64,
+    pub setsid_result: i64,
+    pub getsid_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -461,6 +489,11 @@ pub struct HxnuBootstrapProbe {
     pub pwrite64_result: i64,
     pub readv_result: i64,
     pub writev_result: i64,
+    pub wait4_result: i64,
+    pub setpgid_result: i64,
+    pub getpgid_result: i64,
+    pub setsid_result: i64,
+    pub getsid_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -810,6 +843,28 @@ impl GlobalSignalActionTable {
 
 static SIGNAL_ACTION_TABLE: GlobalSignalActionTable = GlobalSignalActionTable::new();
 
+struct ProcessGroupState {
+    process_id: u64,
+    process_group_id: u64,
+    session_id: u64,
+}
+
+struct GlobalProcessGroupTable(UnsafeCell<Option<Vec<ProcessGroupState>>>);
+
+unsafe impl Sync for GlobalProcessGroupTable {}
+
+impl GlobalProcessGroupTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessGroupState>> {
+        self.0.get()
+    }
+}
+
+static PROCESS_GROUP_TABLE: GlobalProcessGroupTable = GlobalProcessGroupTable::new();
+
 pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome {
     match abi {
         SyscallAbi::LinuxBootstrap => dispatch_linux_bootstrap(number, args),
@@ -853,8 +908,13 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_DUP3 => dup3_fd(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         LINUX_SYS_GETPID => process_id(),
+        LINUX_SYS_WAIT4 => process_wait4(args),
         LINUX_SYS_GETPPID => process_parent_id(),
         LINUX_SYS_GETTID => thread_id(),
+        LINUX_SYS_SETPGID => process_setpgid(args),
+        LINUX_SYS_GETPGID => process_getpgid(args),
+        LINUX_SYS_SETSID => process_setsid(),
+        LINUX_SYS_GETSID => process_getsid(args),
         LINUX_SYS_UMASK => process_umask(args),
         LINUX_SYS_GETUID | LINUX_SYS_GETEUID => user_id(),
         LINUX_SYS_GETGID | LINUX_SYS_GETEGID => group_id(),
@@ -901,8 +961,13 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_SEEK => seek_fd(args),
         GHOST_SYS_YIELD => SyscallOutcome::success(0),
         GHOST_SYS_GETPID => process_id(),
+        GHOST_SYS_WAIT4 => process_wait4(args),
         GHOST_SYS_GETPPID => process_parent_id(),
         GHOST_SYS_GETTID => thread_id(),
+        GHOST_SYS_SETPGID => process_setpgid(args),
+        GHOST_SYS_GETPGID => process_getpgid(args),
+        GHOST_SYS_SETSID => process_setsid(),
+        GHOST_SYS_GETSID => process_getsid(args),
         GHOST_SYS_UMASK => process_umask(args),
         GHOST_SYS_GETUID | GHOST_SYS_GETEUID => user_id(),
         GHOST_SYS_GETGID | GHOST_SYS_GETEGID => group_id(),
@@ -949,7 +1014,12 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
+        HXNU_SYS_WAIT4 => process_wait4(args),
         HXNU_SYS_PROCESS_PARENT => process_parent_id(),
+        HXNU_SYS_SETPGID => process_setpgid(args),
+        HXNU_SYS_GETPGID => process_getpgid(args),
+        HXNU_SYS_SETSID => process_setsid(),
+        HXNU_SYS_GETSID => process_getsid(args),
         HXNU_SYS_UMASK => process_umask(args),
         HXNU_SYS_GETUID | HXNU_SYS_GETEUID => user_id(),
         HXNU_SYS_GETGID | HXNU_SYS_GETEGID => group_id(),
@@ -1101,6 +1171,11 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let wait4_result = dispatch(abi, LINUX_SYS_WAIT4, [u64::MAX, 0, WNOHANG as u64, 0, 0, 0]).value;
+    let setpgid_result = dispatch(abi, LINUX_SYS_SETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let getpgid_result = dispatch(abi, LINUX_SYS_GETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let setsid_result = dispatch(abi, LINUX_SYS_SETSID, [0, 0, 0, 0, 0, 0]).value;
+    let getsid_result = dispatch(abi, LINUX_SYS_GETSID, [0, 0, 0, 0, 0, 0]).value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -1348,6 +1423,11 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        wait4_result,
+        setpgid_result,
+        getpgid_result,
+        setsid_result,
+        getsid_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -1525,6 +1605,11 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let wait4_result = dispatch(abi, GHOST_SYS_WAIT4, [u64::MAX, 0, WNOHANG as u64, 0, 0, 0]).value;
+    let setpgid_result = dispatch(abi, GHOST_SYS_SETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let getpgid_result = dispatch(abi, GHOST_SYS_GETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let setsid_result = dispatch(abi, GHOST_SYS_SETSID, [0, 0, 0, 0, 0, 0]).value;
+    let getsid_result = dispatch(abi, GHOST_SYS_GETSID, [0, 0, 0, 0, 0, 0]).value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -1735,6 +1820,11 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        wait4_result,
+        setpgid_result,
+        getpgid_result,
+        setsid_result,
+        getsid_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -1901,6 +1991,11 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     .value;
     let rt_sigmask_snapshot = previous_signal_mask;
     let rt_sigold_handler = old_action.handler;
+    let wait4_result = dispatch(abi, HXNU_SYS_WAIT4, [u64::MAX, 0, WNOHANG as u64, 0, 0, 0]).value;
+    let setpgid_result = dispatch(abi, HXNU_SYS_SETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let getpgid_result = dispatch(abi, HXNU_SYS_GETPGID, [0, 0, 0, 0, 0, 0]).value;
+    let setsid_result = dispatch(abi, HXNU_SYS_SETSID, [0, 0, 0, 0, 0, 0]).value;
+    let getsid_result = dispatch(abi, HXNU_SYS_GETSID, [0, 0, 0, 0, 0, 0]).value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -2102,6 +2197,11 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         rt_sigprocmask_result,
         rt_sigmask_snapshot,
         rt_sigold_handler,
+        wait4_result,
+        setpgid_result,
+        getpgid_result,
+        setsid_result,
+        getsid_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -2312,6 +2412,102 @@ fn process_brk(args: [u64; 6]) -> SyscallOutcome {
     }
     set_process_brk(requested);
     to_address_outcome(requested)
+}
+
+fn process_wait4(args: [u64; 6]) -> SyscallOutcome {
+    let pid = args[0] as i64;
+    let _status_ptr = args[1] as usize;
+    let options = match i32::try_from(args[2]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+    if options & !WNOHANG != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let current_pid = match i64::try_from(current_process_id_value()) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    let waits_current_scope = pid == -1 || pid == 0 || pid == current_pid;
+    if !waits_current_scope {
+        return SyscallOutcome::errno(ECHILD);
+    }
+    if options & WNOHANG != 0 {
+        return SyscallOutcome::success(0);
+    }
+
+    SyscallOutcome::errno(ECHILD)
+}
+
+fn process_setpgid(args: [u64; 6]) -> SyscallOutcome {
+    let pid = args[0] as i64;
+    let pgid = args[1] as i64;
+    if pgid < 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let current_pid = match i64::try_from(current_process_id_value()) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if pid != 0 && pid != current_pid {
+        return SyscallOutcome::errno(ESRCH);
+    }
+
+    let next_pgid = if pgid == 0 {
+        current_process_id_value()
+    } else {
+        match u64::try_from(pgid) {
+            Ok(value) => value,
+            Err(_) => return SyscallOutcome::errno(ERANGE),
+        }
+    };
+    set_process_group_id(next_pgid);
+    SyscallOutcome::success(0)
+}
+
+fn process_getpgid(args: [u64; 6]) -> SyscallOutcome {
+    let pid = args[0] as i64;
+    let current_pid = match i64::try_from(current_process_id_value()) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if pid != 0 && pid != current_pid {
+        return SyscallOutcome::errno(ESRCH);
+    }
+
+    let pgid = current_process_group_id();
+    match i64::try_from(pgid) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn process_setsid() -> SyscallOutcome {
+    let sid = current_process_id_value();
+    set_session_and_group_id(sid, sid);
+    match i64::try_from(sid) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn process_getsid(args: [u64; 6]) -> SyscallOutcome {
+    let pid = args[0] as i64;
+    let current_pid = match i64::try_from(current_process_id_value()) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if pid != 0 && pid != current_pid {
+        return SyscallOutcome::errno(ESRCH);
+    }
+
+    let sid = current_session_id();
+    match i64::try_from(sid) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
 }
 
 fn process_rt_sigprocmask(args: [u64; 6]) -> SyscallOutcome {
@@ -3174,6 +3370,7 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     purge_process_clear_tid_address(process_id);
     purge_process_mappings(process_id);
     purge_process_brk(process_id);
+    purge_process_group_state(process_id);
     purge_process_signal_mask(process_id);
     purge_process_signal_actions(process_id);
     SyscallOutcome {
@@ -3497,6 +3694,67 @@ fn set_process_brk(current_break: usize) {
     table.push(ProcessBrkState {
         process_id,
         current_break,
+    });
+}
+
+fn current_process_group_id() -> u64 {
+    let process_id = current_process_id_value();
+    let table = process_group_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.process_group_id;
+    }
+
+    table.push(ProcessGroupState {
+        process_id,
+        process_group_id: process_id,
+        session_id: process_id,
+    });
+    process_id
+}
+
+fn current_session_id() -> u64 {
+    let process_id = current_process_id_value();
+    let table = process_group_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.session_id;
+    }
+
+    table.push(ProcessGroupState {
+        process_id,
+        process_group_id: process_id,
+        session_id: process_id,
+    });
+    process_id
+}
+
+fn set_process_group_id(process_group_id: u64) {
+    let process_id = current_process_id_value();
+    let table = process_group_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.process_group_id = process_group_id;
+        return;
+    }
+
+    table.push(ProcessGroupState {
+        process_id,
+        process_group_id,
+        session_id: process_id,
+    });
+}
+
+fn set_session_and_group_id(session_id: u64, process_group_id: u64) {
+    let process_id = current_process_id_value();
+    let table = process_group_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.session_id = session_id;
+        entry.process_group_id = process_group_id;
+        return;
+    }
+
+    table.push(ProcessGroupState {
+        process_id,
+        process_group_id,
+        session_id,
     });
 }
 
@@ -3997,6 +4255,11 @@ fn purge_process_brk(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
+fn purge_process_group_state(process_id: u64) {
+    let table = process_group_table_mut();
+    table.retain(|entry| entry.process_id != process_id);
+}
+
 fn purge_process_signal_mask(process_id: u64) {
     let table = signal_mask_table_mut();
     table.retain(|entry| entry.process_id != process_id);
@@ -4053,6 +4316,14 @@ fn brk_table_mut() -> &'static mut Vec<ProcessBrkState> {
         *slot = Some(Vec::new());
     }
     slot.as_mut().expect("brk table initialized")
+}
+
+fn process_group_table_mut() -> &'static mut Vec<ProcessGroupState> {
+    let slot = unsafe { &mut *PROCESS_GROUP_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("process group table initialized")
 }
 
 fn signal_mask_table_mut() -> &'static mut Vec<ProcessSignalMask> {

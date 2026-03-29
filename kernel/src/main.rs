@@ -729,7 +729,7 @@ pub extern "C" fn _start() -> ! {
     let linux_probe = syscall::run_linux_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} openat={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} openat={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::LinuxBootstrap.as_str(),
         linux_probe.write_result,
         linux_probe.openat_result,
@@ -753,6 +753,11 @@ pub extern "C" fn _start() -> ! {
         linux_probe.pwrite64_result,
         linux_probe.readv_result,
         linux_probe.writev_result,
+        linux_probe.wait4_result,
+        linux_probe.setpgid_result,
+        linux_probe.getpgid_result,
+        linux_probe.setsid_result,
+        linux_probe.getsid_result,
         linux_probe.ioctl_result,
         linux_probe.access_result,
         linux_probe.newfstatat_result,
@@ -795,7 +800,7 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
@@ -819,6 +824,11 @@ pub extern "C" fn _start() -> ! {
         ghost_probe.pwrite64_result,
         ghost_probe.readv_result,
         ghost_probe.writev_result,
+        ghost_probe.wait4_result,
+        ghost_probe.setpgid_result,
+        ghost_probe.getpgid_result,
+        ghost_probe.setsid_result,
+        ghost_probe.getsid_result,
         ghost_probe.ioctl_result,
         ghost_probe.access_result,
         ghost_probe.stat_result,
@@ -857,7 +867,7 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
@@ -881,6 +891,11 @@ pub extern "C" fn _start() -> ! {
         hxnu_probe.pwrite64_result,
         hxnu_probe.readv_result,
         hxnu_probe.writev_result,
+        hxnu_probe.wait4_result,
+        hxnu_probe.setpgid_result,
+        hxnu_probe.getpgid_result,
+        hxnu_probe.setsid_result,
+        hxnu_probe.getsid_result,
         hxnu_probe.ioctl_result,
         hxnu_probe.access_result,
         hxnu_probe.stat_result,
