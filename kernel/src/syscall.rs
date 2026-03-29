@@ -43,6 +43,7 @@ pub const GHOST_SYS_OPEN: u64 = 8;
 pub const GHOST_SYS_READ: u64 = 9;
 pub const GHOST_SYS_CLOSE: u64 = 10;
 pub const GHOST_SYS_SEEK: u64 = 11;
+pub const GHOST_SYS_GETPPID: u64 = 12;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -54,6 +55,7 @@ pub const HXNU_SYS_OPEN: u64 = 0x484e_0007;
 pub const HXNU_SYS_READ: u64 = 0x484e_0008;
 pub const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 pub const HXNU_SYS_SEEK: u64 = 0x484e_000a;
+pub const HXNU_SYS_PROCESS_PARENT: u64 = 0x484e_000b;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -168,6 +170,7 @@ pub struct GhostBootstrapProbe {
     pub seek_result: i64,
     pub close_result: i64,
     pub getpid_result: i64,
+    pub getppid_result: i64,
     pub gettid_result: i64,
     pub yield_result: i64,
     pub uptime_result: i64,
@@ -192,6 +195,7 @@ pub struct HxnuBootstrapProbe {
     pub seek_result: i64,
     pub close_result: i64,
     pub process_self_result: i64,
+    pub process_parent_result: i64,
     pub thread_self_result: i64,
     pub sched_yield_result: i64,
     pub uptime_result: i64,
@@ -304,6 +308,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_SEEK => seek_fd(args),
         GHOST_SYS_YIELD => SyscallOutcome::success(0),
         GHOST_SYS_GETPID => process_id(),
+        GHOST_SYS_GETPPID => process_parent_id(),
         GHOST_SYS_GETTID => thread_id(),
         GHOST_SYS_UPTIME_NSEC => uptime_ns(),
         GHOST_SYS_UNAME => ghost_uname(args),
@@ -321,6 +326,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
+        HXNU_SYS_PROCESS_PARENT => process_parent_id(),
         HXNU_SYS_UPTIME_NSEC => uptime_ns(),
         HXNU_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         HXNU_SYS_ABI_VERSION => SyscallOutcome::success(HXNU_NATIVE_ABI_VERSION),
@@ -462,6 +468,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     }
 
     let getpid_result = dispatch(abi, GHOST_SYS_GETPID, [0; 6]).value;
+    let getppid_result = dispatch(abi, GHOST_SYS_GETPPID, [0; 6]).value;
     let gettid_result = dispatch(abi, GHOST_SYS_GETTID, [0; 6]).value;
     let yield_result = dispatch(abi, GHOST_SYS_YIELD, [0; 6]).value;
     let uptime_result = dispatch(abi, GHOST_SYS_UPTIME_NSEC, [0; 6]).value;
@@ -487,6 +494,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         seek_result,
         close_result,
         getpid_result,
+        getppid_result,
         gettid_result,
         yield_result,
         uptime_result,
@@ -528,6 +536,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     }
 
     let process_self_result = dispatch(abi, HXNU_SYS_PROCESS_SELF, [0; 6]).value;
+    let process_parent_result = dispatch(abi, HXNU_SYS_PROCESS_PARENT, [0; 6]).value;
     let thread_self_result = dispatch(abi, HXNU_SYS_THREAD_SELF, [0; 6]).value;
     let sched_yield_result = dispatch(abi, HXNU_SYS_SCHED_YIELD, [0; 6]).value;
     let uptime_result = dispatch(abi, HXNU_SYS_UPTIME_NSEC, [0; 6]).value;
@@ -543,6 +552,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         seek_result,
         close_result,
         process_self_result,
+        process_parent_result,
         thread_self_result,
         sched_yield_result,
         uptime_result,

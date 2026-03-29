@@ -751,7 +751,7 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} read={} seek={} close={} getpid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} read={} seek={} close={} getpid={} getppid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
@@ -759,6 +759,7 @@ pub extern "C" fn _start() -> ! {
         ghost_probe.seek_result,
         ghost_probe.close_result,
         ghost_probe.getpid_result,
+        ghost_probe.getppid_result,
         ghost_probe.gettid_result,
         ghost_probe.yield_result,
         ghost_probe.uptime_result,
@@ -770,7 +771,7 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} read={} seek={} close={} process_self={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} read={} seek={} close={} process_self={} process_parent={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
@@ -778,6 +779,7 @@ pub extern "C" fn _start() -> ! {
         hxnu_probe.seek_result,
         hxnu_probe.close_result,
         hxnu_probe.process_self_result,
+        hxnu_probe.process_parent_result,
         hxnu_probe.thread_self_result,
         hxnu_probe.sched_yield_result,
         hxnu_probe.uptime_result,

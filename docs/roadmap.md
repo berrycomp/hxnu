@@ -53,6 +53,7 @@ Current status:
 - Scheduler-backed `getpid/getppid/gettid` identity path is online for bootstrap syscall personalities
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
+- Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)
 - Multiple virtual TTY screen foundation is online on `x86_64`
 - Scheduler thread table and runqueue skeleton are online on `x86_64`
 - Bootstrap to idle-thread context switching is online on `x86_64`
