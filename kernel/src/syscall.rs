@@ -24,6 +24,7 @@ pub const LINUX_SYS_READ: u64 = 0;
 pub const LINUX_SYS_WRITE: u64 = 1;
 pub const LINUX_SYS_CLOSE: u64 = 3;
 pub const LINUX_SYS_FSTAT: u64 = 5;
+pub const LINUX_SYS_POLL: u64 = 7;
 pub const LINUX_SYS_MMAP: u64 = 9;
 pub const LINUX_SYS_MPROTECT: u64 = 10;
 pub const LINUX_SYS_MUNMAP: u64 = 11;
@@ -38,6 +39,7 @@ pub const LINUX_SYS_NANOSLEEP: u64 = 35;
 pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_ACCESS: u64 = 21;
+pub const LINUX_SYS_PIPE: u64 = 22;
 pub const LINUX_SYS_DUP: u64 = 32;
 pub const LINUX_SYS_DUP2: u64 = 33;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
@@ -77,9 +79,11 @@ pub const LINUX_SYS_FACCESSAT: u64 = 269;
 pub const LINUX_SYS_SET_ROBUST_LIST: u64 = 273;
 pub const LINUX_SYS_GET_ROBUST_LIST: u64 = 274;
 pub const LINUX_SYS_DUP3: u64 = 292;
+pub const LINUX_SYS_PIPE2: u64 = 293;
 pub const LINUX_SYS_PRLIMIT64: u64 = 302;
 pub const LINUX_SYS_GETRANDOM: u64 = 318;
 pub const LINUX_SYS_RSEQ: u64 = 334;
+pub const LINUX_SYS_PPOLL: u64 = 271;
 pub const LINUX_SYS_FACCESSAT2: u64 = 439;
 
 pub const GHOST_SYS_WRITE: u64 = 1;
@@ -140,6 +144,9 @@ pub const GHOST_SYS_GET_ROBUST_LIST: u64 = 55;
 pub const GHOST_SYS_RSEQ: u64 = 56;
 pub const GHOST_SYS_ARCH_PRCTL: u64 = 57;
 pub const GHOST_SYS_FUTEX: u64 = 58;
+pub const GHOST_SYS_PIPE2: u64 = 59;
+pub const GHOST_SYS_POLL: u64 = 60;
+pub const GHOST_SYS_PPOLL: u64 = 61;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -198,6 +205,9 @@ pub const HXNU_SYS_GET_ROBUST_LIST: u64 = 0x484e_0036;
 pub const HXNU_SYS_RSEQ: u64 = 0x484e_0037;
 pub const HXNU_SYS_ARCH_PRCTL: u64 = 0x484e_0038;
 pub const HXNU_SYS_FUTEX: u64 = 0x484e_0039;
+pub const HXNU_SYS_PIPE2: u64 = 0x484e_003a;
+pub const HXNU_SYS_POLL: u64 = 0x484e_003b;
+pub const HXNU_SYS_PPOLL: u64 = 0x484e_003c;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -220,11 +230,13 @@ const R_OK: u64 = 4;
 
 const O_ACCMODE: u64 = 0x3;
 const O_RDONLY: u64 = 0;
+const O_WRONLY: u64 = 1;
 const O_DIRECTORY: u64 = 0x10000;
 const O_CLOEXEC: u64 = 0x80000;
 const O_CREAT: u64 = 0x40;
 const O_TRUNC: u64 = 0x200;
 const O_APPEND: u64 = 0x400;
+const O_NONBLOCK: u64 = 0x800;
 
 const PROT_NONE: u64 = 0;
 const PROT_READ: u64 = 0x1;
@@ -281,6 +293,11 @@ const FUTEX_WAIT: u32 = 0;
 const FUTEX_WAKE: u32 = 1;
 const FUTEX_CMD_MASK: u32 = 0x7f;
 const FUTEX_PRIVATE_FLAG: u32 = 128;
+const POLLIN: i16 = 0x0001;
+const POLLOUT: i16 = 0x0004;
+const POLLERR: i16 = 0x0008;
+const POLLHUP: i16 = 0x0010;
+const POLLNVAL: i16 = 0x0020;
 const RSEQ_FLAG_UNREGISTER: u32 = 1;
 const RSEQ_SIGNATURE: u32 = 0x5305_3053;
 
@@ -326,6 +343,8 @@ const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
 const ENOMEM: i64 = 12;
 const EROFS: i64 = 30;
+const ESPIPE: i64 = 29;
+const EPIPE: i64 = 32;
 const ECHILD: i64 = 10;
 const ESRCH: i64 = 3;
 const EAGAIN: i64 = 11;
@@ -425,6 +444,9 @@ pub struct LinuxBootstrapProbe {
     pub arch_prctl_get_gs_result: i64,
     pub futex_wait_result: i64,
     pub futex_wake_result: i64,
+    pub pipe2_result: i64,
+    pub poll_result: i64,
+    pub ppoll_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
@@ -518,6 +540,9 @@ pub struct GhostBootstrapProbe {
     pub arch_prctl_get_gs_result: i64,
     pub futex_wait_result: i64,
     pub futex_wake_result: i64,
+    pub pipe2_result: i64,
+    pub poll_result: i64,
+    pub ppoll_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -607,6 +632,9 @@ pub struct HxnuBootstrapProbe {
     pub arch_prctl_get_gs_result: i64,
     pub futex_wait_result: i64,
     pub futex_wake_result: i64,
+    pub pipe2_result: i64,
+    pub poll_result: i64,
+    pub ppoll_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -722,6 +750,14 @@ impl LinuxRseqArea {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+struct LinuxPollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 struct LinuxWinsize {
     ws_row: u16,
     ws_col: u16,
@@ -811,6 +847,7 @@ struct OpenFile {
     path: String,
     offset: usize,
     content: Vec<u8>,
+    pipe_endpoint: Option<PipeEndpoint>,
 }
 
 struct FdTable {
@@ -1059,6 +1096,55 @@ impl GlobalPrctlTable {
 
 static PRCTL_TABLE: GlobalPrctlTable = GlobalPrctlTable::new();
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum PipeEnd {
+    Read,
+    Write,
+}
+
+#[derive(Copy, Clone)]
+struct PipeEndpoint {
+    pipe_id: u64,
+    end: PipeEnd,
+}
+
+struct PipeState {
+    pipe_id: u64,
+    reader_count: u32,
+    writer_count: u32,
+    buffer: Vec<u8>,
+}
+
+struct PipeRegistry {
+    next_pipe_id: u64,
+    pipes: Vec<PipeState>,
+}
+
+impl PipeRegistry {
+    fn new() -> Self {
+        Self {
+            next_pipe_id: 1,
+            pipes: Vec::new(),
+        }
+    }
+}
+
+struct GlobalPipeRegistry(UnsafeCell<Option<PipeRegistry>>);
+
+unsafe impl Sync for GlobalPipeRegistry {}
+
+impl GlobalPipeRegistry {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<PipeRegistry> {
+        self.0.get()
+    }
+}
+
+static PIPE_REGISTRY: GlobalPipeRegistry = GlobalPipeRegistry::new();
+
 struct ProcessArchPrctlState {
     process_id: u64,
     fs_base: u64,
@@ -1159,6 +1245,10 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         LINUX_SYS_FCNTL => fcntl_fd(args),
         LINUX_SYS_DUP2 => dup2_fd(args),
+        LINUX_SYS_PIPE => process_pipe(args),
+        LINUX_SYS_PIPE2 => process_pipe2(args),
+        LINUX_SYS_POLL => process_poll(args),
+        LINUX_SYS_PPOLL => process_ppoll(args),
         LINUX_SYS_GETCWD => linux_getcwd(args),
         LINUX_SYS_CHDIR => linux_chdir(args),
         LINUX_SYS_FCHDIR => linux_fchdir(args),
@@ -1221,6 +1311,9 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_DUP3 => dup3_fd(args),
         GHOST_SYS_FCNTL => fcntl_fd(args),
         GHOST_SYS_GETCWD => process_getcwd(args),
+        GHOST_SYS_PIPE2 => process_pipe2(args),
+        GHOST_SYS_POLL => process_poll(args),
+        GHOST_SYS_PPOLL => process_ppoll(args),
         GHOST_SYS_CHDIR => process_chdir(args),
         GHOST_SYS_FCHDIR => process_fchdir(args),
         GHOST_SYS_FSTAT => fstat_fd(args),
@@ -1283,6 +1376,9 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_DUP3 => dup3_fd(args),
         HXNU_SYS_FCNTL => fcntl_fd(args),
         HXNU_SYS_GETCWD => process_getcwd(args),
+        HXNU_SYS_PIPE2 => process_pipe2(args),
+        HXNU_SYS_POLL => process_poll(args),
+        HXNU_SYS_PPOLL => process_ppoll(args),
         HXNU_SYS_CHDIR => process_chdir(args),
         HXNU_SYS_FCHDIR => process_fchdir(args),
         HXNU_SYS_FSTAT => fstat_fd(args),
@@ -1662,6 +1758,57 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         ],
     )
     .value;
+    let mut pipe_fds = [-1i32; 2];
+    let pipe2_result = dispatch(
+        abi,
+        LINUX_SYS_PIPE2,
+        [pipe_fds.as_mut_ptr() as u64, O_CLOEXEC, 0, 0, 0, 0],
+    )
+    .value;
+    let mut poll_result = -EBADF;
+    let mut ppoll_result = -EBADF;
+    if pipe2_result == 0 && pipe_fds[0] >= 0 && pipe_fds[1] >= 0 {
+        let pipe_smoke = b"HXNU: linux pipe smoke\n";
+        let _ = dispatch(
+            abi,
+            LINUX_SYS_WRITE,
+            [pipe_fds[1] as u64, pipe_smoke.as_ptr() as u64, pipe_smoke.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut pollfds = [LinuxPollFd {
+            fd: pipe_fds[0],
+            events: POLLIN,
+            revents: 0,
+        }];
+        poll_result = dispatch(
+            abi,
+            LINUX_SYS_POLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        ppoll_result = dispatch(
+            abi,
+            LINUX_SYS_PPOLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let mut pipe_read_buffer = [0u8; 32];
+        let _ = dispatch(
+            abi,
+            LINUX_SYS_READ,
+            [
+                pipe_fds[0] as u64,
+                pipe_read_buffer.as_mut_ptr() as u64,
+                pipe_read_buffer.len() as u64,
+                0,
+                0,
+                0,
+            ],
+        )
+        .value;
+        let _ = dispatch(abi, LINUX_SYS_CLOSE, [pipe_fds[0] as u64, 0, 0, 0, 0, 0]).value;
+        let _ = dispatch(abi, LINUX_SYS_CLOSE, [pipe_fds[1] as u64, 0, 0, 0, 0, 0]).value;
+    }
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -1931,6 +2078,9 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         arch_prctl_get_gs_result,
         futex_wait_result,
         futex_wake_result,
+        pipe2_result,
+        poll_result,
+        ppoll_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -2310,6 +2460,57 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         ],
     )
     .value;
+    let mut pipe_fds = [-1i32; 2];
+    let pipe2_result = dispatch(
+        abi,
+        GHOST_SYS_PIPE2,
+        [pipe_fds.as_mut_ptr() as u64, O_CLOEXEC, 0, 0, 0, 0],
+    )
+    .value;
+    let mut poll_result = -EBADF;
+    let mut ppoll_result = -EBADF;
+    if pipe2_result == 0 && pipe_fds[0] >= 0 && pipe_fds[1] >= 0 {
+        let pipe_smoke = b"HXNU: ghost pipe smoke\n";
+        let _ = dispatch(
+            abi,
+            GHOST_SYS_WRITE,
+            [pipe_fds[1] as u64, pipe_smoke.as_ptr() as u64, pipe_smoke.len() as u64, 0, 0, 0],
+        )
+        .value;
+        let mut pollfds = [LinuxPollFd {
+            fd: pipe_fds[0],
+            events: POLLIN,
+            revents: 0,
+        }];
+        poll_result = dispatch(
+            abi,
+            GHOST_SYS_POLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        ppoll_result = dispatch(
+            abi,
+            GHOST_SYS_PPOLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let mut pipe_read_buffer = [0u8; 32];
+        let _ = dispatch(
+            abi,
+            GHOST_SYS_READ,
+            [
+                pipe_fds[0] as u64,
+                pipe_read_buffer.as_mut_ptr() as u64,
+                pipe_read_buffer.len() as u64,
+                0,
+                0,
+                0,
+            ],
+        )
+        .value;
+        let _ = dispatch(abi, GHOST_SYS_CLOSE, [pipe_fds[0] as u64, 0, 0, 0, 0, 0]).value;
+        let _ = dispatch(abi, GHOST_SYS_CLOSE, [pipe_fds[1] as u64, 0, 0, 0, 0, 0]).value;
+    }
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -2542,6 +2743,9 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         arch_prctl_get_gs_result,
         futex_wait_result,
         futex_wake_result,
+        pipe2_result,
+        poll_result,
+        ppoll_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -2910,6 +3114,36 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         ],
     )
     .value;
+    let mut pipe_fds = [-1i32; 2];
+    let pipe2_result = dispatch(
+        abi,
+        HXNU_SYS_PIPE2,
+        [pipe_fds.as_mut_ptr() as u64, O_CLOEXEC, 0, 0, 0, 0],
+    )
+    .value;
+    let mut poll_result = -EBADF;
+    let mut ppoll_result = -EBADF;
+    if pipe2_result == 0 && pipe_fds[0] >= 0 && pipe_fds[1] >= 0 {
+        let mut pollfds = [LinuxPollFd {
+            fd: pipe_fds[1],
+            events: POLLOUT,
+            revents: 0,
+        }];
+        poll_result = dispatch(
+            abi,
+            HXNU_SYS_POLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        ppoll_result = dispatch(
+            abi,
+            HXNU_SYS_PPOLL,
+            [pollfds.as_mut_ptr() as u64, pollfds.len() as u64, 0, 0, 0, 0],
+        )
+        .value;
+        let _ = dispatch(abi, HXNU_SYS_CLOSE, [pipe_fds[0] as u64, 0, 0, 0, 0, 0]).value;
+        let _ = dispatch(abi, HXNU_SYS_CLOSE, [pipe_fds[1] as u64, 0, 0, 0, 0, 0]).value;
+    }
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -3133,6 +3367,9 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         arch_prctl_get_gs_result,
         futex_wait_result,
         futex_wake_result,
+        pipe2_result,
+        poll_result,
+        ppoll_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -3641,6 +3878,84 @@ fn process_futex(args: [u64; 6]) -> SyscallOutcome {
             SyscallOutcome::success(0)
         }
         _ => SyscallOutcome::errno(EINVAL),
+    }
+}
+
+fn process_pipe(args: [u64; 6]) -> SyscallOutcome {
+    process_pipe_with_flags(args[0] as usize, 0)
+}
+
+fn process_pipe2(args: [u64; 6]) -> SyscallOutcome {
+    let pipefd_ptr = args[0] as usize;
+    let flags = args[1];
+    process_pipe_with_flags(pipefd_ptr, flags)
+}
+
+fn process_pipe_with_flags(pipefd_ptr: usize, flags: u64) -> SyscallOutcome {
+    if pipefd_ptr == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let fd_flags = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+    let (read_fd, write_fd) = match allocate_pipe_pair(fd_flags) {
+        Ok(value) => value,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let pipe_fds = [read_fd, write_fd];
+    if let Err(error) = copyout_struct(pipefd_ptr, &pipe_fds) {
+        let _ = close_open_file(read_fd);
+        let _ = close_open_file(write_fd);
+        return SyscallOutcome::errno(error);
+    }
+
+    SyscallOutcome::success(0)
+}
+
+fn process_poll(args: [u64; 6]) -> SyscallOutcome {
+    let fds_ptr = args[0] as usize;
+    let nfds = match usize::try_from(args[1]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    let timeout_ms = args[2] as i32;
+    match execute_poll(fds_ptr, nfds, timeout_ms) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_ppoll(args: [u64; 6]) -> SyscallOutcome {
+    let fds_ptr = args[0] as usize;
+    let nfds = match usize::try_from(args[1]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    let timeout_ptr = args[2] as usize;
+    let sigmask_ptr = args[3] as usize;
+    let sigset_size = match usize::try_from(args[4]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if sigmask_ptr != 0 && sigset_size != RT_SIGSET_SIZE {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    if timeout_ptr != 0 {
+        let timeout = match copyin_timespec(timeout_ptr) {
+            Ok(value) => value,
+            Err(error) => return SyscallOutcome::errno(error),
+        };
+        if timeout.tv_sec < 0 || timeout.tv_nsec < 0 || timeout.tv_nsec >= 1_000_000_000 {
+            return SyscallOutcome::errno(EINVAL);
+        }
+    }
+
+    match execute_poll(fds_ptr, nfds, -1) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
     }
 }
 
@@ -4417,11 +4732,26 @@ fn seek_fd(args: [u64; 6]) -> SyscallOutcome {
 
 fn write_with_fd(args: [u64; 6]) -> SyscallOutcome {
     let fd = args[0];
-    if fd != STDOUT_FD && fd != STDERR_FD {
-        return SyscallOutcome::errno(EBADF);
+    if fd == STDOUT_FD || fd == STDERR_FD {
+        return write_text(args[1] as usize, args[2]);
     }
 
-    write_text(args[1] as usize, args[2])
+    let parsed_fd = match parse_fd(fd) {
+        Ok(value) => value,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let count = match usize::try_from(args[2]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if count > MAX_WRITE_BYTES {
+        return SyscallOutcome::errno(ERANGE);
+    }
+
+    match write_open_file(parsed_fd, args[1] as usize, count) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
 }
 
 fn write_without_fd(args: [u64; 6]) -> SyscallOutcome {
@@ -5207,6 +5537,261 @@ fn current_process_gs_base() -> u64 {
     current_process_arch_prctl_state().gs_base
 }
 
+fn allocate_pipe_pair(fd_flags: u32) -> Result<(i32, i32), i64> {
+    let pipe_id = create_pipe_state()?;
+    let read_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Read, fd_flags) {
+        Ok(fd) => fd,
+        Err(error) => {
+            remove_pipe_state(pipe_id);
+            return Err(error);
+        }
+    };
+    let write_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Write, fd_flags) {
+        Ok(fd) => fd,
+        Err(error) => {
+            let _ = close_open_file(read_fd);
+            remove_pipe_state(pipe_id);
+            return Err(error);
+        }
+    };
+    Ok((read_fd, write_fd))
+}
+
+fn create_pipe_state() -> Result<u64, i64> {
+    let registry = pipe_registry_mut();
+    let pipe_id = registry.next_pipe_id;
+    registry.next_pipe_id = registry.next_pipe_id.checked_add(1).ok_or(ERANGE)?;
+    registry.pipes.push(PipeState {
+        pipe_id,
+        reader_count: 0,
+        writer_count: 0,
+        buffer: Vec::new(),
+    });
+    Ok(pipe_id)
+}
+
+fn remove_pipe_state(pipe_id: u64) {
+    let registry = pipe_registry_mut();
+    if let Some(index) = registry.pipes.iter().position(|pipe| pipe.pipe_id == pipe_id) {
+        registry.pipes.remove(index);
+    }
+}
+
+fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32) -> Result<i32, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    if table.files.len() >= MAX_OPEN_FILES {
+        return Err(EMFILE);
+    }
+
+    let fd = table.next_fd;
+    table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
+    table.files.push(OpenFile {
+        fd,
+        fd_flags,
+        owner_process_id,
+        mount: VfsMountKind::Root,
+        kind: VfsNodeKind::Device,
+        executable: false,
+        path: pipe_path(pipe_id, end),
+        offset: 0,
+        content: Vec::new(),
+        pipe_endpoint: Some(PipeEndpoint { pipe_id, end }),
+    });
+    increment_pipe_endpoint(pipe_id, end);
+    Ok(fd)
+}
+
+fn pipe_path(pipe_id: u64, end: PipeEnd) -> String {
+    let mut path = String::from("/proc/pipe/");
+    append_decimal_u64(&mut path, pipe_id);
+    match end {
+        PipeEnd::Read => path.push_str("/r"),
+        PipeEnd::Write => path.push_str("/w"),
+    }
+    path
+}
+
+fn append_decimal_u64(output: &mut String, mut value: u64) {
+    if value == 0 {
+        output.push('0');
+        return;
+    }
+
+    let mut digits = [0u8; 20];
+    let mut count = 0usize;
+    while value > 0 {
+        digits[count] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+    }
+    while count > 0 {
+        count -= 1;
+        output.push(digits[count] as char);
+    }
+}
+
+fn increment_pipe_endpoint(pipe_id: u64, end: PipeEnd) {
+    let registry = pipe_registry_mut();
+    if let Some(pipe) = registry.pipes.iter_mut().find(|pipe| pipe.pipe_id == pipe_id) {
+        match end {
+            PipeEnd::Read => pipe.reader_count = pipe.reader_count.saturating_add(1),
+            PipeEnd::Write => pipe.writer_count = pipe.writer_count.saturating_add(1),
+        }
+    }
+}
+
+fn decrement_pipe_endpoint(pipe_id: u64, end: PipeEnd) {
+    let registry = pipe_registry_mut();
+    let mut remove = false;
+    if let Some(pipe) = registry.pipes.iter_mut().find(|pipe| pipe.pipe_id == pipe_id) {
+        match end {
+            PipeEnd::Read => pipe.reader_count = pipe.reader_count.saturating_sub(1),
+            PipeEnd::Write => pipe.writer_count = pipe.writer_count.saturating_sub(1),
+        }
+        remove = pipe.reader_count == 0 && pipe.writer_count == 0;
+    }
+    if remove {
+        if let Some(index) = registry.pipes.iter().position(|pipe| pipe.pipe_id == pipe_id) {
+            registry.pipes.remove(index);
+        }
+    }
+}
+
+fn read_pipe(pipe_id: u64, destination_ptr: usize, count: usize) -> Result<i64, i64> {
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let registry = pipe_registry_mut();
+    let pipe = registry
+        .pipes
+        .iter_mut()
+        .find(|pipe| pipe.pipe_id == pipe_id)
+        .ok_or(EBADF)?;
+    let read_len = min(count, pipe.buffer.len());
+    if read_len == 0 {
+        if pipe.writer_count == 0 {
+            return Ok(0);
+        }
+        return Err(EAGAIN);
+    }
+
+    uaccess::copyout(&pipe.buffer[..read_len], destination_ptr).map_err(map_uaccess_error)?;
+    pipe.buffer.drain(..read_len);
+    i64::try_from(read_len).map_err(|_| ERANGE)
+}
+
+fn write_pipe(pipe_id: u64, source_ptr: usize, count: usize) -> Result<i64, i64> {
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let bytes = copyin_bytes(source_ptr, count)?;
+    let registry = pipe_registry_mut();
+    let pipe = registry
+        .pipes
+        .iter_mut()
+        .find(|pipe| pipe.pipe_id == pipe_id)
+        .ok_or(EBADF)?;
+    if pipe.reader_count == 0 {
+        return Err(EPIPE);
+    }
+
+    let next_len = pipe.buffer.len().checked_add(bytes.len()).ok_or(ERANGE)?;
+    if next_len > MAX_READ_BYTES {
+        return Err(ERANGE);
+    }
+    pipe.buffer.extend_from_slice(&bytes);
+    i64::try_from(bytes.len()).map_err(|_| ERANGE)
+}
+
+fn pipe_readiness(pipe_id: u64, requested: i16) -> i16 {
+    let registry = pipe_registry_mut();
+    let Some(pipe) = registry.pipes.iter().find(|pipe| pipe.pipe_id == pipe_id) else {
+        return POLLNVAL;
+    };
+
+    let mut revents = 0i16;
+    if requested & POLLIN != 0 && !pipe.buffer.is_empty() {
+        revents |= POLLIN;
+    }
+    if requested & POLLOUT != 0 && pipe.reader_count > 0 {
+        revents |= POLLOUT;
+    }
+    if pipe.writer_count == 0 && pipe.buffer.is_empty() {
+        revents |= POLLHUP;
+    }
+    revents
+}
+
+fn execute_poll(fds_ptr: usize, nfds: usize, timeout_ms: i32) -> Result<i64, i64> {
+    if nfds == 0 {
+        let _ = timeout_ms;
+        return Ok(0);
+    }
+    if nfds > MAX_OPEN_FILES {
+        return Err(EINVAL);
+    }
+    if fds_ptr == 0 {
+        return Err(EINVAL);
+    }
+
+    let mut ready_count = 0usize;
+    for index in 0..nfds {
+        let mut pollfd = copyin_pollfd_at(fds_ptr, index)?;
+        pollfd.revents = evaluate_poll_revents(pollfd.fd, pollfd.events);
+        if pollfd.revents != 0 {
+            ready_count = ready_count.saturating_add(1);
+        }
+        copyout_pollfd_at(fds_ptr, index, pollfd)?;
+    }
+
+    i64::try_from(ready_count).map_err(|_| ERANGE)
+}
+
+fn evaluate_poll_revents(fd: i32, requested: i16) -> i16 {
+    if fd < 0 {
+        return 0;
+    }
+    if fd == 0 {
+        return requested & POLLIN;
+    }
+    if fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return requested & POLLOUT;
+    }
+
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let Some(open) = table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+    else {
+        return POLLNVAL;
+    };
+
+    if let Some(endpoint) = open.pipe_endpoint {
+        return match endpoint.end {
+            PipeEnd::Read => pipe_readiness(endpoint.pipe_id, requested) & (requested | POLLHUP),
+            PipeEnd::Write => {
+                let mut revents = pipe_readiness(endpoint.pipe_id, requested);
+                revents &= requested | POLLERR | POLLHUP;
+                revents
+            }
+        };
+    }
+
+    let mut revents = 0i16;
+    if requested & POLLIN != 0 {
+        revents |= POLLIN;
+    }
+    if requested & POLLOUT != 0 && (fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD) {
+        revents |= POLLOUT;
+    }
+    revents
+}
+
 fn current_process_robust_list() -> (usize, usize) {
     let process_id = current_process_id_value();
     let table = robust_list_table_mut();
@@ -5474,7 +6059,10 @@ fn duplicate_fd(
         return Err(EMFILE);
     }
     if let Some(index) = replaced_index {
-        table.files.remove(index);
+        let replaced = table.files.remove(index);
+        if let Some(endpoint) = replaced.pipe_endpoint {
+            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+        }
     }
 
     let source = table
@@ -5506,6 +6094,9 @@ fn find_available_fd_for_process(table: &FdTable, owner_process_id: u64, minimum
 }
 
 fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u32) -> OpenFile {
+    if let Some(endpoint) = source.pipe_endpoint {
+        increment_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+    }
     OpenFile {
         fd: destination_fd,
         fd_flags,
@@ -5516,6 +6107,7 @@ fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u
         path: source.path.clone(),
         offset: source.offset,
         content: source.content.clone(),
+        pipe_endpoint: source.pipe_endpoint,
     }
 }
 
@@ -5562,7 +6154,13 @@ fn get_status_flags(fd: i32) -> Result<i64, i64> {
         .iter()
         .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
         .ok_or(EBADF)?;
-    let mut flags = O_RDONLY;
+    let mut flags = match open.pipe_endpoint {
+        Some(PipeEndpoint {
+            end: PipeEnd::Write,
+            ..
+        }) => O_WRONLY,
+        _ => O_RDONLY,
+    };
     if open.kind == VfsNodeKind::Directory {
         flags |= O_DIRECTORY;
     }
@@ -5606,8 +6204,28 @@ fn alloc_open_file(
         path,
         offset: 0,
         content,
+        pipe_endpoint: None,
     });
     Ok(fd as i64)
+}
+
+fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .ok_or(EBADF)?;
+
+    if let Some(endpoint) = open.pipe_endpoint {
+        return match endpoint.end {
+            PipeEnd::Write => write_pipe(endpoint.pipe_id, source_ptr, count),
+            PipeEnd::Read => Err(EBADF),
+        };
+    }
+
+    Err(EROFS)
 }
 
 fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
@@ -5618,6 +6236,12 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
         .iter_mut()
         .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
         .ok_or(EBADF)?;
+    if let Some(endpoint) = open.pipe_endpoint {
+        return match endpoint.end {
+            PipeEnd::Read => read_pipe(endpoint.pipe_id, destination_ptr, count),
+            PipeEnd::Write => Err(EBADF),
+        };
+    }
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
@@ -5644,6 +6268,9 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
         .iter()
         .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
         .ok_or(EBADF)?;
+    if open.pipe_endpoint.is_some() {
+        return Err(ESPIPE);
+    }
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
@@ -5668,7 +6295,10 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
         .iter()
         .position(|file| file.fd == fd && file.owner_process_id == owner_process_id)
     {
-        table.files.remove(position);
+        let open = table.files.remove(position);
+        if let Some(endpoint) = open.pipe_endpoint {
+            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+        }
         return Ok(0);
     }
     Err(EBADF)
@@ -5682,6 +6312,11 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
         .iter()
         .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
         .ok_or(EBADF)?;
+    if let Some(endpoint) = open.pipe_endpoint {
+        let stat = build_linux_stat(VfsMountKind::Procfs, VfsNodeKind::Device, false, 0, &pipe_path(endpoint.pipe_id, endpoint.end))?;
+        copyout_struct(stat_ptr, &stat)?;
+        return Ok(0);
+    }
 
     let stat = build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?;
     copyout_struct(stat_ptr, &stat)?;
@@ -5742,6 +6377,9 @@ fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
         .iter_mut()
         .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
         .ok_or(EBADF)?;
+    if open.pipe_endpoint.is_some() {
+        return Err(ESPIPE);
+    }
 
     let end = if open.kind == VfsNodeKind::Directory {
         directory_entry_count(&open.content)?
@@ -5766,7 +6404,17 @@ fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
 
 fn purge_open_files_for_process(process_id: u64) {
     let table = fd_table_mut();
-    table.files.retain(|file| file.owner_process_id != process_id);
+    let mut index = 0usize;
+    while index < table.files.len() {
+        if table.files[index].owner_process_id != process_id {
+            index = index.saturating_add(1);
+            continue;
+        }
+        let open = table.files.remove(index);
+        if let Some(endpoint) = open.pipe_endpoint {
+            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+        }
+    }
 }
 
 fn purge_working_directory_for_process(process_id: u64) {
@@ -5848,6 +6496,14 @@ fn fd_table_mut() -> &'static mut FdTable {
         *slot = Some(FdTable::new());
     }
     slot.as_mut().expect("fd table initialized")
+}
+
+fn pipe_registry_mut() -> &'static mut PipeRegistry {
+    let slot = unsafe { &mut *PIPE_REGISTRY.get() };
+    if slot.is_none() {
+        *slot = Some(PipeRegistry::new());
+    }
+    slot.as_mut().expect("pipe registry initialized")
 }
 
 fn cwd_table_mut() -> &'static mut Vec<ProcessCwd> {
@@ -6030,6 +6686,37 @@ fn copyin_u32(ptr: usize) -> Result<u32, i64> {
         return Err(EINVAL);
     }
     Ok(u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| EINVAL)?))
+}
+
+fn copyin_timespec(ptr: usize) -> Result<LinuxTimespec, i64> {
+    let bytes = copyin_bytes(ptr, size_of::<LinuxTimespec>())?;
+    if bytes.len() != size_of::<LinuxTimespec>() {
+        return Err(EINVAL);
+    }
+    let tv_sec = i64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EINVAL)?);
+    let tv_nsec = i64::from_le_bytes(bytes[8..16].try_into().map_err(|_| EINVAL)?);
+    Ok(LinuxTimespec { tv_sec, tv_nsec })
+}
+
+fn copyin_pollfd_at(pollfd_ptr: usize, index: usize) -> Result<LinuxPollFd, i64> {
+    let record_size = size_of::<LinuxPollFd>();
+    let offset = index.checked_mul(record_size).ok_or(ERANGE)?;
+    let address = pollfd_ptr.checked_add(offset).ok_or(ERANGE)?;
+    let bytes = copyin_bytes(address, record_size)?;
+    if bytes.len() != record_size {
+        return Err(EINVAL);
+    }
+    let fd = i32::from_le_bytes(bytes[0..4].try_into().map_err(|_| EINVAL)?);
+    let events = i16::from_le_bytes(bytes[4..6].try_into().map_err(|_| EINVAL)?);
+    let revents = i16::from_le_bytes(bytes[6..8].try_into().map_err(|_| EINVAL)?);
+    Ok(LinuxPollFd { fd, events, revents })
+}
+
+fn copyout_pollfd_at(pollfd_ptr: usize, index: usize, pollfd: LinuxPollFd) -> Result<(), i64> {
+    let record_size = size_of::<LinuxPollFd>();
+    let offset = index.checked_mul(record_size).ok_or(ERANGE)?;
+    let address = pollfd_ptr.checked_add(offset).ok_or(ERANGE)?;
+    copyout_struct(address, &pollfd)
 }
 
 fn copyin_iovec_at(iov_ptr: usize, index: usize) -> Result<LinuxIovec, i64> {

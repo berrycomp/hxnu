@@ -729,7 +729,7 @@ pub extern "C" fn _start() -> ! {
     let linux_probe = syscall::run_linux_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} openat={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} openat={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::LinuxBootstrap.as_str(),
         linux_probe.write_result,
         linux_probe.openat_result,
@@ -775,6 +775,9 @@ pub extern "C" fn _start() -> ! {
         linux_probe.arch_prctl_get_gs_result,
         linux_probe.futex_wait_result,
         linux_probe.futex_wake_result,
+        linux_probe.pipe2_result,
+        linux_probe.poll_result,
+        linux_probe.ppoll_result,
         linux_probe.ioctl_result,
         linux_probe.access_result,
         linux_probe.newfstatat_result,
@@ -817,7 +820,7 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
@@ -863,6 +866,9 @@ pub extern "C" fn _start() -> ! {
         ghost_probe.arch_prctl_get_gs_result,
         ghost_probe.futex_wait_result,
         ghost_probe.futex_wake_result,
+        ghost_probe.pipe2_result,
+        ghost_probe.poll_result,
+        ghost_probe.ppoll_result,
         ghost_probe.ioctl_result,
         ghost_probe.access_result,
         ghost_probe.stat_result,
@@ -901,7 +907,7 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
@@ -947,6 +953,9 @@ pub extern "C" fn _start() -> ! {
         hxnu_probe.arch_prctl_get_gs_result,
         hxnu_probe.futex_wait_result,
         hxnu_probe.futex_wake_result,
+        hxnu_probe.pipe2_result,
+        hxnu_probe.poll_result,
+        hxnu_probe.ppoll_result,
         hxnu_probe.ioctl_result,
         hxnu_probe.access_result,
         hxnu_probe.stat_result,

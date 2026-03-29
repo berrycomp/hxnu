@@ -60,6 +60,7 @@ Current status:
 - Bootstrap `getrlimit/setrlimit/prlimit64` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `prctl(PR_SET_NAME/PR_GET_NAME/PR_SET_DUMPABLE/PR_GET_DUMPABLE)`, `set_robust_list/get_robust_list`, and `rseq` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `arch_prctl(ARCH_SET_FS/ARCH_GET_FS/ARCH_SET_GS/ARCH_GET_GS)` and `futex(WAIT/WAKE)` syscall facades are online for Linux/Ghost/HXNU personalities
+- Bootstrap `pipe/pipe2` and `poll/ppoll` syscall facades are online for Linux/Ghost/HXNU personalities
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)
