@@ -23,6 +23,7 @@ pub const LINUX_SYS_WRITE: u64 = 1;
 pub const LINUX_SYS_CLOSE: u64 = 3;
 pub const LINUX_SYS_FSTAT: u64 = 5;
 pub const LINUX_SYS_LSEEK: u64 = 8;
+pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_ACCESS: u64 = 21;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
@@ -55,6 +56,7 @@ pub const GHOST_SYS_STAT: u64 = 14;
 pub const GHOST_SYS_GETDENTS: u64 = 15;
 pub const GHOST_SYS_READLINK: u64 = 16;
 pub const GHOST_SYS_ACCESS: u64 = 17;
+pub const GHOST_SYS_IOCTL: u64 = 18;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -72,6 +74,7 @@ pub const HXNU_SYS_STAT: u64 = 0x484e_000d;
 pub const HXNU_SYS_GETDENTS: u64 = 0x484e_000e;
 pub const HXNU_SYS_READLINK: u64 = 0x484e_000f;
 pub const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
+pub const HXNU_SYS_IOCTL: u64 = 0x484e_0011;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -79,6 +82,7 @@ const LINUX_CLOCK_REALTIME: i32 = 0;
 const LINUX_CLOCK_MONOTONIC: i32 = 1;
 const AT_FDCWD: i64 = -100;
 const AT_EACCESS: u64 = 0x200;
+const LINUX_TIOCGWINSZ: u64 = 0x5413;
 
 const F_OK: u64 = 0;
 const X_OK: u64 = 1;
@@ -122,6 +126,7 @@ const ENOSYS: i64 = 38;
 const ERANGE: i64 = 34;
 const ENOENT: i64 = 2;
 const EACCES: i64 = 13;
+const ENOTTY: i64 = 25;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
@@ -178,6 +183,7 @@ impl SyscallOutcome {
 pub struct LinuxBootstrapProbe {
     pub write_result: i64,
     pub openat_result: i64,
+    pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
     pub faccessat_result: i64,
@@ -211,6 +217,7 @@ impl LinuxBootstrapProbe {
 pub struct GhostBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
@@ -241,6 +248,7 @@ impl GhostBootstrapProbe {
 pub struct HxnuBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
@@ -264,6 +272,15 @@ pub struct HxnuBootstrapProbe {
 struct LinuxTimespec {
     tv_sec: i64,
     tv_nsec: i64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct LinuxWinsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
 }
 
 #[repr(C)]
@@ -394,6 +411,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_CLOSE => close_fd(args),
         LINUX_SYS_FSTAT => fstat_fd(args),
         LINUX_SYS_GETDENTS64 => getdents_fd(args),
+        LINUX_SYS_IOCTL => ioctl_fd(args),
         LINUX_SYS_LSEEK => seek_fd(args),
         LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         LINUX_SYS_OPENAT => linux_openat(args),
@@ -419,6 +437,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_CLOSE => close_fd(args),
         GHOST_SYS_FSTAT => fstat_fd(args),
         GHOST_SYS_GETDENTS => getdents_fd(args),
+        GHOST_SYS_IOCTL => ioctl_fd(args),
         GHOST_SYS_STAT => stat_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         GHOST_SYS_READLINK => readlink_path_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2]),
         GHOST_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
@@ -442,6 +461,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_CLOSE => close_fd(args),
         HXNU_SYS_FSTAT => fstat_fd(args),
         HXNU_SYS_GETDENTS => getdents_fd(args),
+        HXNU_SYS_IOCTL => ioctl_fd(args),
         HXNU_SYS_STAT => stat_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         HXNU_SYS_READLINK => readlink_path_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2]),
         HXNU_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
@@ -482,6 +502,18 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         abi,
         LINUX_SYS_OPENAT,
         [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0],
+    )
+    .value;
+    let mut winsize = LinuxWinsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let ioctl_result = dispatch(
+        abi,
+        LINUX_SYS_IOCTL,
+        [STDOUT_FD, LINUX_TIOCGWINSZ, (&mut winsize as *mut LinuxWinsize) as u64, 0, 0, 0],
     )
     .value;
     let access_result = dispatch(abi, LINUX_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
@@ -598,6 +630,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     LinuxBootstrapProbe {
         write_result,
         openat_result,
+        ioctl_result,
         access_result,
         newfstatat_result,
         faccessat_result,
@@ -643,6 +676,18 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, GHOST_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let mut winsize = LinuxWinsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let ioctl_result = dispatch(
+        abi,
+        GHOST_SYS_IOCTL,
+        [STDERR_FD, LINUX_TIOCGWINSZ, (&mut winsize as *mut LinuxWinsize) as u64, 0, 0, 0],
+    )
+    .value;
     let access_result = dispatch(abi, GHOST_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
     let mut stat = LinuxStat::empty();
     let stat_result = dispatch(
@@ -726,6 +771,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     GhostBootstrapProbe {
         write_result,
         open_result,
+        ioctl_result,
         access_result,
         stat_result,
         readlink_result,
@@ -761,6 +807,18 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, HXNU_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let mut winsize = LinuxWinsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let ioctl_result = dispatch(
+        abi,
+        HXNU_SYS_IOCTL,
+        [STDOUT_FD, LINUX_TIOCGWINSZ, (&mut winsize as *mut LinuxWinsize) as u64, 0, 0, 0],
+    )
+    .value;
     let access_result = dispatch(abi, HXNU_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
     let mut stat = LinuxStat::empty();
     let stat_result = dispatch(
@@ -835,6 +893,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     HxnuBootstrapProbe {
         write_result,
         open_result,
+        ioctl_result,
         access_result,
         stat_result,
         readlink_result,
@@ -1046,6 +1105,23 @@ fn fstat_fd(args: [u64; 6]) -> SyscallOutcome {
     match stat_open_file(fd, stat_ptr) {
         Ok(value) => SyscallOutcome::success(value),
         Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn ioctl_fd(args: [u64; 6]) -> SyscallOutcome {
+    let fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let request = args[1];
+    let arg_ptr = args[2] as usize;
+
+    match request {
+        LINUX_TIOCGWINSZ => match ioctl_get_winsize(fd, arg_ptr) {
+            Ok(value) => SyscallOutcome::success(value),
+            Err(error) => SyscallOutcome::errno(error),
+        },
+        _ => SyscallOutcome::errno(ENOTTY),
     }
 }
 
@@ -1405,6 +1481,45 @@ fn write_u16_le(destination: &mut [u8], offset: usize, value: u16) -> Option<()>
     let end = offset.checked_add(2)?;
     destination.get_mut(offset..end)?.copy_from_slice(&value.to_le_bytes());
     Some(())
+}
+
+fn ioctl_get_winsize(fd: i32, arg_ptr: usize) -> Result<i64, i64> {
+    let winsize = tty_winsize()?;
+
+    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        copyout_struct(arg_ptr, &winsize)?;
+        return Ok(0);
+    }
+
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .ok_or(EBADF)?;
+    if open.kind != VfsNodeKind::Device || !is_tty_device_path(&open.path) {
+        return Err(ENOTTY);
+    }
+
+    copyout_struct(arg_ptr, &winsize)?;
+    Ok(0)
+}
+
+fn tty_winsize() -> Result<LinuxWinsize, i64> {
+    let stats = tty::stats();
+    let rows = u16::try_from(stats.rows).map_err(|_| ERANGE)?;
+    let columns = u16::try_from(stats.columns).map_err(|_| ERANGE)?;
+    Ok(LinuxWinsize {
+        ws_row: rows,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    })
+}
+
+fn is_tty_device_path(path: &str) -> bool {
+    path == "/dev/console" || path.starts_with("/dev/tty")
 }
 
 fn sanitize_for_console(bytes: &[u8]) -> String {
