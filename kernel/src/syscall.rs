@@ -62,8 +62,10 @@ pub const LINUX_SYS_SETSID: u64 = 112;
 pub const LINUX_SYS_GETPGID: u64 = 121;
 pub const LINUX_SYS_GETSID: u64 = 124;
 pub const LINUX_SYS_PRCTL: u64 = 157;
+pub const LINUX_SYS_ARCH_PRCTL: u64 = 158;
 pub const LINUX_SYS_SETRLIMIT: u64 = 160;
 pub const LINUX_SYS_GETTID: u64 = 186;
+pub const LINUX_SYS_FUTEX: u64 = 202;
 pub const LINUX_SYS_GETDENTS64: u64 = 217;
 pub const LINUX_SYS_SET_TID_ADDRESS: u64 = 218;
 pub const LINUX_SYS_CLOCK_GETTIME: u64 = 228;
@@ -136,6 +138,8 @@ pub const GHOST_SYS_PRCTL: u64 = 53;
 pub const GHOST_SYS_SET_ROBUST_LIST: u64 = 54;
 pub const GHOST_SYS_GET_ROBUST_LIST: u64 = 55;
 pub const GHOST_SYS_RSEQ: u64 = 56;
+pub const GHOST_SYS_ARCH_PRCTL: u64 = 57;
+pub const GHOST_SYS_FUTEX: u64 = 58;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -192,6 +196,8 @@ pub const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
 pub const HXNU_SYS_SET_ROBUST_LIST: u64 = 0x484e_0035;
 pub const HXNU_SYS_GET_ROBUST_LIST: u64 = 0x484e_0036;
 pub const HXNU_SYS_RSEQ: u64 = 0x484e_0037;
+pub const HXNU_SYS_ARCH_PRCTL: u64 = 0x484e_0038;
+pub const HXNU_SYS_FUTEX: u64 = 0x484e_0039;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -267,6 +273,14 @@ const PR_SET_DUMPABLE: i32 = 4;
 const PR_SET_NAME: i32 = 15;
 const PR_GET_NAME: i32 = 16;
 const TASK_COMM_LEN: usize = 16;
+const ARCH_SET_GS: i32 = 0x1001;
+const ARCH_SET_FS: i32 = 0x1002;
+const ARCH_GET_FS: i32 = 0x1003;
+const ARCH_GET_GS: i32 = 0x1004;
+const FUTEX_WAIT: u32 = 0;
+const FUTEX_WAKE: u32 = 1;
+const FUTEX_CMD_MASK: u32 = 0x7f;
+const FUTEX_PRIVATE_FLAG: u32 = 128;
 const RSEQ_FLAG_UNREGISTER: u32 = 1;
 const RSEQ_SIGNATURE: u32 = 0x5305_3053;
 
@@ -314,6 +328,8 @@ const ENOMEM: i64 = 12;
 const EROFS: i64 = 30;
 const ECHILD: i64 = 10;
 const ESRCH: i64 = 3;
+const EAGAIN: i64 = 11;
+const ETIMEDOUT: i64 = 110;
 
 const STDOUT_FD: u64 = 1;
 const STDERR_FD: u64 = 2;
@@ -403,6 +419,12 @@ pub struct LinuxBootstrapProbe {
     pub get_robust_list_result: i64,
     pub rseq_register_result: i64,
     pub rseq_unregister_result: i64,
+    pub arch_prctl_set_fs_result: i64,
+    pub arch_prctl_get_fs_result: i64,
+    pub arch_prctl_set_gs_result: i64,
+    pub arch_prctl_get_gs_result: i64,
+    pub futex_wait_result: i64,
+    pub futex_wake_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
@@ -490,6 +512,12 @@ pub struct GhostBootstrapProbe {
     pub get_robust_list_result: i64,
     pub rseq_register_result: i64,
     pub rseq_unregister_result: i64,
+    pub arch_prctl_set_fs_result: i64,
+    pub arch_prctl_get_fs_result: i64,
+    pub arch_prctl_set_gs_result: i64,
+    pub arch_prctl_get_gs_result: i64,
+    pub futex_wait_result: i64,
+    pub futex_wake_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -573,6 +601,12 @@ pub struct HxnuBootstrapProbe {
     pub get_robust_list_result: i64,
     pub rseq_register_result: i64,
     pub rseq_unregister_result: i64,
+    pub arch_prctl_set_fs_result: i64,
+    pub arch_prctl_get_fs_result: i64,
+    pub arch_prctl_set_gs_result: i64,
+    pub arch_prctl_get_gs_result: i64,
+    pub futex_wait_result: i64,
+    pub futex_wake_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -1025,6 +1059,28 @@ impl GlobalPrctlTable {
 
 static PRCTL_TABLE: GlobalPrctlTable = GlobalPrctlTable::new();
 
+struct ProcessArchPrctlState {
+    process_id: u64,
+    fs_base: u64,
+    gs_base: u64,
+}
+
+struct GlobalArchPrctlTable(UnsafeCell<Option<Vec<ProcessArchPrctlState>>>);
+
+unsafe impl Sync for GlobalArchPrctlTable {}
+
+impl GlobalArchPrctlTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessArchPrctlState>> {
+        self.0.get()
+    }
+}
+
+static ARCH_PRCTL_TABLE: GlobalArchPrctlTable = GlobalArchPrctlTable::new();
+
 struct ProcessRobustListState {
     process_id: u64,
     head: usize,
@@ -1125,6 +1181,8 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_SETRLIMIT => process_setrlimit(args),
         LINUX_SYS_PRLIMIT64 => process_prlimit64(args),
         LINUX_SYS_PRCTL => process_prctl(args),
+        LINUX_SYS_ARCH_PRCTL => process_arch_prctl(args),
+        LINUX_SYS_FUTEX => process_futex(args),
         LINUX_SYS_SET_ROBUST_LIST => process_set_robust_list(args),
         LINUX_SYS_GET_ROBUST_LIST => process_get_robust_list(args),
         LINUX_SYS_RSEQ => process_rseq(args),
@@ -1185,6 +1243,8 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_SETRLIMIT => process_setrlimit(args),
         GHOST_SYS_PRLIMIT64 => process_prlimit64(args),
         GHOST_SYS_PRCTL => process_prctl(args),
+        GHOST_SYS_ARCH_PRCTL => process_arch_prctl(args),
+        GHOST_SYS_FUTEX => process_futex(args),
         GHOST_SYS_SET_ROBUST_LIST => process_set_robust_list(args),
         GHOST_SYS_GET_ROBUST_LIST => process_get_robust_list(args),
         GHOST_SYS_RSEQ => process_rseq(args),
@@ -1244,6 +1304,8 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_SETRLIMIT => process_setrlimit(args),
         HXNU_SYS_PRLIMIT64 => process_prlimit64(args),
         HXNU_SYS_PRCTL => process_prctl(args),
+        HXNU_SYS_ARCH_PRCTL => process_arch_prctl(args),
+        HXNU_SYS_FUTEX => process_futex(args),
         HXNU_SYS_SET_ROBUST_LIST => process_set_robust_list(args),
         HXNU_SYS_GET_ROBUST_LIST => process_get_robust_list(args),
         HXNU_SYS_RSEQ => process_rseq(args),
@@ -1531,6 +1593,75 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         ],
     )
     .value;
+    let arch_prctl_fs_base = 0x7000_0000_1000u64;
+    let arch_prctl_set_fs_result = dispatch(
+        abi,
+        LINUX_SYS_ARCH_PRCTL,
+        [ARCH_SET_FS as u64, arch_prctl_fs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_fs_readback = 0u64;
+    let arch_prctl_get_fs_result = dispatch(
+        abi,
+        LINUX_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_FS as u64,
+            (&mut arch_prctl_fs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let arch_prctl_gs_base = 0x7000_0000_2000u64;
+    let arch_prctl_set_gs_result = dispatch(
+        abi,
+        LINUX_SYS_ARCH_PRCTL,
+        [ARCH_SET_GS as u64, arch_prctl_gs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_gs_readback = 0u64;
+    let arch_prctl_get_gs_result = dispatch(
+        abi,
+        LINUX_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_GS as u64,
+            (&mut arch_prctl_gs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let mut futex_word = 1u32;
+    let futex_wait_result = dispatch(
+        abi,
+        LINUX_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAIT | FUTEX_PRIVATE_FLAG) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let futex_wake_result = dispatch(
+        abi,
+        LINUX_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAKE | FUTEX_PRIVATE_FLAG) as u64,
+            1,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -1794,6 +1925,12 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         get_robust_list_result,
         rseq_register_result,
         rseq_unregister_result,
+        arch_prctl_set_fs_result,
+        arch_prctl_get_fs_result,
+        arch_prctl_set_gs_result,
+        arch_prctl_get_gs_result,
+        futex_wait_result,
+        futex_wake_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -2104,6 +2241,75 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         ],
     )
     .value;
+    let arch_prctl_fs_base = 0x7100_0000_1000u64;
+    let arch_prctl_set_fs_result = dispatch(
+        abi,
+        GHOST_SYS_ARCH_PRCTL,
+        [ARCH_SET_FS as u64, arch_prctl_fs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_fs_readback = 0u64;
+    let arch_prctl_get_fs_result = dispatch(
+        abi,
+        GHOST_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_FS as u64,
+            (&mut arch_prctl_fs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let arch_prctl_gs_base = 0x7100_0000_2000u64;
+    let arch_prctl_set_gs_result = dispatch(
+        abi,
+        GHOST_SYS_ARCH_PRCTL,
+        [ARCH_SET_GS as u64, arch_prctl_gs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_gs_readback = 0u64;
+    let arch_prctl_get_gs_result = dispatch(
+        abi,
+        GHOST_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_GS as u64,
+            (&mut arch_prctl_gs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let mut futex_word = 1u32;
+    let futex_wait_result = dispatch(
+        abi,
+        GHOST_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAIT | FUTEX_PRIVATE_FLAG) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let futex_wake_result = dispatch(
+        abi,
+        GHOST_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAKE | FUTEX_PRIVATE_FLAG) as u64,
+            1,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -2330,6 +2536,12 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         get_robust_list_result,
         rseq_register_result,
         rseq_unregister_result,
+        arch_prctl_set_fs_result,
+        arch_prctl_get_fs_result,
+        arch_prctl_set_gs_result,
+        arch_prctl_get_gs_result,
+        futex_wait_result,
+        futex_wake_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -2629,6 +2841,75 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         ],
     )
     .value;
+    let arch_prctl_fs_base = 0x7200_0000_1000u64;
+    let arch_prctl_set_fs_result = dispatch(
+        abi,
+        HXNU_SYS_ARCH_PRCTL,
+        [ARCH_SET_FS as u64, arch_prctl_fs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_fs_readback = 0u64;
+    let arch_prctl_get_fs_result = dispatch(
+        abi,
+        HXNU_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_FS as u64,
+            (&mut arch_prctl_fs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let arch_prctl_gs_base = 0x7200_0000_2000u64;
+    let arch_prctl_set_gs_result = dispatch(
+        abi,
+        HXNU_SYS_ARCH_PRCTL,
+        [ARCH_SET_GS as u64, arch_prctl_gs_base, 0, 0, 0, 0],
+    )
+    .value;
+    let mut arch_prctl_gs_readback = 0u64;
+    let arch_prctl_get_gs_result = dispatch(
+        abi,
+        HXNU_SYS_ARCH_PRCTL,
+        [
+            ARCH_GET_GS as u64,
+            (&mut arch_prctl_gs_readback as *mut u64) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let mut futex_word = 1u32;
+    let futex_wait_result = dispatch(
+        abi,
+        HXNU_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAIT | FUTEX_PRIVATE_FLAG) as u64,
+            0,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
+    let futex_wake_result = dispatch(
+        abi,
+        HXNU_SYS_FUTEX,
+        [
+            (&mut futex_word as *mut u32) as u64,
+            (FUTEX_WAKE | FUTEX_PRIVATE_FLAG) as u64,
+            1,
+            0,
+            0,
+            0,
+        ],
+    )
+    .value;
     let writev_iov = [
         LinuxIovec {
             iov_base: WRITEV_SMOKE_A.as_ptr() as u64,
@@ -2846,6 +3127,12 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         get_robust_list_result,
         rseq_register_result,
         rseq_unregister_result,
+        arch_prctl_set_fs_result,
+        arch_prctl_get_fs_result,
+        arch_prctl_set_gs_result,
+        arch_prctl_get_gs_result,
+        futex_wait_result,
+        futex_wake_result,
         pread64_result,
         pwrite64_result,
         readv_result,
@@ -3276,6 +3563,81 @@ fn process_prctl(args: [u64; 6]) -> SyscallOutcome {
             if let Err(error) = copyout_struct(name_ptr, &name) {
                 return SyscallOutcome::errno(error);
             }
+            SyscallOutcome::success(0)
+        }
+        _ => SyscallOutcome::errno(EINVAL),
+    }
+}
+
+fn process_arch_prctl(args: [u64; 6]) -> SyscallOutcome {
+    let code = match i32::try_from(args[0]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+    let value = args[1];
+    match code {
+        ARCH_SET_FS => {
+            set_process_fs_base(value);
+            SyscallOutcome::success(0)
+        }
+        ARCH_SET_GS => {
+            set_process_gs_base(value);
+            SyscallOutcome::success(0)
+        }
+        ARCH_GET_FS => {
+            let destination = value as usize;
+            if destination == 0 {
+                return SyscallOutcome::errno(EINVAL);
+            }
+            let fs_base = current_process_fs_base();
+            if let Err(error) = copyout_struct(destination, &fs_base) {
+                return SyscallOutcome::errno(error);
+            }
+            SyscallOutcome::success(0)
+        }
+        ARCH_GET_GS => {
+            let destination = value as usize;
+            if destination == 0 {
+                return SyscallOutcome::errno(EINVAL);
+            }
+            let gs_base = current_process_gs_base();
+            if let Err(error) = copyout_struct(destination, &gs_base) {
+                return SyscallOutcome::errno(error);
+            }
+            SyscallOutcome::success(0)
+        }
+        _ => SyscallOutcome::errno(EINVAL),
+    }
+}
+
+fn process_futex(args: [u64; 6]) -> SyscallOutcome {
+    let uaddr = args[0] as usize;
+    if uaddr == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let op = match u32::try_from(args[1]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+    let val = match u32::try_from(args[2]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+    let command = op & FUTEX_CMD_MASK;
+    match command {
+        FUTEX_WAIT => {
+            let current = match copyin_u32(uaddr) {
+                Ok(value) => value,
+                Err(error) => return SyscallOutcome::errno(error),
+            };
+            if current != val {
+                return SyscallOutcome::errno(EAGAIN);
+            }
+            SyscallOutcome::errno(ETIMEDOUT)
+        }
+        FUTEX_WAKE => {
+            let _wake_limit = val;
             SyscallOutcome::success(0)
         }
         _ => SyscallOutcome::errno(EINVAL),
@@ -4236,6 +4598,7 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     purge_process_group_state(process_id);
     purge_process_rlimits(process_id);
     purge_process_prctl_state(process_id);
+    purge_process_arch_prctl_state(process_id);
     purge_process_robust_list_state(process_id);
     purge_process_rseq_state(process_id);
     purge_process_signal_mask(process_id);
@@ -4780,6 +5143,68 @@ fn set_process_dumpable(dumpable: i32) {
 
 fn current_process_dumpable() -> i32 {
     current_process_prctl_state().dumpable
+}
+
+fn current_process_arch_prctl_state() -> ProcessArchPrctlState {
+    let process_id = current_process_id_value();
+    let table = arch_prctl_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return ProcessArchPrctlState {
+            process_id,
+            fs_base: entry.fs_base,
+            gs_base: entry.gs_base,
+        };
+    }
+
+    let default = ProcessArchPrctlState {
+        process_id,
+        fs_base: 0,
+        gs_base: 0,
+    };
+    table.push(ProcessArchPrctlState {
+        process_id,
+        fs_base: default.fs_base,
+        gs_base: default.gs_base,
+    });
+    default
+}
+
+fn set_process_fs_base(fs_base: u64) {
+    let process_id = current_process_id_value();
+    let table = arch_prctl_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.fs_base = fs_base;
+        return;
+    }
+
+    table.push(ProcessArchPrctlState {
+        process_id,
+        fs_base,
+        gs_base: 0,
+    });
+}
+
+fn set_process_gs_base(gs_base: u64) {
+    let process_id = current_process_id_value();
+    let table = arch_prctl_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.gs_base = gs_base;
+        return;
+    }
+
+    table.push(ProcessArchPrctlState {
+        process_id,
+        fs_base: 0,
+        gs_base,
+    });
+}
+
+fn current_process_fs_base() -> u64 {
+    current_process_arch_prctl_state().fs_base
+}
+
+fn current_process_gs_base() -> u64 {
+    current_process_arch_prctl_state().gs_base
 }
 
 fn current_process_robust_list() -> (usize, usize) {
@@ -5392,6 +5817,11 @@ fn purge_process_prctl_state(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
+fn purge_process_arch_prctl_state(process_id: u64) {
+    let table = arch_prctl_table_mut();
+    table.retain(|entry| entry.process_id != process_id);
+}
+
 fn purge_process_robust_list_state(process_id: u64) {
     let table = robust_list_table_mut();
     table.retain(|entry| entry.process_id != process_id);
@@ -5482,6 +5912,14 @@ fn prctl_table_mut() -> &'static mut Vec<ProcessPrctlState> {
         *slot = Some(Vec::new());
     }
     slot.as_mut().expect("prctl table initialized")
+}
+
+fn arch_prctl_table_mut() -> &'static mut Vec<ProcessArchPrctlState> {
+    let slot = unsafe { &mut *ARCH_PRCTL_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("arch-prctl table initialized")
 }
 
 fn robust_list_table_mut() -> &'static mut Vec<ProcessRobustListState> {
@@ -5584,6 +6022,14 @@ fn copyin_comm_name(ptr: usize) -> Result<[u8; TASK_COMM_LEN], i64> {
     name[..copy_len].copy_from_slice(&bytes[..copy_len]);
     name[copy_len] = 0;
     Ok(name)
+}
+
+fn copyin_u32(ptr: usize) -> Result<u32, i64> {
+    let bytes = copyin_bytes(ptr, size_of::<u32>())?;
+    if bytes.len() != size_of::<u32>() {
+        return Err(EINVAL);
+    }
+    Ok(u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| EINVAL)?))
 }
 
 fn copyin_iovec_at(iov_ptr: usize, index: usize) -> Result<LinuxIovec, i64> {
