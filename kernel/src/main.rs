@@ -729,7 +729,7 @@ pub extern "C" fn _start() -> ! {
     let linux_probe = syscall::run_linux_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} openat={} ioctl={} access={} newfstatat={} faccessat={} readlinkat={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} openat={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::LinuxBootstrap.as_str(),
         linux_probe.write_result,
         linux_probe.openat_result,
@@ -737,8 +737,10 @@ pub extern "C" fn _start() -> ! {
         linux_probe.access_result,
         linux_probe.newfstatat_result,
         linux_probe.faccessat_result,
+        linux_probe.faccessat2_result,
         linux_probe.readlinkat_result,
         linux_probe.dup_result,
+        linux_probe.dup2_result,
         linux_probe.dup3_result,
         linux_probe.fcntl_getfd_result,
         linux_probe.fcntl_getfl_result,
@@ -765,7 +767,7 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
@@ -774,6 +776,7 @@ pub extern "C" fn _start() -> ! {
         ghost_probe.stat_result,
         ghost_probe.readlink_result,
         ghost_probe.dup_result,
+        ghost_probe.dup2_result,
         ghost_probe.dup3_result,
         ghost_probe.fcntl_getfd_result,
         ghost_probe.fcntl_getfl_result,
@@ -798,7 +801,7 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
@@ -807,6 +810,7 @@ pub extern "C" fn _start() -> ! {
         hxnu_probe.stat_result,
         hxnu_probe.readlink_result,
         hxnu_probe.dup_result,
+        hxnu_probe.dup2_result,
         hxnu_probe.dup3_result,
         hxnu_probe.fcntl_getfd_result,
         hxnu_probe.fcntl_getfl_result,

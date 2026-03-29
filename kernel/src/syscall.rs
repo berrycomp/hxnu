@@ -26,6 +26,7 @@ pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_ACCESS: u64 = 21;
 pub const LINUX_SYS_DUP: u64 = 32;
+pub const LINUX_SYS_DUP2: u64 = 33;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
@@ -44,6 +45,7 @@ pub const LINUX_SYS_NEWFSTATAT: u64 = 262;
 pub const LINUX_SYS_READLINKAT: u64 = 267;
 pub const LINUX_SYS_FACCESSAT: u64 = 269;
 pub const LINUX_SYS_DUP3: u64 = 292;
+pub const LINUX_SYS_FACCESSAT2: u64 = 439;
 
 pub const GHOST_SYS_WRITE: u64 = 1;
 pub const GHOST_SYS_YIELD: u64 = 2;
@@ -69,6 +71,7 @@ pub const GHOST_SYS_FCNTL: u64 = 21;
 pub const GHOST_SYS_GETCWD: u64 = 22;
 pub const GHOST_SYS_CHDIR: u64 = 23;
 pub const GHOST_SYS_FCHDIR: u64 = 24;
+pub const GHOST_SYS_DUP2: u64 = 25;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -93,6 +96,7 @@ pub const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
 pub const HXNU_SYS_GETCWD: u64 = 0x484e_0015;
 pub const HXNU_SYS_CHDIR: u64 = 0x484e_0016;
 pub const HXNU_SYS_FCHDIR: u64 = 0x484e_0017;
+pub const HXNU_SYS_DUP2: u64 = 0x484e_0018;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -213,8 +217,10 @@ pub struct LinuxBootstrapProbe {
     pub access_result: i64,
     pub newfstatat_result: i64,
     pub faccessat_result: i64,
+    pub faccessat2_result: i64,
     pub readlinkat_result: i64,
     pub dup_result: i64,
+    pub dup2_result: i64,
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
@@ -255,6 +261,7 @@ pub struct GhostBootstrapProbe {
     pub stat_result: i64,
     pub readlink_result: i64,
     pub dup_result: i64,
+    pub dup2_result: i64,
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
@@ -293,6 +300,7 @@ pub struct HxnuBootstrapProbe {
     pub stat_result: i64,
     pub readlink_result: i64,
     pub dup_result: i64,
+    pub dup2_result: i64,
     pub dup3_result: i64,
     pub fcntl_getfd_result: i64,
     pub fcntl_getfl_result: i64,
@@ -485,6 +493,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_LSEEK => seek_fd(args),
         LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         LINUX_SYS_FCNTL => fcntl_fd(args),
+        LINUX_SYS_DUP2 => dup2_fd(args),
         LINUX_SYS_GETCWD => linux_getcwd(args),
         LINUX_SYS_CHDIR => linux_chdir(args),
         LINUX_SYS_FCHDIR => linux_fchdir(args),
@@ -492,6 +501,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_NEWFSTATAT => linux_newfstatat(args),
         LINUX_SYS_READLINKAT => linux_readlinkat(args),
         LINUX_SYS_FACCESSAT => linux_faccessat(args),
+        LINUX_SYS_FACCESSAT2 => linux_faccessat2(args),
         LINUX_SYS_DUP3 => dup3_fd(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         LINUX_SYS_GETPID => process_id(),
@@ -511,6 +521,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_READ => read_from_fd(args),
         GHOST_SYS_CLOSE => close_fd(args),
         GHOST_SYS_DUP => dup_fd(args),
+        GHOST_SYS_DUP2 => dup2_fd(args),
         GHOST_SYS_DUP3 => dup3_fd(args),
         GHOST_SYS_FCNTL => fcntl_fd(args),
         GHOST_SYS_GETCWD => process_getcwd(args),
@@ -541,6 +552,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_READ => read_from_fd(args),
         HXNU_SYS_CLOSE => close_fd(args),
         HXNU_SYS_DUP => dup_fd(args),
+        HXNU_SYS_DUP2 => dup2_fd(args),
         HXNU_SYS_DUP3 => dup3_fd(args),
         HXNU_SYS_FCNTL => fcntl_fd(args),
         HXNU_SYS_GETCWD => process_getcwd(args),
@@ -625,6 +637,12 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0],
     )
     .value;
+    let faccessat2_result = dispatch(
+        abi,
+        LINUX_SYS_FACCESSAT2,
+        [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0],
+    )
+    .value;
     let mut cwd_buffer = [0u8; 128];
     let getcwd_result = dispatch(
         abi,
@@ -651,6 +669,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
     let mut dup_result = -EBADF;
+    let mut dup2_result = -EBADF;
     let mut dup3_result = -EBADF;
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
@@ -678,6 +697,10 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         dup_result = dispatch(abi, LINUX_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
         if dup_result >= 0 {
             let _ = dispatch(abi, LINUX_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup2_result = dispatch(abi, LINUX_SYS_DUP2, [fd, 62, 0, 0, 0, 0]).value;
+        if dup2_result >= 0 {
+            let _ = dispatch(abi, LINUX_SYS_CLOSE, [dup2_result as u64, 0, 0, 0, 0, 0]).value;
         }
         dup3_result = dispatch(abi, LINUX_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
         if dup3_result >= 0 {
@@ -747,8 +770,10 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         access_result,
         newfstatat_result,
         faccessat_result,
+        faccessat2_result,
         readlinkat_result,
         dup_result,
+        dup2_result,
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
@@ -844,6 +869,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
     let mut dup_result = -EBADF;
+    let mut dup2_result = -EBADF;
     let mut dup3_result = -EBADF;
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
@@ -871,6 +897,10 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         dup_result = dispatch(abi, GHOST_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
         if dup_result >= 0 {
             let _ = dispatch(abi, GHOST_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup2_result = dispatch(abi, GHOST_SYS_DUP2, [fd, 62, 0, 0, 0, 0]).value;
+        if dup2_result >= 0 {
+            let _ = dispatch(abi, GHOST_SYS_CLOSE, [dup2_result as u64, 0, 0, 0, 0, 0]).value;
         }
         dup3_result = dispatch(abi, GHOST_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
         if dup3_result >= 0 {
@@ -922,6 +952,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
         stat_result,
         readlink_result,
         dup_result,
+        dup2_result,
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
@@ -1008,6 +1039,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     let mut read_result = -EBADF;
     let mut fstat_result = -EBADF;
     let mut dup_result = -EBADF;
+    let mut dup2_result = -EBADF;
     let mut dup3_result = -EBADF;
     let mut fcntl_getfd_result = -EBADF;
     let mut fcntl_getfl_result = -EBADF;
@@ -1035,6 +1067,10 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         dup_result = dispatch(abi, HXNU_SYS_DUP, [fd, 0, 0, 0, 0, 0]).value;
         if dup_result >= 0 {
             let _ = dispatch(abi, HXNU_SYS_CLOSE, [dup_result as u64, 0, 0, 0, 0, 0]).value;
+        }
+        dup2_result = dispatch(abi, HXNU_SYS_DUP2, [fd, 62, 0, 0, 0, 0]).value;
+        if dup2_result >= 0 {
+            let _ = dispatch(abi, HXNU_SYS_CLOSE, [dup2_result as u64, 0, 0, 0, 0, 0]).value;
         }
         dup3_result = dispatch(abi, HXNU_SYS_DUP3, [fd, 63, O_CLOEXEC, 0, 0, 0]).value;
         if dup3_result >= 0 {
@@ -1077,6 +1113,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
         stat_result,
         readlink_result,
         dup_result,
+        dup2_result,
         dup3_result,
         fcntl_getfd_result,
         fcntl_getfl_result,
@@ -1122,6 +1159,11 @@ fn linux_newfstatat(args: [u64; 6]) -> SyscallOutcome {
 }
 
 fn linux_faccessat(args: [u64; 6]) -> SyscallOutcome {
+    let dirfd = args[0] as i64;
+    access_path_at(dirfd, args[1] as usize, args[2], args[3])
+}
+
+fn linux_faccessat2(args: [u64; 6]) -> SyscallOutcome {
     let dirfd = args[0] as i64;
     access_path_at(dirfd, args[1] as usize, args[2], args[3])
 }
@@ -1384,6 +1426,28 @@ fn dup_fd(args: [u64; 6]) -> SyscallOutcome {
     };
 
     match duplicate_fd(source_fd, 3, DuplicateTarget::LowestAvailable, 0) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn dup2_fd(args: [u64; 6]) -> SyscallOutcome {
+    let source_fd = match parse_fd(args[0]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let target_fd = match parse_fd(args[1]) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if target_fd < 3 {
+        return SyscallOutcome::errno(EBADF);
+    }
+    if source_fd == target_fd {
+        return SyscallOutcome::success(i64::from(target_fd));
+    }
+
+    match duplicate_fd(source_fd, target_fd, DuplicateTarget::Exact, 0) {
         Ok(value) => SyscallOutcome::success(value),
         Err(error) => SyscallOutcome::errno(error),
     }
