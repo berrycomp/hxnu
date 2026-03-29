@@ -1,6 +1,8 @@
+use alloc::alloc::{alloc_zeroed, dealloc};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::cmp::min;
 use core::mem::size_of_val;
@@ -22,6 +24,10 @@ pub const LINUX_SYS_READ: u64 = 0;
 pub const LINUX_SYS_WRITE: u64 = 1;
 pub const LINUX_SYS_CLOSE: u64 = 3;
 pub const LINUX_SYS_FSTAT: u64 = 5;
+pub const LINUX_SYS_MMAP: u64 = 9;
+pub const LINUX_SYS_MPROTECT: u64 = 10;
+pub const LINUX_SYS_MUNMAP: u64 = 11;
+pub const LINUX_SYS_BRK: u64 = 12;
 pub const LINUX_SYS_LSEEK: u64 = 8;
 pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_ACCESS: u64 = 21;
@@ -84,6 +90,10 @@ pub const GHOST_SYS_GETGID: u64 = 28;
 pub const GHOST_SYS_GETEUID: u64 = 29;
 pub const GHOST_SYS_GETEGID: u64 = 30;
 pub const GHOST_SYS_SET_TID_ADDRESS: u64 = 31;
+pub const GHOST_SYS_MMAP: u64 = 32;
+pub const GHOST_SYS_MPROTECT: u64 = 33;
+pub const GHOST_SYS_MUNMAP: u64 = 34;
+pub const GHOST_SYS_BRK: u64 = 35;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -115,6 +125,10 @@ pub const HXNU_SYS_GETGID: u64 = 0x484e_001b;
 pub const HXNU_SYS_GETEUID: u64 = 0x484e_001c;
 pub const HXNU_SYS_GETEGID: u64 = 0x484e_001d;
 pub const HXNU_SYS_SET_TID_ADDRESS: u64 = 0x484e_001e;
+pub const HXNU_SYS_MMAP: u64 = 0x484e_001f;
+pub const HXNU_SYS_MPROTECT: u64 = 0x484e_0020;
+pub const HXNU_SYS_MUNMAP: u64 = 0x484e_0021;
+pub const HXNU_SYS_BRK: u64 = 0x484e_0022;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -143,6 +157,17 @@ const O_CREAT: u64 = 0x40;
 const O_TRUNC: u64 = 0x200;
 const O_APPEND: u64 = 0x400;
 
+const PROT_NONE: u64 = 0;
+const PROT_READ: u64 = 0x1;
+const PROT_WRITE: u64 = 0x2;
+const PROT_EXEC: u64 = 0x4;
+const PROT_MASK: u64 = PROT_READ | PROT_WRITE | PROT_EXEC;
+
+const MAP_SHARED: u64 = 0x01;
+const MAP_PRIVATE: u64 = 0x02;
+const MAP_FIXED: u64 = 0x10;
+const MAP_ANONYMOUS: u64 = 0x20;
+
 const SEEK_SET: i32 = 0;
 const SEEK_CUR: i32 = 1;
 const SEEK_END: i32 = 2;
@@ -166,6 +191,8 @@ const MAX_WRITE_BYTES: usize = 16 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
 const MAX_OPEN_FILES: usize = 64;
+const MMAP_PAGE_SIZE: usize = 4096;
+const DEFAULT_PROCESS_BRK: usize = 0x4000_0000;
 const DEFAULT_PROCESS_UMASK: u32 = 0o022;
 const UMASK_MODE_MASK: u32 = 0o777;
 
@@ -180,6 +207,7 @@ const ENOTTY: i64 = 25;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
+const ENOMEM: i64 = 12;
 
 const STDOUT_FD: u64 = 1;
 const STDERR_FD: u64 = 2;
@@ -233,6 +261,12 @@ impl SyscallOutcome {
 pub struct LinuxBootstrapProbe {
     pub write_result: i64,
     pub openat_result: i64,
+    pub mmap_result: i64,
+    pub mprotect_result: i64,
+    pub munmap_result: i64,
+    pub brk_result: i64,
+    pub brk_set_result: i64,
+    pub brk_restore_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub newfstatat_result: i64,
@@ -284,6 +318,12 @@ impl LinuxBootstrapProbe {
 pub struct GhostBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub mmap_result: i64,
+    pub mprotect_result: i64,
+    pub munmap_result: i64,
+    pub brk_result: i64,
+    pub brk_set_result: i64,
+    pub brk_restore_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -331,6 +371,12 @@ impl GhostBootstrapProbe {
 pub struct HxnuBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub mmap_result: i64,
+    pub mprotect_result: i64,
+    pub munmap_result: i64,
+    pub brk_result: i64,
+    pub brk_set_result: i64,
+    pub brk_restore_result: i64,
     pub ioctl_result: i64,
     pub access_result: i64,
     pub stat_result: i64,
@@ -559,6 +605,50 @@ impl GlobalClearTidTable {
 
 static CLEAR_TID_TABLE: GlobalClearTidTable = GlobalClearTidTable::new();
 
+struct ProcessMapping {
+    process_id: u64,
+    base: usize,
+    len: usize,
+    prot: u64,
+}
+
+struct GlobalMappingTable(UnsafeCell<Option<Vec<ProcessMapping>>>);
+
+unsafe impl Sync for GlobalMappingTable {}
+
+impl GlobalMappingTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessMapping>> {
+        self.0.get()
+    }
+}
+
+static MAPPING_TABLE: GlobalMappingTable = GlobalMappingTable::new();
+
+struct ProcessBrkState {
+    process_id: u64,
+    current_break: usize,
+}
+
+struct GlobalBrkTable(UnsafeCell<Option<Vec<ProcessBrkState>>>);
+
+unsafe impl Sync for GlobalBrkTable {}
+
+impl GlobalBrkTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessBrkState>> {
+        self.0.get()
+    }
+}
+
+static BRK_TABLE: GlobalBrkTable = GlobalBrkTable::new();
+
 pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome {
     match abi {
         SyscallAbi::LinuxBootstrap => dispatch_linux_bootstrap(number, args),
@@ -574,6 +664,10 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_CLOSE => close_fd(args),
         LINUX_SYS_DUP => dup_fd(args),
         LINUX_SYS_FSTAT => fstat_fd(args),
+        LINUX_SYS_MMAP => linux_mmap(args),
+        LINUX_SYS_MPROTECT => process_mprotect(args),
+        LINUX_SYS_MUNMAP => process_munmap(args),
+        LINUX_SYS_BRK => process_brk(args),
         LINUX_SYS_GETDENTS64 => getdents_fd(args),
         LINUX_SYS_IOCTL => ioctl_fd(args),
         LINUX_SYS_LSEEK => seek_fd(args),
@@ -610,6 +704,10 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         GHOST_SYS_READ => read_from_fd(args),
         GHOST_SYS_CLOSE => close_fd(args),
+        GHOST_SYS_MMAP => process_mmap(args),
+        GHOST_SYS_MPROTECT => process_mprotect(args),
+        GHOST_SYS_MUNMAP => process_munmap(args),
+        GHOST_SYS_BRK => process_brk(args),
         GHOST_SYS_DUP => dup_fd(args),
         GHOST_SYS_DUP2 => dup2_fd(args),
         GHOST_SYS_DUP3 => dup3_fd(args),
@@ -645,6 +743,10 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
         HXNU_SYS_READ => read_from_fd(args),
         HXNU_SYS_CLOSE => close_fd(args),
+        HXNU_SYS_MMAP => process_mmap(args),
+        HXNU_SYS_MPROTECT => process_mprotect(args),
+        HXNU_SYS_MUNMAP => process_munmap(args),
+        HXNU_SYS_BRK => process_brk(args),
         HXNU_SYS_DUP => dup_fd(args),
         HXNU_SYS_DUP2 => dup2_fd(args),
         HXNU_SYS_DUP3 => dup3_fd(args),
@@ -702,6 +804,44 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0],
     )
     .value;
+    let mmap_result = dispatch(
+        abi,
+        LINUX_SYS_MMAP,
+        [
+            0,
+            MMAP_PAGE_SIZE as u64,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            u64::MAX,
+            0,
+        ],
+    )
+    .value;
+    let mut mprotect_result = -EINVAL;
+    let mut munmap_result = -EINVAL;
+    if mmap_result >= 0 {
+        let address = mmap_result as u64;
+        mprotect_result = dispatch(
+            abi,
+            LINUX_SYS_MPROTECT,
+            [address, MMAP_PAGE_SIZE as u64, PROT_READ, 0, 0, 0],
+        )
+        .value;
+        munmap_result = dispatch(abi, LINUX_SYS_MUNMAP, [address, MMAP_PAGE_SIZE as u64, 0, 0, 0, 0]).value;
+    }
+    let brk_result = dispatch(abi, LINUX_SYS_BRK, [0, 0, 0, 0, 0, 0]).value;
+    let brk_set_target = if brk_result >= 0 {
+        (brk_result as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    } else {
+        (DEFAULT_PROCESS_BRK as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    };
+    let brk_set_result = dispatch(abi, LINUX_SYS_BRK, [brk_set_target, 0, 0, 0, 0, 0]).value;
+    let brk_restore_target = if brk_result >= 0 {
+        brk_result as u64
+    } else {
+        DEFAULT_PROCESS_BRK as u64
+    };
+    let brk_restore_result = dispatch(abi, LINUX_SYS_BRK, [brk_restore_target, 0, 0, 0, 0, 0]).value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -883,6 +1023,12 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     LinuxBootstrapProbe {
         write_result,
         openat_result,
+        mmap_result,
+        mprotect_result,
+        munmap_result,
+        brk_result,
+        brk_set_result,
+        brk_restore_result,
         ioctl_result,
         access_result,
         newfstatat_result,
@@ -947,6 +1093,44 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, GHOST_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let mmap_result = dispatch(
+        abi,
+        GHOST_SYS_MMAP,
+        [
+            0,
+            MMAP_PAGE_SIZE as u64,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            u64::MAX,
+            0,
+        ],
+    )
+    .value;
+    let mut mprotect_result = -EINVAL;
+    let mut munmap_result = -EINVAL;
+    if mmap_result >= 0 {
+        let address = mmap_result as u64;
+        mprotect_result = dispatch(
+            abi,
+            GHOST_SYS_MPROTECT,
+            [address, MMAP_PAGE_SIZE as u64, PROT_READ, 0, 0, 0],
+        )
+        .value;
+        munmap_result = dispatch(abi, GHOST_SYS_MUNMAP, [address, MMAP_PAGE_SIZE as u64, 0, 0, 0, 0]).value;
+    }
+    let brk_result = dispatch(abi, GHOST_SYS_BRK, [0, 0, 0, 0, 0, 0]).value;
+    let brk_set_target = if brk_result >= 0 {
+        (brk_result as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    } else {
+        (DEFAULT_PROCESS_BRK as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    };
+    let brk_set_result = dispatch(abi, GHOST_SYS_BRK, [brk_set_target, 0, 0, 0, 0, 0]).value;
+    let brk_restore_target = if brk_result >= 0 {
+        brk_result as u64
+    } else {
+        DEFAULT_PROCESS_BRK as u64
+    };
+    let brk_restore_result = dispatch(abi, GHOST_SYS_BRK, [brk_restore_target, 0, 0, 0, 0, 0]).value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -1091,6 +1275,12 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     GhostBootstrapProbe {
         write_result,
         open_result,
+        mmap_result,
+        mprotect_result,
+        munmap_result,
+        brk_result,
+        brk_set_result,
+        brk_restore_result,
         ioctl_result,
         access_result,
         stat_result,
@@ -1144,6 +1334,44 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, HXNU_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let mmap_result = dispatch(
+        abi,
+        HXNU_SYS_MMAP,
+        [
+            0,
+            MMAP_PAGE_SIZE as u64,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            u64::MAX,
+            0,
+        ],
+    )
+    .value;
+    let mut mprotect_result = -EINVAL;
+    let mut munmap_result = -EINVAL;
+    if mmap_result >= 0 {
+        let address = mmap_result as u64;
+        mprotect_result = dispatch(
+            abi,
+            HXNU_SYS_MPROTECT,
+            [address, MMAP_PAGE_SIZE as u64, PROT_READ, 0, 0, 0],
+        )
+        .value;
+        munmap_result = dispatch(abi, HXNU_SYS_MUNMAP, [address, MMAP_PAGE_SIZE as u64, 0, 0, 0, 0]).value;
+    }
+    let brk_result = dispatch(abi, HXNU_SYS_BRK, [0, 0, 0, 0, 0, 0]).value;
+    let brk_set_target = if brk_result >= 0 {
+        (brk_result as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    } else {
+        (DEFAULT_PROCESS_BRK as u64).saturating_add(MMAP_PAGE_SIZE as u64)
+    };
+    let brk_set_result = dispatch(abi, HXNU_SYS_BRK, [brk_set_target, 0, 0, 0, 0, 0]).value;
+    let brk_restore_target = if brk_result >= 0 {
+        brk_result as u64
+    } else {
+        DEFAULT_PROCESS_BRK as u64
+    };
+    let brk_restore_result = dispatch(abi, HXNU_SYS_BRK, [brk_restore_target, 0, 0, 0, 0, 0]).value;
     let mut winsize = LinuxWinsize {
         ws_row: 0,
         ws_col: 0,
@@ -1279,6 +1507,12 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     HxnuBootstrapProbe {
         write_result,
         open_result,
+        mmap_result,
+        mprotect_result,
+        munmap_result,
+        brk_result,
+        brk_set_result,
+        brk_restore_result,
         ioctl_result,
         access_result,
         stat_result,
@@ -1318,6 +1552,10 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
 fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
     let dirfd = args[0] as i64;
     open_path_at(dirfd, args[1] as usize, args[2])
+}
+
+fn linux_mmap(args: [u64; 6]) -> SyscallOutcome {
+    process_mmap(args)
 }
 
 fn linux_getcwd(args: [u64; 6]) -> SyscallOutcome {
@@ -1398,6 +1636,89 @@ fn process_fchdir(args: [u64; 6]) -> SyscallOutcome {
         Ok(value) => SyscallOutcome::success(value),
         Err(error) => SyscallOutcome::errno(error),
     }
+}
+
+fn process_mmap(args: [u64; 6]) -> SyscallOutcome {
+    let length = match usize::try_from(args[1]) {
+        Ok(length) => length,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    let prot = args[2];
+    let flags = args[3];
+    let offset = args[5];
+
+    if length == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if prot != PROT_NONE && prot & !PROT_MASK != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if flags & (MAP_PRIVATE | MAP_SHARED) == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if flags & MAP_FIXED != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if flags & MAP_ANONYMOUS == 0 {
+        return SyscallOutcome::errno(ENOSYS);
+    }
+    if offset as usize % MMAP_PAGE_SIZE != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    match map_anonymous_region(length, prot) {
+        Ok(address) => SyscallOutcome::success(address),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_munmap(args: [u64; 6]) -> SyscallOutcome {
+    let address = args[0] as usize;
+    let length = match usize::try_from(args[1]) {
+        Ok(length) => length,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if length == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    match unmap_region(address, length) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_mprotect(args: [u64; 6]) -> SyscallOutcome {
+    let address = args[0] as usize;
+    let length = match usize::try_from(args[1]) {
+        Ok(length) => length,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    let prot = args[2];
+    if length == 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if prot != PROT_NONE && prot & !PROT_MASK != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    match protect_region(address, length, prot) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
+}
+
+fn process_brk(args: [u64; 6]) -> SyscallOutcome {
+    let requested = args[0] as usize;
+    let current = current_process_brk();
+    if requested == 0 {
+        return to_address_outcome(current);
+    }
+    if requested < DEFAULT_PROCESS_BRK {
+        return to_address_outcome(current);
+    }
+    set_process_brk(requested);
+    to_address_outcome(requested)
 }
 
 fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
@@ -1945,6 +2266,8 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     purge_working_directory_for_process(process_id);
     purge_process_umask(process_id);
     purge_process_clear_tid_address(process_id);
+    purge_process_mappings(process_id);
+    purge_process_brk(process_id);
     SyscallOutcome {
         value: 0,
         action: SyscallAction::ExitGroup { status },
@@ -2239,6 +2562,110 @@ fn set_process_clear_tid_address(address: usize) {
     }
 
     table.push(ProcessClearTidAddress { process_id, address });
+}
+
+fn current_process_brk() -> usize {
+    let process_id = current_process_id_value();
+    let table = brk_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.current_break;
+    }
+
+    table.push(ProcessBrkState {
+        process_id,
+        current_break: DEFAULT_PROCESS_BRK,
+    });
+    DEFAULT_PROCESS_BRK
+}
+
+fn set_process_brk(current_break: usize) {
+    let process_id = current_process_id_value();
+    let table = brk_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.current_break = current_break;
+        return;
+    }
+
+    table.push(ProcessBrkState {
+        process_id,
+        current_break,
+    });
+}
+
+fn map_anonymous_region(length: usize, prot: u64) -> Result<i64, i64> {
+    let length = align_up_to_page(length)?;
+    let layout = Layout::from_size_align(length, MMAP_PAGE_SIZE).map_err(|_| EINVAL)?;
+    let ptr = unsafe { alloc_zeroed(layout) };
+    if ptr.is_null() {
+        return Err(ENOMEM);
+    }
+
+    let process_id = current_process_id_value();
+    let address = ptr as usize;
+    let address_i64 = match i64::try_from(address) {
+        Ok(value) => value,
+        Err(_) => {
+            unsafe { dealloc(ptr, layout) };
+            return Err(ERANGE);
+        }
+    };
+
+    let table = mapping_table_mut();
+    table.push(ProcessMapping {
+        process_id,
+        base: address,
+        len: length,
+        prot: prot & PROT_MASK,
+    });
+    Ok(address_i64)
+}
+
+fn unmap_region(address: usize, length: usize) -> Result<i64, i64> {
+    let length = align_up_to_page(length)?;
+    let process_id = current_process_id_value();
+    let table = mapping_table_mut();
+    let index = table
+        .iter()
+        .position(|mapping| mapping.process_id == process_id && mapping.base == address && mapping.len == length)
+        .ok_or(EINVAL)?;
+    let mapping = table.remove(index);
+    free_mapping(mapping)?;
+    Ok(0)
+}
+
+fn protect_region(address: usize, length: usize, prot: u64) -> Result<i64, i64> {
+    let length = align_up_to_page(length)?;
+    let process_id = current_process_id_value();
+    let table = mapping_table_mut();
+    let mapping = table
+        .iter_mut()
+        .find(|mapping| mapping.process_id == process_id && mapping.base == address && mapping.len == length)
+        .ok_or(EINVAL)?;
+    mapping.prot = prot & PROT_MASK;
+    Ok(0)
+}
+
+fn align_up_to_page(value: usize) -> Result<usize, i64> {
+    if value == 0 {
+        return Err(EINVAL);
+    }
+    value
+        .checked_add(MMAP_PAGE_SIZE.saturating_sub(1))
+        .map(|value| value & !(MMAP_PAGE_SIZE - 1))
+        .ok_or(ERANGE)
+}
+
+fn to_address_outcome(address: usize) -> SyscallOutcome {
+    match i64::try_from(address) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn free_mapping(mapping: ProcessMapping) -> Result<(), i64> {
+    let layout = Layout::from_size_align(mapping.len, MMAP_PAGE_SIZE).map_err(|_| EINVAL)?;
+    unsafe { dealloc(mapping.base as *mut u8, layout) };
+    Ok(())
 }
 
 #[derive(Copy, Clone)]
@@ -2567,6 +2994,24 @@ fn purge_process_clear_tid_address(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
+fn purge_process_mappings(process_id: u64) {
+    let table = mapping_table_mut();
+    let mut index = 0usize;
+    while index < table.len() {
+        if table[index].process_id != process_id {
+            index = index.saturating_add(1);
+            continue;
+        }
+        let mapping = table.remove(index);
+        let _ = free_mapping(mapping);
+    }
+}
+
+fn purge_process_brk(process_id: u64) {
+    let table = brk_table_mut();
+    table.retain(|entry| entry.process_id != process_id);
+}
+
 fn fd_table_mut() -> &'static mut FdTable {
     let slot = unsafe { &mut *FD_TABLE.get() };
     if slot.is_none() {
@@ -2597,6 +3042,22 @@ fn clear_tid_table_mut() -> &'static mut Vec<ProcessClearTidAddress> {
         *slot = Some(Vec::new());
     }
     slot.as_mut().expect("clear-tid table initialized")
+}
+
+fn mapping_table_mut() -> &'static mut Vec<ProcessMapping> {
+    let slot = unsafe { &mut *MAPPING_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("mapping table initialized")
+}
+
+fn brk_table_mut() -> &'static mut Vec<ProcessBrkState> {
+    let slot = unsafe { &mut *BRK_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("brk table initialized")
 }
 
 fn copyin_c_string(ptr: usize, max_len: usize) -> Result<String, i64> {
