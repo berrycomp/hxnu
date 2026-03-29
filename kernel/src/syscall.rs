@@ -23,6 +23,7 @@ pub const LINUX_SYS_WRITE: u64 = 1;
 pub const LINUX_SYS_CLOSE: u64 = 3;
 pub const LINUX_SYS_FSTAT: u64 = 5;
 pub const LINUX_SYS_LSEEK: u64 = 8;
+pub const LINUX_SYS_ACCESS: u64 = 21;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
@@ -35,6 +36,7 @@ pub const LINUX_SYS_EXIT_GROUP: u64 = 231;
 pub const LINUX_SYS_OPENAT: u64 = 257;
 pub const LINUX_SYS_NEWFSTATAT: u64 = 262;
 pub const LINUX_SYS_READLINKAT: u64 = 267;
+pub const LINUX_SYS_FACCESSAT: u64 = 269;
 
 pub const GHOST_SYS_WRITE: u64 = 1;
 pub const GHOST_SYS_YIELD: u64 = 2;
@@ -52,6 +54,7 @@ pub const GHOST_SYS_FSTAT: u64 = 13;
 pub const GHOST_SYS_STAT: u64 = 14;
 pub const GHOST_SYS_GETDENTS: u64 = 15;
 pub const GHOST_SYS_READLINK: u64 = 16;
+pub const GHOST_SYS_ACCESS: u64 = 17;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -68,12 +71,19 @@ pub const HXNU_SYS_FSTAT: u64 = 0x484e_000c;
 pub const HXNU_SYS_STAT: u64 = 0x484e_000d;
 pub const HXNU_SYS_GETDENTS: u64 = 0x484e_000e;
 pub const HXNU_SYS_READLINK: u64 = 0x484e_000f;
+pub const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
 const LINUX_CLOCK_REALTIME: i32 = 0;
 const LINUX_CLOCK_MONOTONIC: i32 = 1;
 const AT_FDCWD: i64 = -100;
+const AT_EACCESS: u64 = 0x200;
+
+const F_OK: u64 = 0;
+const X_OK: u64 = 1;
+const W_OK: u64 = 2;
+const R_OK: u64 = 4;
 
 const O_ACCMODE: u64 = 0x3;
 const O_RDONLY: u64 = 0;
@@ -111,6 +121,7 @@ const EINVAL: i64 = 22;
 const ENOSYS: i64 = 38;
 const ERANGE: i64 = 34;
 const ENOENT: i64 = 2;
+const EACCES: i64 = 13;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
@@ -167,7 +178,9 @@ impl SyscallOutcome {
 pub struct LinuxBootstrapProbe {
     pub write_result: i64,
     pub openat_result: i64,
+    pub access_result: i64,
     pub newfstatat_result: i64,
+    pub faccessat_result: i64,
     pub readlinkat_result: i64,
     pub read_result: i64,
     pub fstat_result: i64,
@@ -198,6 +211,7 @@ impl LinuxBootstrapProbe {
 pub struct GhostBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
     pub read_result: i64,
@@ -227,6 +241,7 @@ impl GhostBootstrapProbe {
 pub struct HxnuBootstrapProbe {
     pub write_result: i64,
     pub open_result: i64,
+    pub access_result: i64,
     pub stat_result: i64,
     pub readlink_result: i64,
     pub read_result: i64,
@@ -380,9 +395,11 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_FSTAT => fstat_fd(args),
         LINUX_SYS_GETDENTS64 => getdents_fd(args),
         LINUX_SYS_LSEEK => seek_fd(args),
+        LINUX_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         LINUX_SYS_OPENAT => linux_openat(args),
         LINUX_SYS_NEWFSTATAT => linux_newfstatat(args),
         LINUX_SYS_READLINKAT => linux_readlinkat(args),
+        LINUX_SYS_FACCESSAT => linux_faccessat(args),
         LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
         LINUX_SYS_GETPID => process_id(),
         LINUX_SYS_GETPPID => process_parent_id(),
@@ -404,6 +421,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_GETDENTS => getdents_fd(args),
         GHOST_SYS_STAT => stat_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         GHOST_SYS_READLINK => readlink_path_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2]),
+        GHOST_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         GHOST_SYS_SEEK => seek_fd(args),
         GHOST_SYS_YIELD => SyscallOutcome::success(0),
         GHOST_SYS_GETPID => process_id(),
@@ -426,6 +444,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_GETDENTS => getdents_fd(args),
         HXNU_SYS_STAT => stat_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         HXNU_SYS_READLINK => readlink_path_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2]),
+        HXNU_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
@@ -465,6 +484,7 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
         [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0],
     )
     .value;
+    let access_result = dispatch(abi, LINUX_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
     let mut stat = LinuxStat::empty();
     let newfstatat_result = dispatch(
         abi,
@@ -477,6 +497,12 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
             0,
             0,
         ],
+    )
+    .value;
+    let faccessat_result = dispatch(
+        abi,
+        LINUX_SYS_FACCESSAT,
+        [AT_FDCWD as u64, OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0],
     )
     .value;
     let mut readlink_buffer = [0u8; 128];
@@ -572,7 +598,9 @@ pub fn run_linux_bootstrap_probe() -> LinuxBootstrapProbe {
     LinuxBootstrapProbe {
         write_result,
         openat_result,
+        access_result,
         newfstatat_result,
+        faccessat_result,
         readlinkat_result,
         read_result,
         fstat_result,
@@ -615,6 +643,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, GHOST_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let access_result = dispatch(abi, GHOST_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
     let mut stat = LinuxStat::empty();
     let stat_result = dispatch(
         abi,
@@ -697,6 +726,7 @@ pub fn run_ghost_bootstrap_probe() -> GhostBootstrapProbe {
     GhostBootstrapProbe {
         write_result,
         open_result,
+        access_result,
         stat_result,
         readlink_result,
         read_result,
@@ -731,6 +761,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     )
     .value;
     let open_result = dispatch(abi, HXNU_SYS_OPEN, [OPEN_PATH.as_ptr() as u64, 0, 0, 0, 0, 0]).value;
+    let access_result = dispatch(abi, HXNU_SYS_ACCESS, [OPEN_PATH.as_ptr() as u64, R_OK, 0, 0, 0, 0]).value;
     let mut stat = LinuxStat::empty();
     let stat_result = dispatch(
         abi,
@@ -804,6 +835,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     HxnuBootstrapProbe {
         write_result,
         open_result,
+        access_result,
         stat_result,
         readlink_result,
         read_result,
@@ -830,6 +862,11 @@ fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
 fn linux_newfstatat(args: [u64; 6]) -> SyscallOutcome {
     let dirfd = args[0] as i64;
     stat_path_at(dirfd, args[1] as usize, args[2], args[3])
+}
+
+fn linux_faccessat(args: [u64; 6]) -> SyscallOutcome {
+    let dirfd = args[0] as i64;
+    access_path_at(dirfd, args[1] as usize, args[2], args[3])
 }
 
 fn linux_readlinkat(args: [u64; 6]) -> SyscallOutcome {
@@ -873,6 +910,31 @@ fn stat_path_at(dirfd: i64, path_ptr: usize, stat_ptr: u64, flags: u64) -> Sysca
     };
     if let Err(error) = copyout_struct(stat_ptr, &stat) {
         return SyscallOutcome::errno(error);
+    }
+
+    SyscallOutcome::success(0)
+}
+
+fn access_path_at(dirfd: i64, path_ptr: usize, mode: u64, flags: u64) -> SyscallOutcome {
+    if flags & !AT_EACCESS != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+    if mode & !(R_OK | W_OK | X_OK | F_OK) != 0 {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let node = match lookup_node_at(dirfd, path_ptr) {
+        Ok(node) => node,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if mode == F_OK {
+        return SyscallOutcome::success(0);
+    }
+    if mode & W_OK != 0 {
+        return SyscallOutcome::errno(EACCES);
+    }
+    if mode & X_OK != 0 && !is_executable_node(node.kind, node.executable) {
+        return SyscallOutcome::errno(EACCES);
     }
 
     SyscallOutcome::success(0)
@@ -1237,6 +1299,14 @@ fn mode_from_node(kind: VfsNodeKind, executable: bool) -> u32 {
             }
         }
         VfsNodeKind::Device => S_IFCHR | MODE_CHARACTER_DEVICE,
+    }
+}
+
+fn is_executable_node(kind: VfsNodeKind, executable: bool) -> bool {
+    match kind {
+        VfsNodeKind::Directory => true,
+        VfsNodeKind::File => executable,
+        VfsNodeKind::Device => false,
     }
 }
 
