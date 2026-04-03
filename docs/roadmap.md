@@ -71,6 +71,7 @@ Current status:
 - `mm/compress` bounded header/checksum codec path with `Zero/Same/Raw` classes and deterministic `Raw` fallback is online on `x86_64`
 - `mm/compress/store` fixed-capacity compressed-page slot store and accounting facade are online on `x86_64`
 - `mm/pager` reclaim/restore path is online via compressed store with bootstrap roundtrip smoke on `x86_64`
+- `/proc/compress` endpoint is online with compression runtime/store/pager observability counters on `x86_64`
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)

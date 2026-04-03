@@ -10,7 +10,7 @@ use crate::smp;
 use crate::time;
 
 const PROCFS_DIRECTORIES: [&str; 2] = ["/", "/proc"];
-const PROCFS_FILES: [&str; 7] = [
+const PROCFS_FILES: [&str; 8] = [
     "/proc/version",
     "/proc/uptime",
     "/proc/meminfo",
@@ -18,6 +18,7 @@ const PROCFS_FILES: [&str; 7] = [
     "/proc/schedstat",
     "/proc/topology",
     "/proc/initexec",
+    "/proc/compress",
 ];
 
 struct GlobalProcfs(UnsafeCell<Option<ProcfsState>>);
@@ -107,6 +108,7 @@ pub fn read(path: &str) -> Option<String> {
         "/proc/schedstat" => Some(render_schedstat()),
         "/proc/topology" => Some(render_topology(state)),
         "/proc/initexec" => Some(init_exec::render_status()),
+        "/proc/compress" => Some(render_compress()),
         _ => None,
     }
 }
@@ -239,6 +241,76 @@ fn render_topology(state: &ProcfsState) -> String {
         let _ = writeln!(text, "cpus 1");
         let _ = writeln!(text, "online 1");
     }
+    text
+}
+
+fn render_compress() -> String {
+    let mut text = String::new();
+    let runtime = mm::compress::summary();
+    let codec = mm::compress::stats();
+    let store = mm::compress::store::stats();
+    let pager = mm::pager::stats();
+
+    let _ = writeln!(text, "runtime_initialized {}", yes_no(mm::compress::is_initialized()));
+    let _ = writeln!(text, "runtime_backend {}", runtime.backend);
+    let _ = writeln!(text, "runtime_profile {}", runtime.profile);
+    let _ = writeln!(text, "runtime_profile_version {}", runtime.profile_version);
+    let _ = writeln!(text, "runtime_page_bytes {}", runtime.page_bytes);
+    let _ = writeln!(text, "runtime_header_bytes {}", runtime.encoded_header_bytes);
+    let _ = writeln!(text, "runtime_max_encoded_page_bytes {}", runtime.max_encoded_page_bytes);
+    let _ = writeln!(text, "runtime_dictionary_entries {}", runtime.static_dictionary_entries);
+    let _ = writeln!(text, "runtime_pattern_entries {}", runtime.static_pattern_entries);
+
+    let _ = writeln!(text, "codec_encoded_pages {}", codec.encoded_pages);
+    let _ = writeln!(text, "codec_decoded_pages {}", codec.decoded_pages);
+    let _ = writeln!(text, "codec_zero_pages {}", codec.zero_pages);
+    let _ = writeln!(text, "codec_same_pages {}", codec.same_pages);
+    let _ = writeln!(text, "codec_sxrc_pages {}", codec.sxrc_pages);
+    let _ = writeln!(text, "codec_raw_pages {}", codec.raw_pages);
+    let _ = writeln!(text, "codec_raw_fallback_pages {}", codec.fallback_raw_pages);
+    let _ = writeln!(text, "codec_encode_failures {}", codec.encode_failures);
+    let _ = writeln!(text, "codec_decode_failures {}", codec.decode_failures);
+
+    let _ = writeln!(text, "store_initialized {}", yes_no(mm::compress::store::is_initialized()));
+    let _ = writeln!(text, "store_capacity_pages {}", store.capacity_pages);
+    let _ = writeln!(text, "store_capacity_bytes {}", store.capacity_bytes);
+    let _ = writeln!(text, "store_stored_pages {}", store.stored_pages);
+    let _ = writeln!(text, "store_stored_zero_pages {}", store.stored_zero_pages);
+    let _ = writeln!(text, "store_stored_same_pages {}", store.stored_same_pages);
+    let _ = writeln!(text, "store_stored_sxrc_pages {}", store.stored_sxrc_pages);
+    let _ = writeln!(text, "store_stored_raw_pages {}", store.stored_raw_pages);
+    let _ = writeln!(text, "store_current_encoded_bytes {}", store.current_encoded_bytes);
+    let _ = writeln!(text, "store_total_input_bytes {}", store.total_input_bytes);
+    let _ = writeln!(text, "store_total_encoded_bytes {}", store.total_encoded_bytes);
+    let _ = writeln!(text, "store_requests {}", store.store_requests);
+    let _ = writeln!(text, "store_successes {}", store.store_successes);
+    let _ = writeln!(text, "store_load_requests {}", store.load_requests);
+    let _ = writeln!(text, "store_load_successes {}", store.load_successes);
+    let _ = writeln!(text, "store_load_misses {}", store.load_misses);
+    let _ = writeln!(text, "store_replacements {}", store.replacements);
+    let _ = writeln!(text, "store_evictions {}", store.evictions);
+    let _ = writeln!(text, "store_encode_failures {}", store.encode_failures);
+    let _ = writeln!(text, "store_decode_failures {}", store.decode_failures);
+
+    let _ = writeln!(text, "pager_initialized {}", yes_no(mm::pager::is_initialized()));
+    let _ = writeln!(text, "pager_reclaim_requests {}", pager.reclaim_requests);
+    let _ = writeln!(text, "pager_reclaim_successes {}", pager.reclaim_successes);
+    let _ = writeln!(text, "pager_reclaim_failures {}", pager.reclaim_failures);
+    let _ = writeln!(text, "pager_restore_requests {}", pager.restore_requests);
+    let _ = writeln!(text, "pager_restore_successes {}", pager.restore_successes);
+    let _ = writeln!(text, "pager_restore_failures {}", pager.restore_failures);
+    let _ = writeln!(text, "pager_restore_misses {}", pager.restore_misses);
+    let _ = writeln!(text, "pager_verify_failures {}", pager.verify_failures);
+    let _ = writeln!(text, "pager_reclaimed_zero_pages {}", pager.reclaimed_zero_pages);
+    let _ = writeln!(text, "pager_reclaimed_same_pages {}", pager.reclaimed_same_pages);
+    let _ = writeln!(text, "pager_reclaimed_sxrc_pages {}", pager.reclaimed_sxrc_pages);
+    let _ = writeln!(text, "pager_reclaimed_raw_pages {}", pager.reclaimed_raw_pages);
+    let _ = writeln!(text, "pager_restored_zero_pages {}", pager.restored_zero_pages);
+    let _ = writeln!(text, "pager_restored_same_pages {}", pager.restored_same_pages);
+    let _ = writeln!(text, "pager_restored_sxrc_pages {}", pager.restored_sxrc_pages);
+    let _ = writeln!(text, "pager_restored_raw_pages {}", pager.restored_raw_pages);
+    let _ = writeln!(text, "pager_smoke_runs {}", pager.smoke_runs);
+    let _ = writeln!(text, "pager_smoke_successes {}", pager.smoke_successes);
     text
 }
 
