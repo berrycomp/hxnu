@@ -66,6 +66,12 @@ Current status:
 - Bootstrap `fork/vfork/clone` synthetic child-spawn and `wait4` child-reap facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `exec` preflight (`execve/execveat` for Linux, `exec` for Ghost/HXNU) now validates path + `argv/envp` + loader compatibility before returning `ENOSYS` pending real image replacement
 - `/proc/exec` endpoint now reports last exec preflight status (`ready/error`), path, mount, format, loader geometry, argument/environment sizing counters, and deferred `CLOEXEC` teardown forecast
+- ELF64 executable inspection now supports both little-endian and big-endian headers/program headers (`EI_DATA`) while keeping ELFCLASS64 enforcement
+- Architecture-neutral vector capability facade is online with `x86_64` CPUID/XGETBV probing (`avx/avx2/avx512*`) and eager context policy selection (`xsave` or `fxsave`)
+- `x86_64` scheduler context-switch path now preserves vector register state with eager `xsave/xrstor` or `fxsave/fxrstor` flow when available
+- HXNU-native `cpucaps` syscall (`HXNU_SYS_CPUCAPS`) is online and exports stable base/ext feature bitmaps for user-space probing
+- `/proc/vector` endpoint is online for vector capability/policy/context observability
+- Accelerator driver contract bootstrap is online (`AccelDriverOps`), with CELL/B.E.-oriented SPE stub offload driver and `/proc/accel` telemetry
 - Portability-level matrix for Linux/Unix-style userland bring-up is documented in `docs/portability-matrix.md`
 - SXRC-derived memory compression integration contract is documented in `docs/sxrc-derivative-plan.md`
 - `tools/sxrc-profile-gen` host-side skeleton and generated kernel profile artifact (`kernel/src/mm/compress/profile_generated.rs`) are online

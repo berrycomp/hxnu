@@ -14,6 +14,7 @@ use crate::sched;
 use crate::time;
 use crate::tty;
 use crate::uaccess::{self, UserCopyError};
+use crate::vector;
 use crate::vfs;
 use crate::vfs::{ExecutableFormat, VfsMountKind, VfsNodeKind};
 
@@ -222,6 +223,7 @@ pub const HXNU_SYS_CLONE: u64 = 0x484e_003d;
 pub const HXNU_SYS_FORK: u64 = 0x484e_003e;
 pub const HXNU_SYS_VFORK: u64 = 0x484e_003f;
 pub const HXNU_SYS_EXEC: u64 = 0x484e_0040;
+pub const HXNU_SYS_CPUCAPS: u64 = 0x484e_0041;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -1501,6 +1503,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_FORK => process_fork(args),
         HXNU_SYS_VFORK => process_vfork(args),
         HXNU_SYS_EXEC => process_exec(args),
+        HXNU_SYS_CPUCAPS => process_cpucaps(args),
         HXNU_SYS_WAIT4 => process_wait4(args),
         HXNU_SYS_PROCESS_PARENT => process_parent_id(),
         HXNU_SYS_SETPGID => process_setpgid(args),
@@ -4551,6 +4554,25 @@ fn process_getrandom(args: [u64; 6]) -> SyscallOutcome {
         Ok(value) => SyscallOutcome::success(value),
         Err(_) => SyscallOutcome::errno(ERANGE),
     }
+}
+
+fn process_cpucaps(args: [u64; 6]) -> SyscallOutcome {
+    let base_out_ptr = args[0] as usize;
+    let ext_out_ptr = args[1] as usize;
+    let caps = vector::caps();
+
+    if base_out_ptr != 0 {
+        if let Err(error) = copyout_struct(base_out_ptr, &caps.base_bits) {
+            return SyscallOutcome::errno(error);
+        }
+    }
+    if ext_out_ptr != 0 {
+        if let Err(error) = copyout_struct(ext_out_ptr, &caps.ext_bits) {
+            return SyscallOutcome::errno(error);
+        }
+    }
+
+    SyscallOutcome::success(0)
 }
 
 fn process_execve(args: [u64; 6]) -> SyscallOutcome {

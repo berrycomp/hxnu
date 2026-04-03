@@ -5,6 +5,7 @@
 
 extern crate alloc;
 
+mod accel;
 mod acpi;
 mod arch;
 mod block;
@@ -28,6 +29,7 @@ mod syscall;
 mod time;
 mod tty;
 mod uaccess;
+mod vector;
 mod vfs;
 
 use alloc::boxed::Box;
@@ -361,6 +363,16 @@ pub extern "C" fn _start() -> ! {
             brand,
         );
     }
+    let vector_caps = vector::initialize();
+    kprintln_style!(
+        crate::tty::ConsoleStyle::Muted,
+        "HXNU: vector policy={} mode={} base={:#018x} ext={:#018x} xsave-mask={:#018x}",
+        vector_caps.policy.as_str(),
+        vector_caps.context_mode.as_str(),
+        vector_caps.base_bits,
+        vector_caps.ext_bits,
+        vector_caps.xsave_mask,
+    );
     if let Some(topology) = cpu_info.topology {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
@@ -576,6 +588,22 @@ pub extern "C" fn _start() -> ! {
             );
             halt();
         }
+    }
+    match accel::initialize() {
+        Ok(summary) => kprintln_style!(
+            crate::tty::ConsoleStyle::Success,
+            "HXNU: accel online drivers={} pending={} submitted={} completed={} canceled={}",
+            summary.driver_count,
+            summary.pending_jobs,
+            summary.submitted_jobs,
+            summary.completed_jobs,
+            summary.canceled_jobs,
+        ),
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Warning,
+            "HXNU: accel offline reason={}",
+            error.as_str(),
+        ),
     }
     match devfs::initialize() {
         Ok(summary) => kprintln_style!(
@@ -1260,6 +1288,20 @@ pub extern "C" fn _start() -> ! {
             crate::tty::ConsoleStyle::Muted,
             "HXNU: procfs preview exec={}",
             exec_status,
+        );
+    }
+    if let Some(vector_status) = vfs::preview("/proc/vector", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: procfs preview vector={}",
+            vector_status,
+        );
+    }
+    if let Some(accel_status) = vfs::preview("/proc/accel", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: procfs preview accel={}",
+            accel_status,
         );
     }
     if let Some(devlist) = vfs::preview("/dev", 80) {

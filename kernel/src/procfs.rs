@@ -2,6 +2,7 @@ use alloc::string::String;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
+use crate::accel;
 use crate::arch;
 use crate::block;
 use crate::fat;
@@ -11,13 +12,16 @@ use crate::sched;
 use crate::smp;
 use crate::syscall;
 use crate::time;
+use crate::vector;
 
 const PROCFS_DIRECTORIES: [&str; 2] = ["/", "/proc"];
-const PROCFS_FILES: [&str; 11] = [
+const PROCFS_FILES: [&str; 13] = [
     "/proc/version",
     "/proc/uptime",
     "/proc/meminfo",
     "/proc/cpuinfo",
+    "/proc/vector",
+    "/proc/accel",
     "/proc/schedstat",
     "/proc/topology",
     "/proc/initexec",
@@ -111,6 +115,8 @@ pub fn read(path: &str) -> Option<String> {
         "/proc/uptime" => Some(render_uptime()),
         "/proc/meminfo" => Some(render_meminfo()),
         "/proc/cpuinfo" => Some(render_cpuinfo(state)),
+        "/proc/vector" => Some(render_vector()),
+        "/proc/accel" => Some(render_accel()),
         "/proc/schedstat" => Some(render_schedstat()),
         "/proc/topology" => Some(render_topology(state)),
         "/proc/initexec" => Some(init_exec::render_status()),
@@ -193,6 +199,41 @@ fn render_cpuinfo(state: &ProcfsState) -> String {
         let _ = writeln!(text, "flags\t\t: {}", flags);
     }
 
+    text
+}
+
+fn render_vector() -> String {
+    vector::render_proc_status()
+}
+
+fn render_accel() -> String {
+    let mut text = String::new();
+    let summary = accel::summary();
+    let _ = writeln!(text, "initialized {}", yes_no(accel::is_initialized()));
+    let _ = writeln!(text, "driver_count {}", summary.driver_count);
+    let _ = writeln!(text, "pending_jobs {}", summary.pending_jobs);
+    let _ = writeln!(text, "submitted_jobs {}", summary.submitted_jobs);
+    let _ = writeln!(text, "completed_jobs {}", summary.completed_jobs);
+    let _ = writeln!(text, "canceled_jobs {}", summary.canceled_jobs);
+
+    let mut index = 0usize;
+    while index < accel::driver_count() {
+        if let Some(driver) = accel::driver(index) {
+            let caps = (driver.caps)();
+            let _ = writeln!(
+                text,
+                "driver{} name={} kind={} probe={} queue={} mailbox={} dma={}",
+                index,
+                driver.driver_name,
+                driver.kind.as_str(),
+                yes_no((driver.probe)()),
+                caps.queue_depth,
+                yes_no(caps.mailbox),
+                yes_no(caps.dma),
+            );
+        }
+        index += 1;
+    }
     text
 }
 
@@ -460,6 +501,7 @@ fn cpu_flags(cpu: &arch::x86_64::CpuInfo) -> String {
     if cpu.hypervisor_present {
         append_flag(&mut text, "hypervisor");
     }
+    vector::append_cpuinfo_flags(&mut text);
     text
 }
 
