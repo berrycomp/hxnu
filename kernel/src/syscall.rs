@@ -1287,6 +1287,10 @@ struct ExecPreflightRecord {
     argv_count: usize,
     env_count: usize,
     total_bytes: usize,
+    program_header_count: usize,
+    load_segment_count: usize,
+    interpreter_resolved: bool,
+    cloexec_would_close: usize,
     flags: u64,
     status: ExecPreflightStatus,
 }
@@ -1551,6 +1555,14 @@ pub fn render_exec_status() -> String {
     let _ = writeln!(text, "argv_count {}", record.argv_count);
     let _ = writeln!(text, "env_count {}", record.env_count);
     let _ = writeln!(text, "arg_env_bytes {}", record.total_bytes);
+    let _ = writeln!(text, "program_headers {}", record.program_header_count);
+    let _ = writeln!(text, "load_segments {}", record.load_segment_count);
+    let _ = writeln!(
+        text,
+        "interpreter_resolved {}",
+        if record.interpreter_resolved { "yes" } else { "no" },
+    );
+    let _ = writeln!(text, "cloexec_would_close {}", record.cloexec_would_close);
     let _ = writeln!(text, "flags {:#x}", record.flags);
     text
 }
@@ -4571,6 +4583,10 @@ struct ExecPreflightTelemetry {
     argv_count: usize,
     env_count: usize,
     total_bytes: usize,
+    program_header_count: usize,
+    load_segment_count: usize,
+    interpreter_resolved: bool,
+    cloexec_would_close: usize,
     flags: u64,
 }
 
@@ -4584,6 +4600,10 @@ impl ExecPreflightTelemetry {
             argv_count: 0,
             env_count: 0,
             total_bytes: 0,
+            program_header_count: 0,
+            load_segment_count: 0,
+            interpreter_resolved: false,
+            cloexec_would_close: 0,
             flags,
         }
     }
@@ -4652,6 +4672,9 @@ fn process_exec_at(
         Err(error) => fail_exec!(map_exec_load_prep_error(error)),
     };
     telemetry.format = prep.format;
+    telemetry.program_header_count = prep.program_header_count;
+    telemetry.load_segment_count = prep.load_segment_count;
+    telemetry.interpreter_resolved = prep.interpreter_resolved;
     match prep.format {
         ExecutableFormat::Elf => {}
         ExecutableFormat::ShebangScript => {
@@ -4661,17 +4684,12 @@ fn process_exec_at(
         }
         ExecutableFormat::Text | ExecutableFormat::Unknown => fail_exec!(ENOEXEC),
     }
-
-    let _ = (
-        prep.program_header_count,
-        prep.load_segment_count,
-        argv.count,
-        envp.count,
-    );
+    telemetry.cloexec_would_close = cloexec_descriptor_count_for_process(process_id);
     record_exec_preflight(&telemetry, ExecPreflightStatus::Ready);
 
     // Phase 3.5 preflight: validates path/argv/envp and loader compatibility.
     // Process image replacement and non-returning handoff are still pending.
+    // CLOEXEC teardown will happen as part of the real handoff path.
     SyscallOutcome::errno(ENOSYS)
 }
 
@@ -4783,6 +4801,10 @@ fn record_exec_preflight(telemetry: &ExecPreflightTelemetry, status: ExecPreflig
         argv_count: telemetry.argv_count,
         env_count: telemetry.env_count,
         total_bytes: telemetry.total_bytes,
+        program_header_count: telemetry.program_header_count,
+        load_segment_count: telemetry.load_segment_count,
+        interpreter_resolved: telemetry.interpreter_resolved,
+        cloexec_would_close: telemetry.cloexec_would_close,
         flags: telemetry.flags,
         status,
     });
@@ -6662,6 +6684,15 @@ fn open_file_path_and_kind_for_process(fd: i32) -> Result<(String, VfsNodeKind),
         .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
         .ok_or(EBADF)?;
     Ok((open.path.clone(), open.kind))
+}
+
+fn cloexec_descriptor_count_for_process(process_id: u64) -> usize {
+    let table = fd_table_mut();
+    table
+        .files
+        .iter()
+        .filter(|file| file.owner_process_id == process_id && file.fd_flags & FD_CLOEXEC != 0)
+        .count()
 }
 
 fn alloc_open_file(
