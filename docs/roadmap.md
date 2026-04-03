@@ -65,6 +65,7 @@ Current status:
 - Bootstrap `pipe/pipe2` and `poll/ppoll` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `fork/vfork/clone` synthetic child-spawn and `wait4` child-reap facades are online for Linux/Ghost/HXNU personalities
 - Portability-level matrix for Linux/Unix-style userland bring-up is documented in `docs/portability-matrix.md`
+- SXRC-derived memory compression integration contract is documented in `docs/sxrc-derivative-plan.md`
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)
@@ -125,6 +126,7 @@ Cross-repo status (as of 2026-03-29):
 - Driver loading infrastructure for external driver directories
 - Driver discovery and load policy for filesystem-backed modules
 - Driver trust and load policy
+- SXRC-derived compressed-page cache and reclaim backend
 - ext4 driver
 - exFAT driver
 
