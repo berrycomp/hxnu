@@ -27,6 +27,7 @@ mod serial;
 mod smp;
 mod syscall;
 mod time;
+mod tmpfs;
 mod tty;
 mod uaccess;
 mod vector;
@@ -676,6 +677,24 @@ pub extern "C" fn _start() -> ! {
             "HXNU: fat offline reason={}",
             error.as_str()
         ),
+    }
+    match tmpfs::initialize() {
+        Ok(summary) => kprintln_style!(
+            crate::tty::ConsoleStyle::Success,
+            "HXNU: tmpfs online directories={} files={} entries={} bytes={}",
+            summary.directory_count,
+            summary.file_count,
+            summary.entry_count,
+            summary.total_bytes,
+        ),
+        Err(error) => {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Error,
+                "HXNU: tmpfs offline reason={}",
+                error.as_str()
+            );
+            halt();
+        }
     }
     match vfs::initialize() {
         Ok(summary) => kprintln_style!(

@@ -12,12 +12,16 @@ use crate::initrd;
 use crate::initrd::InitrdNodeKind;
 use crate::procfs;
 use crate::procfs::ProcfsNodeKind;
+use crate::tmpfs;
+use crate::tmpfs::TmpfsNodeKind;
 
 const ROOT_PATH: &str = "/";
 const DEV_ROOT_PATH: &str = "/dev";
 const PROC_ROOT_PATH: &str = "/proc";
 const INITRD_ROOT_PATH: &str = "/initrd";
 const FAT_ROOT_PATH: &str = "/fat";
+const TMP_ROOT_PATH: &str = "/tmp";
+const RUN_ROOT_PATH: &str = "/run";
 const INIT_PATH: &str = "/initrd/init";
 
 struct GlobalVfs(UnsafeCell<Option<VfsState>>);
@@ -48,6 +52,7 @@ pub enum VfsMountKind {
     Initrd,
     Procfs,
     Fat,
+    Tmpfs,
 }
 
 impl VfsMountKind {
@@ -58,6 +63,7 @@ impl VfsMountKind {
             Self::Initrd => "initrd",
             Self::Procfs => "procfs",
             Self::Fat => "fat",
+            Self::Tmpfs => "tmpfs",
         }
     }
 }
@@ -264,7 +270,9 @@ pub fn summary() -> VfsSummary {
 
     let initrd_online = initrd::is_initialized();
     let fat_online = fat::is_initialized();
+    let tmpfs_online = tmpfs::is_initialized();
     let mount_count = 2 + usize::from(initrd_online) + usize::from(fat_online);
+    let root_entry_count = mount_count + usize::from(tmpfs_online) * 2;
     let directory_count = 3
         + if initrd_online {
             initrd::summary().directory_count
@@ -275,11 +283,16 @@ pub fn summary() -> VfsSummary {
             fat::summary().directory_count
         } else {
             0
+        }
+        + if tmpfs_online {
+            tmpfs::summary().directory_count
+        } else {
+            0
         };
 
     VfsSummary {
         mount_count,
-        root_entry_count: mount_count,
+        root_entry_count,
         directory_count,
     }
 }
@@ -293,11 +306,18 @@ pub fn lookup(path: &str) -> Option<VfsNode> {
 pub fn read(path: &str) -> Option<String> {
     let node = lookup(path)?;
     match node.mount {
-        VfsMountKind::Root => Some(render_root()),
+        VfsMountKind::Root => {
+            if node.path == ROOT_PATH {
+                Some(render_root())
+            } else {
+                None
+            }
+        }
         VfsMountKind::Devfs => devfs::read(&node.path),
         VfsMountKind::Initrd => initrd::read(&node.path),
         VfsMountKind::Procfs => procfs::read(&node.path),
         VfsMountKind::Fat => fat::read(&node.path),
+        VfsMountKind::Tmpfs => tmpfs::read(&node.path),
     }
 }
 
@@ -646,6 +666,13 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             size: render_root().len(),
             executable: false,
         }),
+        _ if path == TMP_ROOT_PATH
+            || path.starts_with("/tmp/")
+            || path == RUN_ROOT_PATH
+            || path.starts_with("/run/") =>
+        {
+            resolve_tmpfs_node(path)
+        }
         _ if path == DEV_ROOT_PATH || path.starts_with("/dev/") => resolve_devfs_node(path),
         _ if path == INITRD_ROOT_PATH || path.starts_with("/initrd/") => resolve_initrd_node(path),
         _ if path == PROC_ROOT_PATH || path.starts_with("/proc/") => resolve_procfs_node(path),
@@ -720,6 +747,22 @@ fn resolve_fat_node(path: &str) -> Option<VfsNode> {
     })
 }
 
+fn resolve_tmpfs_node(path: &str) -> Option<VfsNode> {
+    let kind = match tmpfs::node_kind(path)? {
+        TmpfsNodeKind::Directory => VfsNodeKind::Directory,
+        TmpfsNodeKind::File => VfsNodeKind::File,
+    };
+    let info = tmpfs::node_info(path)?;
+
+    Some(VfsNode {
+        path: String::from(path),
+        mount: VfsMountKind::Tmpfs,
+        kind,
+        size: info.size,
+        executable: false,
+    })
+}
+
 fn resolve_runtime_path(path: &str) -> Option<String> {
     let normalized = normalize_path(path)?;
     if let Some(node) = lookup(&normalized) {
@@ -744,6 +787,10 @@ fn render_root() -> String {
         let _ = writeln!(text, "fat");
     }
     let _ = writeln!(text, "proc");
+    if tmpfs::is_initialized() {
+        let _ = writeln!(text, "tmp");
+        let _ = writeln!(text, "run");
+    }
     text
 }
 

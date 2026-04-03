@@ -12,6 +12,7 @@ use core::str;
 
 use crate::sched;
 use crate::time;
+use crate::tmpfs;
 use crate::tty;
 use crate::uaccess::{self, UserCopyError};
 use crate::vector;
@@ -248,6 +249,7 @@ const R_OK: u64 = 4;
 const O_ACCMODE: u64 = 0x3;
 const O_RDONLY: u64 = 0;
 const O_WRONLY: u64 = 1;
+const O_RDWR: u64 = 2;
 const O_DIRECTORY: u64 = 0x10000;
 const O_CLOEXEC: u64 = 0x80000;
 const O_CREAT: u64 = 0x40;
@@ -363,6 +365,7 @@ const EACCES: i64 = 13;
 const ENOTTY: i64 = 25;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
+const ENOSPC: i64 = 28;
 const EMFILE: i64 = 24;
 const ENOMEM: i64 = 12;
 const E2BIG: i64 = 7;
@@ -865,6 +868,7 @@ impl LinuxUtsName {
 struct OpenFile {
     fd: i32,
     fd_flags: u32,
+    status_flags: u64,
     owner_process_id: u64,
     mount: VfsMountKind,
     kind: VfsNodeKind,
@@ -4093,7 +4097,8 @@ fn process_pipe_with_flags(pipefd_ptr: usize, flags: u64) -> SyscallOutcome {
     }
 
     let fd_flags = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
-    let (read_fd, write_fd) = match allocate_pipe_pair(fd_flags) {
+    let status_flags = if flags & O_NONBLOCK != 0 { O_NONBLOCK } else { 0 };
+    let (read_fd, write_fd) = match allocate_pipe_pair(fd_flags, status_flags) {
         Ok(value) => value,
         Err(error) => return SyscallOutcome::errno(error),
     };
@@ -4346,16 +4351,33 @@ fn process_pread64(args: [u64; 6]) -> SyscallOutcome {
 }
 
 fn process_pwrite64(args: [u64; 6]) -> SyscallOutcome {
-    let fd = args[0];
+    let fd_raw = args[0];
     let offset = args[3] as i64;
     if offset < 0 {
         return SyscallOutcome::errno(EINVAL);
     }
-    if fd == STDOUT_FD || fd == STDERR_FD {
+    if fd_raw == STDOUT_FD || fd_raw == STDERR_FD {
         return write_text(args[1] as usize, args[2]);
     }
+    let fd = match parse_fd(fd_raw) {
+        Ok(fd) => fd,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let count = match usize::try_from(args[2]) {
+        Ok(count) => count,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if count > MAX_WRITE_BYTES {
+        return SyscallOutcome::errno(ERANGE);
+    }
+    if count == 0 {
+        return SyscallOutcome::success(0);
+    }
 
-    SyscallOutcome::errno(EROFS)
+    match write_open_file_at_offset(fd, args[1] as usize, count, offset) {
+        Ok(value) => SyscallOutcome::success(value),
+        Err(error) => SyscallOutcome::errno(error),
+    }
 }
 
 fn process_readv(args: [u64; 6]) -> SyscallOutcome {
@@ -4424,10 +4446,7 @@ fn process_readv(args: [u64; 6]) -> SyscallOutcome {
 }
 
 fn process_writev(args: [u64; 6]) -> SyscallOutcome {
-    let fd = args[0];
-    if fd != STDOUT_FD && fd != STDERR_FD {
-        return SyscallOutcome::errno(EBADF);
-    }
+    let fd_raw = args[0];
 
     let iov_ptr = args[1] as usize;
     let iovcnt = match usize::try_from(args[2]) {
@@ -4462,8 +4481,26 @@ fn process_writev(args: [u64; 6]) -> SyscallOutcome {
             return SyscallOutcome::errno(ERANGE);
         }
 
-        let bytes = match copyin_bytes(iov.iov_base as usize, len) {
-            Ok(bytes) => bytes,
+        if fd_raw == STDOUT_FD || fd_raw == STDERR_FD {
+            let bytes = match copyin_bytes(iov.iov_base as usize, len) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if total == 0 {
+                        return SyscallOutcome::errno(error);
+                    }
+                    return match i64::try_from(total) {
+                        Ok(value) => SyscallOutcome::success(value),
+                        Err(_) => SyscallOutcome::errno(ERANGE),
+                    };
+                }
+            };
+            tty::write_str(&sanitize_for_console(&bytes));
+            total = next_total;
+            continue;
+        }
+
+        let fd = match parse_fd(fd_raw) {
+            Ok(fd) => fd,
             Err(error) => {
                 if total == 0 {
                     return SyscallOutcome::errno(error);
@@ -4474,8 +4511,30 @@ fn process_writev(args: [u64; 6]) -> SyscallOutcome {
                 };
             }
         };
-        tty::write_str(&sanitize_for_console(&bytes));
-        total = next_total;
+        match write_open_file(fd, iov.iov_base as usize, len) {
+            Ok(value) => {
+                let written = match usize::try_from(value) {
+                    Ok(written) => written,
+                    Err(_) => return SyscallOutcome::errno(ERANGE),
+                };
+                total = match total.checked_add(written) {
+                    Some(value) => value,
+                    None => return SyscallOutcome::errno(ERANGE),
+                };
+                if written < len {
+                    break;
+                }
+            }
+            Err(error) => {
+                if total == 0 {
+                    return SyscallOutcome::errno(error);
+                }
+                return match i64::try_from(total) {
+                    Ok(value) => SyscallOutcome::success(value),
+                    Err(_) => SyscallOutcome::errno(ERANGE),
+                };
+            }
+        }
     }
 
     match i64::try_from(total) {
@@ -4832,24 +4891,157 @@ fn record_exec_preflight(telemetry: &ExecPreflightTelemetry, status: ExecPreflig
     });
 }
 
-fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
-    if !is_read_only_open(flags) {
-        return SyscallOutcome::errno(EINVAL);
-    }
+#[derive(Copy, Clone)]
+struct OpenMode {
+    access_mode: u64,
+    create: bool,
+    truncate: bool,
+    append: bool,
+    cloexec: bool,
+    directory: bool,
+    nonblock: bool,
+}
 
-    let node = match lookup_node_at(dirfd, path_ptr) {
-        Ok(node) => node,
+fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
+    let mode = match parse_open_mode(flags) {
+        Ok(mode) => mode,
         Err(error) => return SyscallOutcome::errno(error),
     };
+    let resolved_path = match resolve_path_at(dirfd, path_ptr) {
+        Ok(path) => path,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+
+    if tmpfs::handles_path(&resolved_path) {
+        return match open_tmpfs_path(&resolved_path, mode) {
+            Ok(fd) => SyscallOutcome::success(fd),
+            Err(error) => SyscallOutcome::errno(error),
+        };
+    }
+
+    if mode.access_mode != O_RDONLY || mode.create || mode.truncate || mode.append {
+        return SyscallOutcome::errno(EROFS);
+    }
+
+    let node = match vfs::lookup(&resolved_path) {
+        Some(node) => node,
+        None => return SyscallOutcome::errno(ENOENT),
+    };
+    if mode.directory && node.kind != VfsNodeKind::Directory {
+        return SyscallOutcome::errno(ENOTDIR);
+    }
 
     let content = match vfs::read(&node.path) {
         Some(content) => content.into_bytes(),
         None => return SyscallOutcome::errno(EIO),
     };
-    match alloc_open_file(node.path, node.mount, node.kind, node.executable, content) {
+    let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
+    let status_flags = status_flags_from_open_mode(mode, node.kind);
+    match alloc_open_file(
+        node.path,
+        node.mount,
+        node.kind,
+        node.executable,
+        content,
+        status_flags,
+        fd_flags,
+    ) {
         Ok(fd) => SyscallOutcome::success(fd),
         Err(error) => SyscallOutcome::errno(error),
     }
+}
+
+fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
+    if let Some(kind) = tmpfs::node_kind(path) {
+        match kind {
+            tmpfs::TmpfsNodeKind::Directory => {
+                if mode.access_mode != O_RDONLY {
+                    return Err(EISDIR);
+                }
+                if mode.create || mode.truncate || mode.append {
+                    return Err(EISDIR);
+                }
+                let node = vfs::lookup(path).ok_or(ENOENT)?;
+                let content = tmpfs::read(&node.path).ok_or(EIO)?.into_bytes();
+                let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
+                let status_flags = status_flags_from_open_mode(mode, VfsNodeKind::Directory);
+                return alloc_open_file(
+                    node.path,
+                    VfsMountKind::Tmpfs,
+                    VfsNodeKind::Directory,
+                    false,
+                    content,
+                    status_flags,
+                    fd_flags,
+                );
+            }
+            tmpfs::TmpfsNodeKind::File => {}
+        }
+    }
+
+    if mode.directory {
+        return Err(ENOTDIR);
+    }
+
+    let opened = tmpfs::open_file(path, mode.create, mode.truncate).map_err(map_tmpfs_error)?;
+    let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
+    let status_flags = status_flags_from_open_mode(mode, VfsNodeKind::File);
+    alloc_open_file(
+        opened.path,
+        VfsMountKind::Tmpfs,
+        VfsNodeKind::File,
+        false,
+        opened.content,
+        status_flags,
+        fd_flags,
+    )
+}
+
+fn parse_open_mode(flags: u64) -> Result<OpenMode, i64> {
+    let supported = O_ACCMODE | O_DIRECTORY | O_CLOEXEC | O_CREAT | O_TRUNC | O_APPEND | O_NONBLOCK;
+    if flags & !supported != 0 {
+        return Err(EINVAL);
+    }
+
+    let access_mode = flags & O_ACCMODE;
+    if access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR {
+        return Err(EINVAL);
+    }
+
+    let create = flags & O_CREAT != 0;
+    let truncate = flags & O_TRUNC != 0;
+    let append = flags & O_APPEND != 0;
+    let directory = flags & O_DIRECTORY != 0;
+    if access_mode == O_RDONLY && (create || truncate || append) {
+        return Err(EINVAL);
+    }
+    if directory && (create || truncate || append) {
+        return Err(EINVAL);
+    }
+
+    Ok(OpenMode {
+        access_mode,
+        create,
+        truncate,
+        append,
+        cloexec: flags & O_CLOEXEC != 0,
+        directory,
+        nonblock: flags & O_NONBLOCK != 0,
+    })
+}
+
+fn status_flags_from_open_mode(mode: OpenMode, kind: VfsNodeKind) -> u64 {
+    let mut flags = mode.access_mode;
+    if mode.append {
+        flags |= O_APPEND;
+    }
+    if mode.nonblock {
+        flags |= O_NONBLOCK;
+    }
+    if kind == VfsNodeKind::Directory {
+        flags |= O_DIRECTORY;
+    }
+    flags
 }
 
 fn stat_path_at(dirfd: i64, path_ptr: usize, stat_ptr: u64, flags: u64) -> SyscallOutcome {
@@ -5127,7 +5319,10 @@ fn fcntl_fd(args: [u64; 6]) -> SyscallOutcome {
             Ok(flags) => SyscallOutcome::success(flags),
             Err(error) => SyscallOutcome::errno(error),
         },
-        F_SETFL => SyscallOutcome::success(0),
+        F_SETFL => match set_status_flags(fd, args[2]) {
+            Ok(value) => SyscallOutcome::success(value),
+            Err(error) => SyscallOutcome::errno(error),
+        },
         _ => SyscallOutcome::errno(EINVAL),
     }
 }
@@ -5463,6 +5658,7 @@ fn mount_device_id(mount: VfsMountKind) -> u64 {
         VfsMountKind::Initrd => 3,
         VfsMountKind::Procfs => 4,
         VfsMountKind::Fat => 5,
+        VfsMountKind::Tmpfs => 6,
     }
 }
 
@@ -5635,8 +5831,22 @@ fn sanitize_for_console(bytes: &[u8]) -> String {
     text
 }
 
-fn is_read_only_open(flags: u64) -> bool {
-    (flags & O_ACCMODE) == O_RDONLY && (flags & (O_CREAT | O_TRUNC | O_APPEND)) == 0
+fn open_allows_read(open: &OpenFile) -> bool {
+    matches!(open.status_flags & O_ACCMODE, O_RDONLY | O_RDWR)
+}
+
+fn open_allows_write(open: &OpenFile) -> bool {
+    matches!(open.status_flags & O_ACCMODE, O_WRONLY | O_RDWR)
+}
+
+fn map_tmpfs_error(error: tmpfs::TmpfsError) -> i64 {
+    match error {
+        tmpfs::TmpfsError::AlreadyInitialized | tmpfs::TmpfsError::NotInitialized => EIO,
+        tmpfs::TmpfsError::InvalidPath => EINVAL,
+        tmpfs::TmpfsError::NotFound => ENOENT,
+        tmpfs::TmpfsError::IsDirectory => EISDIR,
+        tmpfs::TmpfsError::FileLimitReached => ENOSPC,
+    }
 }
 
 fn parse_fd(value: u64) -> Result<i32, i64> {
@@ -6066,16 +6276,16 @@ fn current_process_gs_base() -> u64 {
     current_process_arch_prctl_state().gs_base
 }
 
-fn allocate_pipe_pair(fd_flags: u32) -> Result<(i32, i32), i64> {
+fn allocate_pipe_pair(fd_flags: u32, status_flags: u64) -> Result<(i32, i32), i64> {
     let pipe_id = create_pipe_state()?;
-    let read_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Read, fd_flags) {
+    let read_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Read, fd_flags, status_flags) {
         Ok(fd) => fd,
         Err(error) => {
             remove_pipe_state(pipe_id);
             return Err(error);
         }
     };
-    let write_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Write, fd_flags) {
+    let write_fd = match alloc_pipe_endpoint(pipe_id, PipeEnd::Write, fd_flags, status_flags) {
         Ok(fd) => fd,
         Err(error) => {
             let _ = close_open_file(read_fd);
@@ -6106,7 +6316,7 @@ fn remove_pipe_state(pipe_id: u64) {
     }
 }
 
-fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32) -> Result<i32, i64> {
+fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: u64) -> Result<i32, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
     if table.files.len() >= MAX_OPEN_FILES {
@@ -6115,9 +6325,14 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32) -> Result<i32,
 
     let fd = table.next_fd;
     table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
+    let endpoint_flags = match end {
+        PipeEnd::Read => O_RDONLY,
+        PipeEnd::Write => O_WRONLY,
+    } | status_flags;
     table.files.push(OpenFile {
         fd,
         fd_flags,
+        status_flags: endpoint_flags,
         owner_process_id,
         mount: VfsMountKind::Root,
         kind: VfsNodeKind::Device,
@@ -6629,6 +6844,7 @@ fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u
     OpenFile {
         fd: destination_fd,
         fd_flags,
+        status_flags: source.status_flags,
         owner_process_id: source.owner_process_id,
         mount: source.mount,
         kind: source.kind,
@@ -6672,8 +6888,11 @@ fn set_descriptor_flags(fd: i32, flags: u32) -> Result<i64, i64> {
 }
 
 fn get_status_flags(fd: i32) -> Result<i64, i64> {
-    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+    if fd == 0 {
         return i64::try_from(O_RDONLY).map_err(|_| ERANGE);
+    }
+    if fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return i64::try_from(O_WRONLY).map_err(|_| ERANGE);
     }
 
     let owner_process_id = current_process_id_value();
@@ -6683,18 +6902,26 @@ fn get_status_flags(fd: i32) -> Result<i64, i64> {
         .iter()
         .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
         .ok_or(EBADF)?;
-    let mut flags = match open.pipe_endpoint {
-        Some(PipeEndpoint {
-            end: PipeEnd::Write,
-            ..
-        }) => O_WRONLY,
-        _ => O_RDONLY,
-    };
-    if open.kind == VfsNodeKind::Directory {
-        flags |= O_DIRECTORY;
+
+    i64::try_from(open.status_flags).map_err(|_| ERANGE)
+}
+
+fn set_status_flags(fd: i32, flags: u64) -> Result<i64, i64> {
+    if fd == 0 || fd as u64 == STDOUT_FD || fd as u64 == STDERR_FD {
+        return Ok(0);
     }
 
-    i64::try_from(flags).map_err(|_| ERANGE)
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter_mut()
+        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
+        .ok_or(EBADF)?;
+    let preserved_mode = open.status_flags & O_ACCMODE;
+    let preserved_directory = open.status_flags & O_DIRECTORY;
+    open.status_flags = preserved_mode | preserved_directory | (flags & (O_APPEND | O_NONBLOCK));
+    Ok(0)
 }
 
 fn open_file_path_and_kind_for_process(fd: i32) -> Result<(String, VfsNodeKind), i64> {
@@ -6723,6 +6950,8 @@ fn alloc_open_file(
     kind: VfsNodeKind,
     executable: bool,
     content: Vec<u8>,
+    status_flags: u64,
+    fd_flags: u32,
 ) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
@@ -6734,7 +6963,8 @@ fn alloc_open_file(
     table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
     table.files.push(OpenFile {
         fd,
-        fd_flags: 0,
+        fd_flags,
+        status_flags,
         owner_process_id,
         mount,
         kind,
@@ -6752,7 +6982,7 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
     let table = fd_table_mut();
     let open = table
         .files
-        .iter()
+        .iter_mut()
         .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
         .ok_or(EBADF)?;
 
@@ -6762,8 +6992,33 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
             PipeEnd::Read => Err(EBADF),
         };
     }
+    if !open_allows_write(open) {
+        return Err(EBADF);
+    }
+    if open.kind == VfsNodeKind::Directory {
+        return Err(EISDIR);
+    }
+    if count == 0 {
+        return Ok(0);
+    }
 
-    Err(EROFS)
+    let bytes = copyin_bytes(source_ptr, count)?;
+    if open.status_flags & O_APPEND != 0 {
+        open.offset = open.content.len();
+    }
+
+    let write_end = open.offset.checked_add(bytes.len()).ok_or(ERANGE)?;
+    if write_end > open.content.len() {
+        open.content.resize(write_end, 0);
+    }
+    open.content[open.offset..write_end].copy_from_slice(&bytes);
+    open.offset = write_end;
+
+    if open.mount == VfsMountKind::Tmpfs {
+        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
+    }
+
+    i64::try_from(bytes.len()).map_err(|_| ERANGE)
 }
 
 fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
@@ -6779,6 +7034,9 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
             PipeEnd::Read => read_pipe(endpoint.pipe_id, destination_ptr, count),
             PipeEnd::Write => Err(EBADF),
         };
+    }
+    if !open_allows_read(open) {
+        return Err(EBADF);
     }
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
@@ -6809,6 +7067,9 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
+    if !open_allows_read(open) {
+        return Err(EBADF);
+    }
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
@@ -6823,6 +7084,42 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
     uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
 
     i64::try_from(read_len).map_err(|_| ERANGE)
+}
+
+fn write_open_file_at_offset(fd: i32, source_ptr: usize, count: usize, offset: i64) -> Result<i64, i64> {
+    let owner_process_id = current_process_id_value();
+    let table = fd_table_mut();
+    let open = table
+        .files
+        .iter_mut()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .ok_or(EBADF)?;
+    if open.pipe_endpoint.is_some() {
+        return Err(ESPIPE);
+    }
+    if !open_allows_write(open) {
+        return Err(EBADF);
+    }
+    if open.kind == VfsNodeKind::Directory {
+        return Err(EISDIR);
+    }
+
+    let start = usize::try_from(offset).map_err(|_| ERANGE)?;
+    if count == 0 {
+        return Ok(0);
+    }
+    let bytes = copyin_bytes(source_ptr, count)?;
+    let write_end = start.checked_add(bytes.len()).ok_or(ERANGE)?;
+    if write_end > open.content.len() {
+        open.content.resize(write_end, 0);
+    }
+    open.content[start..write_end].copy_from_slice(&bytes);
+
+    if open.mount == VfsMountKind::Tmpfs {
+        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
+    }
+
+    i64::try_from(bytes.len()).map_err(|_| ERANGE)
 }
 
 fn close_open_file(fd: i32) -> Result<i64, i64> {
