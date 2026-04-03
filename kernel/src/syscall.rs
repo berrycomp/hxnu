@@ -347,12 +347,35 @@ const MAX_PATH_BYTES: usize = 1024;
 const MAX_EXEC_ARG_COUNT: usize = 256;
 const MAX_EXEC_ENV_COUNT: usize = 256;
 const MAX_EXEC_ARG_ENV_BYTES: usize = 64 * 1024;
+const MAX_EXEC_STACK_BYTES: usize = 128 * 1024;
+const EXEC_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
+const EXEC_STACK_ALIGNMENT: u64 = 16;
+const EXEC_AUX_RANDOM_BYTES: usize = 16;
 const MAX_OPEN_FILES: usize = 64;
 const MAX_SYNTHETIC_CHILDREN: usize = 256;
 const MMAP_PAGE_SIZE: usize = 4096;
 const DEFAULT_PROCESS_BRK: usize = 0x4000_0000;
 const DEFAULT_PROCESS_UMASK: u32 = 0o022;
 const UMASK_MODE_MASK: u32 = 0o777;
+
+const AUX_AT_NULL: u64 = 0;
+const AUX_AT_PHDR: u64 = 3;
+const AUX_AT_PHENT: u64 = 4;
+const AUX_AT_PHNUM: u64 = 5;
+const AUX_AT_PAGESZ: u64 = 6;
+const AUX_AT_BASE: u64 = 7;
+const AUX_AT_FLAGS: u64 = 8;
+const AUX_AT_ENTRY: u64 = 9;
+const AUX_AT_UID: u64 = 11;
+const AUX_AT_EUID: u64 = 12;
+const AUX_AT_GID: u64 = 13;
+const AUX_AT_EGID: u64 = 14;
+const AUX_AT_PLATFORM: u64 = 15;
+const AUX_AT_HWCAP: u64 = 16;
+const AUX_AT_SECURE: u64 = 23;
+const AUX_AT_RANDOM: u64 = 25;
+const AUX_AT_HWCAP2: u64 = 26;
+const AUX_AT_EXECFN: u64 = 31;
 
 const EPERM: i64 = 1;
 const EBADF: i64 = 9;
@@ -1285,6 +1308,27 @@ enum ExecPreflightStatus {
     Error(i64),
 }
 
+struct ExecStackLayout {
+    stack_pointer: u64,
+    stack_top: u64,
+    stack_bytes: usize,
+    table_bytes: usize,
+    blob_bytes: usize,
+    padding_bytes: usize,
+    argv_count: usize,
+    env_count: usize,
+    auxv_count: usize,
+    hwcap: u64,
+    hwcap2: u64,
+    entry_point: Option<u64>,
+    signature: u64,
+    execfn: String,
+    interpreter_source: Option<String>,
+    interpreter_argument: Option<String>,
+    shebang_rewritten: bool,
+    argv0_defaulted: bool,
+}
+
 struct ExecPreflightRecord {
     process_id: u64,
     path: String,
@@ -1298,6 +1342,7 @@ struct ExecPreflightRecord {
     interpreter_resolved: bool,
     cloexec_would_close: usize,
     flags: u64,
+    stack_layout: Option<ExecStackLayout>,
     status: ExecPreflightStatus,
 }
 
@@ -1547,7 +1592,7 @@ pub fn render_exec_status() -> String {
     match record.status {
         ExecPreflightStatus::Ready => {
             let _ = writeln!(text, "status ready");
-            let _ = writeln!(text, "note handoff-pending");
+            let _ = writeln!(text, "note stack-prepared handoff-pending");
         }
         ExecPreflightStatus::Error(errno) => {
             let _ = writeln!(text, "status error");
@@ -1571,6 +1616,42 @@ pub fn render_exec_status() -> String {
     );
     let _ = writeln!(text, "cloexec_would_close {}", record.cloexec_would_close);
     let _ = writeln!(text, "flags {:#x}", record.flags);
+    if let Some(layout) = record.stack_layout.as_ref() {
+        let _ = writeln!(text, "stack_pointer {:#018x}", layout.stack_pointer);
+        let _ = writeln!(text, "stack_top {:#018x}", layout.stack_top);
+        let _ = writeln!(text, "stack_bytes {}", layout.stack_bytes);
+        let _ = writeln!(text, "stack_table_bytes {}", layout.table_bytes);
+        let _ = writeln!(text, "stack_blob_bytes {}", layout.blob_bytes);
+        let _ = writeln!(text, "stack_padding_bytes {}", layout.padding_bytes);
+        let _ = writeln!(text, "effective_argv_count {}", layout.argv_count);
+        let _ = writeln!(text, "effective_env_count {}", layout.env_count);
+        let _ = writeln!(text, "auxv_count {}", layout.auxv_count);
+        let _ = writeln!(text, "hwcap {:#018x}", layout.hwcap);
+        let _ = writeln!(text, "hwcap2 {:#018x}", layout.hwcap2);
+        if let Some(entry_point) = layout.entry_point {
+            let _ = writeln!(text, "entry_point {:#018x}", entry_point);
+        } else {
+            let _ = writeln!(text, "entry_point <none>");
+        }
+        let _ = writeln!(text, "execfn {}", layout.execfn);
+        if let Some(interpreter) = layout.interpreter_source.as_ref() {
+            let _ = writeln!(text, "interpreter_runtime {}", interpreter);
+        }
+        if let Some(argument) = layout.interpreter_argument.as_ref() {
+            let _ = writeln!(text, "interpreter_arg {}", argument);
+        }
+        let _ = writeln!(
+            text,
+            "shebang_rewritten {}",
+            if layout.shebang_rewritten { "yes" } else { "no" },
+        );
+        let _ = writeln!(
+            text,
+            "argv0_defaulted {}",
+            if layout.argv0_defaulted { "yes" } else { "no" },
+        );
+        let _ = writeln!(text, "stack_signature {:#018x}", layout.signature);
+    }
     text
 }
 
@@ -4650,9 +4731,8 @@ fn process_exec(args: [u64; 6]) -> SyscallOutcome {
     process_exec_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2] as usize, 0)
 }
 
-#[derive(Copy, Clone)]
-struct ExecStringVectorSummary {
-    count: usize,
+struct ExecStringVector {
+    values: Vec<String>,
     total_bytes: usize,
 }
 
@@ -4669,6 +4749,7 @@ struct ExecPreflightTelemetry {
     interpreter_resolved: bool,
     cloexec_would_close: usize,
     flags: u64,
+    stack_layout: Option<ExecStackLayout>,
 }
 
 impl ExecPreflightTelemetry {
@@ -4686,6 +4767,7 @@ impl ExecPreflightTelemetry {
             interpreter_resolved: false,
             cloexec_would_close: 0,
             flags,
+            stack_layout: None,
         }
     }
 }
@@ -4728,17 +4810,17 @@ fn process_exec_at(
         fail_exec!(EACCES);
     }
 
-    let argv = match scan_exec_string_vector(argv_ptr, MAX_EXEC_ARG_COUNT, MAX_EXEC_ARG_ENV_BYTES) {
-        Ok(summary) => summary,
+    let argv = match collect_exec_string_vector(argv_ptr, MAX_EXEC_ARG_COUNT, MAX_EXEC_ARG_ENV_BYTES) {
+        Ok(vector) => vector,
         Err(error) => fail_exec!(error),
     };
     let env_budget = MAX_EXEC_ARG_ENV_BYTES.saturating_sub(argv.total_bytes);
-    let envp = match scan_exec_string_vector(envp_ptr, MAX_EXEC_ENV_COUNT, env_budget) {
-        Ok(summary) => summary,
+    let envp = match collect_exec_string_vector(envp_ptr, MAX_EXEC_ENV_COUNT, env_budget) {
+        Ok(vector) => vector,
         Err(error) => fail_exec!(error),
     };
-    telemetry.argv_count = argv.count;
-    telemetry.env_count = envp.count;
+    telemetry.argv_count = argv.values.len();
+    telemetry.env_count = envp.values.len();
     telemetry.total_bytes = argv.total_bytes.saturating_add(envp.total_bytes);
     if argv
         .total_bytes
@@ -4765,10 +4847,16 @@ fn process_exec_at(
         }
         ExecutableFormat::Text | ExecutableFormat::Unknown => fail_exec!(ENOEXEC),
     }
+
+    telemetry.stack_layout = match build_exec_stack_layout(&node.path, &prep, &argv.values, &envp.values) {
+        Ok(layout) => Some(layout),
+        Err(error) => fail_exec!(error),
+    };
     telemetry.cloexec_would_close = cloexec_descriptor_count_for_process(process_id);
     record_exec_preflight(&telemetry, ExecPreflightStatus::Ready);
 
-    // Phase 3.5 preflight: validates path/argv/envp and loader compatibility.
+    // Phase 3.5.1 preflight: validates path/argv/envp, loader compatibility,
+    // and builds an initial argc/argv/envp/auxv stack image.
     // Process image replacement and non-returning handoff are still pending.
     // CLOEXEC teardown will happen as part of the real handoff path.
     SyscallOutcome::errno(ENOSYS)
@@ -4808,24 +4896,24 @@ fn resolve_exec_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> Result<Strin
     Ok(base)
 }
 
-fn scan_exec_string_vector(
+fn collect_exec_string_vector(
     vector_ptr: usize,
     max_count: usize,
     max_total_bytes: usize,
-) -> Result<ExecStringVectorSummary, i64> {
+) -> Result<ExecStringVector, i64> {
     if vector_ptr == 0 {
-        return Ok(ExecStringVectorSummary {
-            count: 0,
+        return Ok(ExecStringVector {
+            values: Vec::new(),
             total_bytes: 0,
         });
     }
 
-    let mut count = 0usize;
+    let mut values = Vec::new();
     let mut total_bytes = 0usize;
-    while count < max_count {
-        let item_ptr = copyin_usize_at(vector_ptr, count)?;
+    while values.len() < max_count {
+        let item_ptr = copyin_usize_at(vector_ptr, values.len())?;
         if item_ptr == 0 {
-            return Ok(ExecStringVectorSummary { count, total_bytes });
+            return Ok(ExecStringVector { values, total_bytes });
         }
 
         let text = copyin_c_string(item_ptr, MAX_PATH_BYTES)?;
@@ -4835,11 +4923,252 @@ fn scan_exec_string_vector(
         if total_bytes > max_total_bytes {
             return Err(E2BIG);
         }
-
-        count += 1;
+        values.push(text);
     }
 
     Err(E2BIG)
+}
+
+fn build_exec_stack_layout(
+    exec_path: &str,
+    prep: &vfs::ExecutableLoadPrep,
+    argv: &[String],
+    envp: &[String],
+) -> Result<ExecStackLayout, i64> {
+    let (effective_argv, shebang_rewritten, argv0_defaulted) = build_effective_exec_argv(exec_path, prep, argv)?;
+    let mut blob = Vec::new();
+    let mut argv_offsets = Vec::with_capacity(effective_argv.len());
+    for arg in &effective_argv {
+        argv_offsets.push(append_c_string(&mut blob, arg)?);
+    }
+
+    let mut env_offsets = Vec::with_capacity(envp.len());
+    for item in envp {
+        env_offsets.push(append_c_string(&mut blob, item)?);
+    }
+
+    let random_offset = blob.len();
+    let mut random_bytes = [0u8; EXEC_AUX_RANDOM_BYTES];
+    fill_pseudo_random_bytes(&mut random_bytes);
+    blob.extend_from_slice(&random_bytes);
+    if blob.len() > MAX_EXEC_STACK_BYTES {
+        return Err(E2BIG);
+    }
+
+    let execfn_offset = append_c_string(&mut blob, exec_path)?;
+    let platform_offset = append_c_string(&mut blob, "x86_64")?;
+
+    let caps = vector::caps();
+    let mut auxv = vec![
+        (AUX_AT_PHDR, 0),
+        (AUX_AT_PHENT, 0),
+        (AUX_AT_PHNUM, 0),
+        (AUX_AT_PAGESZ, MMAP_PAGE_SIZE as u64),
+        (AUX_AT_BASE, 0),
+        (AUX_AT_FLAGS, 0),
+        (AUX_AT_UID, 0),
+        (AUX_AT_EUID, 0),
+        (AUX_AT_GID, 0),
+        (AUX_AT_EGID, 0),
+        (AUX_AT_PLATFORM, 0),
+        (AUX_AT_HWCAP, caps.base_bits),
+        (AUX_AT_SECURE, 0),
+        (AUX_AT_RANDOM, 0),
+        (AUX_AT_HWCAP2, caps.ext_bits),
+        (AUX_AT_EXECFN, 0),
+    ];
+    if let Some(entry_point) = prep.entry_point {
+        auxv.push((AUX_AT_ENTRY, entry_point));
+    }
+    let auxv_count = auxv.len();
+
+    let table_words = 1usize
+        .checked_add(effective_argv.len())
+        .and_then(|words| words.checked_add(1))
+        .and_then(|words| words.checked_add(envp.len()))
+        .and_then(|words| words.checked_add(1))
+        .and_then(|words| words.checked_add(auxv_count.checked_mul(2)?))
+        .and_then(|words| words.checked_add(2))
+        .ok_or(E2BIG)?;
+    let table_bytes = table_words
+        .checked_mul(size_of::<u64>())
+        .ok_or(E2BIG)?;
+    let raw_total_bytes = table_bytes.checked_add(blob.len()).ok_or(E2BIG)?;
+    if raw_total_bytes > MAX_EXEC_STACK_BYTES {
+        return Err(E2BIG);
+    }
+
+    let unaligned_stack_pointer = EXEC_STACK_TOP
+        .checked_sub(raw_total_bytes as u64)
+        .ok_or(ENOMEM)?;
+    let stack_pointer = align_down_u64(unaligned_stack_pointer, EXEC_STACK_ALIGNMENT);
+    let padding_bytes = usize::try_from(unaligned_stack_pointer.saturating_sub(stack_pointer)).map_err(|_| E2BIG)?;
+    let stack_bytes = raw_total_bytes.checked_add(padding_bytes).ok_or(E2BIG)?;
+    if stack_bytes > MAX_EXEC_STACK_BYTES {
+        return Err(E2BIG);
+    }
+
+    let blob_base = stack_pointer
+        .checked_add(table_bytes as u64)
+        .and_then(|address| address.checked_add(padding_bytes as u64))
+        .ok_or(ERANGE)?;
+    if blob_base > EXEC_STACK_TOP {
+        return Err(ERANGE);
+    }
+
+    let mut argv_addresses = Vec::with_capacity(argv_offsets.len());
+    for offset in argv_offsets {
+        argv_addresses.push(blob_base.checked_add(offset as u64).ok_or(ERANGE)?);
+    }
+    let mut env_addresses = Vec::with_capacity(env_offsets.len());
+    for offset in env_offsets {
+        env_addresses.push(blob_base.checked_add(offset as u64).ok_or(ERANGE)?);
+    }
+
+    let random_address = blob_base.checked_add(random_offset as u64).ok_or(ERANGE)?;
+    let execfn_address = blob_base.checked_add(execfn_offset as u64).ok_or(ERANGE)?;
+    let platform_address = blob_base.checked_add(platform_offset as u64).ok_or(ERANGE)?;
+    for entry in &mut auxv {
+        match entry.0 {
+            AUX_AT_RANDOM => entry.1 = random_address,
+            AUX_AT_EXECFN => entry.1 = execfn_address,
+            AUX_AT_PLATFORM => entry.1 = platform_address,
+            _ => {}
+        }
+    }
+
+    let mut image = vec![0u8; stack_bytes];
+    let mut cursor = 0usize;
+    push_stack_word(&mut image, &mut cursor, effective_argv.len() as u64)?;
+    for address in &argv_addresses {
+        push_stack_word(&mut image, &mut cursor, *address)?;
+    }
+    push_stack_word(&mut image, &mut cursor, 0)?;
+    for address in &env_addresses {
+        push_stack_word(&mut image, &mut cursor, *address)?;
+    }
+    push_stack_word(&mut image, &mut cursor, 0)?;
+    for (key, value) in &auxv {
+        push_stack_word(&mut image, &mut cursor, *key)?;
+        push_stack_word(&mut image, &mut cursor, *value)?;
+    }
+    push_stack_word(&mut image, &mut cursor, AUX_AT_NULL)?;
+    push_stack_word(&mut image, &mut cursor, 0)?;
+
+    if cursor != table_bytes {
+        return Err(EINVAL);
+    }
+    cursor = cursor.checked_add(padding_bytes).ok_or(E2BIG)?;
+    let blob_end = cursor.checked_add(blob.len()).ok_or(E2BIG)?;
+    if blob_end > image.len() {
+        return Err(E2BIG);
+    }
+    image[cursor..blob_end].copy_from_slice(&blob);
+
+    Ok(ExecStackLayout {
+        stack_pointer,
+        stack_top: EXEC_STACK_TOP,
+        stack_bytes,
+        table_bytes,
+        blob_bytes: blob.len(),
+        padding_bytes,
+        argv_count: effective_argv.len(),
+        env_count: envp.len(),
+        auxv_count,
+        hwcap: caps.base_bits,
+        hwcap2: caps.ext_bits,
+        entry_point: prep.entry_point,
+        signature: fnv1a64(&image),
+        execfn: String::from(exec_path),
+        interpreter_source: prep.interpreter_source.clone(),
+        interpreter_argument: prep.interpreter_argument.clone(),
+        shebang_rewritten,
+        argv0_defaulted,
+    })
+}
+
+fn build_effective_exec_argv(
+    exec_path: &str,
+    prep: &vfs::ExecutableLoadPrep,
+    argv: &[String],
+) -> Result<(Vec<String>, bool, bool), i64> {
+    let mut effective_argv = Vec::new();
+    let mut shebang_rewritten = false;
+    let mut argv0_defaulted = false;
+
+    if prep.format == ExecutableFormat::ShebangScript {
+        shebang_rewritten = true;
+        let interpreter = prep.interpreter_source.as_ref().ok_or(ENOENT)?;
+        effective_argv.push(interpreter.clone());
+        if let Some(argument) = prep.interpreter_argument.as_ref() {
+            if !argument.is_empty() {
+                effective_argv.push(argument.clone());
+            }
+        }
+        effective_argv.push(String::from(exec_path));
+        for argument in argv.iter().skip(1) {
+            effective_argv.push(argument.clone());
+        }
+    } else if argv.is_empty() {
+        argv0_defaulted = true;
+        effective_argv.push(String::from(exec_path));
+    } else {
+        for argument in argv {
+            effective_argv.push(argument.clone());
+        }
+    }
+
+    if effective_argv.len() > MAX_EXEC_ARG_COUNT {
+        return Err(E2BIG);
+    }
+    let mut total_bytes = 0usize;
+    for argument in &effective_argv {
+        total_bytes = total_bytes
+            .checked_add(argument.len().saturating_add(1))
+            .ok_or(E2BIG)?;
+    }
+    if total_bytes > MAX_EXEC_ARG_ENV_BYTES {
+        return Err(E2BIG);
+    }
+
+    Ok((effective_argv, shebang_rewritten, argv0_defaulted))
+}
+
+fn append_c_string(blob: &mut Vec<u8>, value: &str) -> Result<usize, i64> {
+    let offset = blob.len();
+    let next_len = blob
+        .len()
+        .checked_add(value.len().saturating_add(1))
+        .ok_or(E2BIG)?;
+    if next_len > MAX_EXEC_STACK_BYTES {
+        return Err(E2BIG);
+    }
+    blob.extend_from_slice(value.as_bytes());
+    blob.push(0);
+    Ok(offset)
+}
+
+fn align_down_u64(value: u64, alignment: u64) -> u64 {
+    value & !(alignment.saturating_sub(1))
+}
+
+fn push_stack_word(image: &mut [u8], cursor: &mut usize, value: u64) -> Result<(), i64> {
+    let end = cursor.checked_add(size_of::<u64>()).ok_or(E2BIG)?;
+    if end > image.len() {
+        return Err(E2BIG);
+    }
+    image[*cursor..end].copy_from_slice(&value.to_le_bytes());
+    *cursor = end;
+    Ok(())
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn copyin_usize_at(array_ptr: usize, index: usize) -> Result<usize, i64> {
@@ -4887,6 +5216,26 @@ fn record_exec_preflight(telemetry: &ExecPreflightTelemetry, status: ExecPreflig
         interpreter_resolved: telemetry.interpreter_resolved,
         cloexec_would_close: telemetry.cloexec_would_close,
         flags: telemetry.flags,
+        stack_layout: telemetry.stack_layout.as_ref().map(|layout| ExecStackLayout {
+            stack_pointer: layout.stack_pointer,
+            stack_top: layout.stack_top,
+            stack_bytes: layout.stack_bytes,
+            table_bytes: layout.table_bytes,
+            blob_bytes: layout.blob_bytes,
+            padding_bytes: layout.padding_bytes,
+            argv_count: layout.argv_count,
+            env_count: layout.env_count,
+            auxv_count: layout.auxv_count,
+            hwcap: layout.hwcap,
+            hwcap2: layout.hwcap2,
+            entry_point: layout.entry_point,
+            signature: layout.signature,
+            execfn: layout.execfn.clone(),
+            interpreter_source: layout.interpreter_source.clone(),
+            interpreter_argument: layout.interpreter_argument.clone(),
+            shebang_rewritten: layout.shebang_rewritten,
+            argv0_defaulted: layout.argv0_defaulted,
+        }),
         status,
     });
 }
