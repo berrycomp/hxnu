@@ -275,6 +275,46 @@ pub extern "C" fn _start() -> ! {
                     halt();
                 }
             }
+
+            match mm::pager::initialize() {
+                Ok(pager) => {
+                    kprintln!(
+                        "HXNU: mm pager online page={} store-capacity-pages={}",
+                        pager.page_bytes,
+                        pager.store_capacity_pages,
+                    );
+                    match mm::pager::run_bootstrap_smoke() {
+                        Ok(smoke) => {
+                            let pager_stats = mm::pager::stats();
+                            kprintln!(
+                                "HXNU: mm pager smoke verified={}/{} reclaim-ok={}/{} restore-ok={}/{} class-reclaimed(z/s/x/r)={}/{}/{}/{} class-restored(z/s/x/r)={}/{}/{}/{}",
+                                smoke.verified_pages,
+                                smoke.tested_pages,
+                                pager_stats.reclaim_successes,
+                                pager_stats.reclaim_requests,
+                                pager_stats.restore_successes,
+                                pager_stats.restore_requests,
+                                pager_stats.reclaimed_zero_pages,
+                                pager_stats.reclaimed_same_pages,
+                                pager_stats.reclaimed_sxrc_pages,
+                                pager_stats.reclaimed_raw_pages,
+                                pager_stats.restored_zero_pages,
+                                pager_stats.restored_same_pages,
+                                pager_stats.restored_sxrc_pages,
+                                pager_stats.restored_raw_pages,
+                            );
+                        }
+                        Err(error) => {
+                            kprintln!("HXNU: mm pager smoke failed: {}", error.as_str());
+                            halt();
+                        }
+                    }
+                }
+                Err(error) => {
+                    kprintln!("HXNU: mm pager init failed: {}", error.as_str());
+                    halt();
+                }
+            }
         }
         Err(error) => {
             kprintln!("HXNU: mm compress init failed: {}", error.as_str());
