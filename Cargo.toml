@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel"]
+members = ["kernel", "tools/sxrc-profile-gen"]
 resolver = "3"
 
 [profile.dev]

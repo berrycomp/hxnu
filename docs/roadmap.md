@@ -66,6 +66,7 @@ Current status:
 - Bootstrap `fork/vfork/clone` synthetic child-spawn and `wait4` child-reap facades are online for Linux/Ghost/HXNU personalities
 - Portability-level matrix for Linux/Unix-style userland bring-up is documented in `docs/portability-matrix.md`
 - SXRC-derived memory compression integration contract is documented in `docs/sxrc-derivative-plan.md`
+- `tools/sxrc-profile-gen` host-side skeleton and generated kernel profile artifact (`kernel/src/mm/compress/profile_generated.rs`) are online
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)

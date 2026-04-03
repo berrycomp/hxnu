@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "hxnu-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "sxrc-profile-gen"
+version = "0.1.0"
