@@ -242,6 +242,39 @@ pub extern "C" fn _start() -> ! {
                 stats.raw_pages,
                 stats.fallback_raw_pages,
             );
+
+            match mm::compress::store::initialize() {
+                Ok(store) => {
+                    kprintln!(
+                        "HXNU: mm compress store online capacity-pages={} capacity-bytes={} page={} max-encoded={}",
+                        store.capacity_pages,
+                        store.capacity_bytes,
+                        store.page_bytes,
+                        store.max_encoded_page_bytes,
+                    );
+                    let store_stats = mm::compress::store::stats();
+                    kprintln!(
+                        "HXNU: mm compress store counters stored={} zero={} same={} sxrc={} raw={} encoded-bytes={} store-ok={}/{} load-ok={}/{} evictions={} replacements={} misses={}",
+                        store_stats.stored_pages,
+                        store_stats.stored_zero_pages,
+                        store_stats.stored_same_pages,
+                        store_stats.stored_sxrc_pages,
+                        store_stats.stored_raw_pages,
+                        store_stats.current_encoded_bytes,
+                        store_stats.store_successes,
+                        store_stats.store_requests,
+                        store_stats.load_successes,
+                        store_stats.load_requests,
+                        store_stats.evictions,
+                        store_stats.replacements,
+                        store_stats.load_misses,
+                    );
+                }
+                Err(error) => {
+                    kprintln!("HXNU: mm compress store init failed: {}", error.as_str());
+                    halt();
+                }
+            }
         }
         Err(error) => {
             kprintln!("HXNU: mm compress init failed: {}", error.as_str());

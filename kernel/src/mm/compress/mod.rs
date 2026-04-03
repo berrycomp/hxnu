@@ -6,6 +6,7 @@ mod checksum;
 mod codec;
 mod header;
 mod profile_generated;
+pub mod store;
 
 pub const PAGE_BYTES: usize = profile_generated::HXNU_SXRC_PAGE_SIZE;
 const _PAGE_SIZE_MATCH: [(); PAGE_BYTES] = [(); crate::mm::frame::PAGE_SIZE as usize];
