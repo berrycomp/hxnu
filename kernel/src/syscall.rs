@@ -14,7 +14,7 @@ use crate::time;
 use crate::tty;
 use crate::uaccess::{self, UserCopyError};
 use crate::vfs;
-use crate::vfs::{VfsMountKind, VfsNodeKind};
+use crate::vfs::{ExecutableFormat, VfsMountKind, VfsNodeKind};
 
 pub const LINUX_ABI_NAME: &str = "linux-x86_64-bootstrap";
 pub const GHOST_ABI_NAME: &str = "ghost-bootstrap";
@@ -47,6 +47,7 @@ pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_CLONE: u64 = 56;
 pub const LINUX_SYS_FORK: u64 = 57;
 pub const LINUX_SYS_VFORK: u64 = 58;
+pub const LINUX_SYS_EXECVE: u64 = 59;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_WAIT4: u64 = 61;
 pub const LINUX_SYS_UNAME: u64 = 63;
@@ -85,6 +86,7 @@ pub const LINUX_SYS_DUP3: u64 = 292;
 pub const LINUX_SYS_PIPE2: u64 = 293;
 pub const LINUX_SYS_PRLIMIT64: u64 = 302;
 pub const LINUX_SYS_GETRANDOM: u64 = 318;
+pub const LINUX_SYS_EXECVEAT: u64 = 322;
 pub const LINUX_SYS_RSEQ: u64 = 334;
 pub const LINUX_SYS_PPOLL: u64 = 271;
 pub const LINUX_SYS_FACCESSAT2: u64 = 439;
@@ -153,6 +155,7 @@ pub const GHOST_SYS_PPOLL: u64 = 61;
 pub const GHOST_SYS_CLONE: u64 = 62;
 pub const GHOST_SYS_FORK: u64 = 63;
 pub const GHOST_SYS_VFORK: u64 = 64;
+pub const GHOST_SYS_EXEC: u64 = 65;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -217,6 +220,7 @@ pub const HXNU_SYS_PPOLL: u64 = 0x484e_003c;
 pub const HXNU_SYS_CLONE: u64 = 0x484e_003d;
 pub const HXNU_SYS_FORK: u64 = 0x484e_003e;
 pub const HXNU_SYS_VFORK: u64 = 0x484e_003f;
+pub const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -224,6 +228,7 @@ const LINUX_CLOCK_REALTIME: i32 = 0;
 const LINUX_CLOCK_MONOTONIC: i32 = 1;
 const AT_FDCWD: i64 = -100;
 const AT_EACCESS: u64 = 0x200;
+const AT_EMPTY_PATH: u64 = 0x1000;
 const LINUX_TIOCGWINSZ: u64 = 0x5413;
 const F_DUPFD: i32 = 0;
 const F_GETFD: i32 = 1;
@@ -334,6 +339,9 @@ const DT_REG: u8 = 8;
 const MAX_WRITE_BYTES: usize = 16 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
+const MAX_EXEC_ARG_COUNT: usize = 256;
+const MAX_EXEC_ENV_COUNT: usize = 256;
+const MAX_EXEC_ARG_ENV_BYTES: usize = 64 * 1024;
 const MAX_OPEN_FILES: usize = 64;
 const MAX_SYNTHETIC_CHILDREN: usize = 256;
 const MMAP_PAGE_SIZE: usize = 4096;
@@ -354,6 +362,8 @@ const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
 const ENOMEM: i64 = 12;
+const E2BIG: i64 = 7;
+const ENOEXEC: i64 = 8;
 const EROFS: i64 = 30;
 const ESPIPE: i64 = 29;
 const EPIPE: i64 = 32;
@@ -1312,6 +1322,8 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_CLONE => process_clone(args),
         LINUX_SYS_FORK => process_fork(args),
         LINUX_SYS_VFORK => process_vfork(args),
+        LINUX_SYS_EXECVE => process_execve(args),
+        LINUX_SYS_EXECVEAT => process_execveat(args),
         LINUX_SYS_WAIT4 => process_wait4(args),
         LINUX_SYS_GETPPID => process_parent_id(),
         LINUX_SYS_GETTID => thread_id(),
@@ -1380,6 +1392,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_CLONE => process_clone(args),
         GHOST_SYS_FORK => process_fork(args),
         GHOST_SYS_VFORK => process_vfork(args),
+        GHOST_SYS_EXEC => process_exec(args),
         GHOST_SYS_WAIT4 => process_wait4(args),
         GHOST_SYS_GETPPID => process_parent_id(),
         GHOST_SYS_GETTID => thread_id(),
@@ -1448,6 +1461,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_CLONE => process_clone(args),
         HXNU_SYS_FORK => process_fork(args),
         HXNU_SYS_VFORK => process_vfork(args),
+        HXNU_SYS_EXEC => process_exec(args),
         HXNU_SYS_WAIT4 => process_wait4(args),
         HXNU_SYS_PROCESS_PARENT => process_parent_id(),
         HXNU_SYS_SETPGID => process_setpgid(args),
@@ -4460,6 +4474,195 @@ fn process_getrandom(args: [u64; 6]) -> SyscallOutcome {
     match i64::try_from(count) {
         Ok(value) => SyscallOutcome::success(value),
         Err(_) => SyscallOutcome::errno(ERANGE),
+    }
+}
+
+fn process_execve(args: [u64; 6]) -> SyscallOutcome {
+    process_exec_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2] as usize, 0)
+}
+
+fn process_execveat(args: [u64; 6]) -> SyscallOutcome {
+    let dirfd = match i64::try_from(args[0]) {
+        Ok(fd) => fd,
+        Err(_) => return SyscallOutcome::errno(EBADF),
+    };
+    process_exec_at(dirfd, args[1] as usize, args[2] as usize, args[3] as usize, args[4])
+}
+
+fn process_exec(args: [u64; 6]) -> SyscallOutcome {
+    process_exec_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2] as usize, 0)
+}
+
+#[derive(Copy, Clone)]
+struct ExecStringVectorSummary {
+    count: usize,
+    total_bytes: usize,
+}
+
+fn process_exec_at(
+    dirfd: i64,
+    path_ptr: usize,
+    argv_ptr: usize,
+    envp_ptr: usize,
+    flags: u64,
+) -> SyscallOutcome {
+    let exec_path = match resolve_exec_path_at(dirfd, path_ptr, flags) {
+        Ok(path) => path,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+
+    let node = match vfs::lookup(&exec_path) {
+        Some(node) => node,
+        None => return SyscallOutcome::errno(ENOENT),
+    };
+    if node.kind == VfsNodeKind::Directory {
+        return SyscallOutcome::errno(EISDIR);
+    }
+    if node.kind != VfsNodeKind::File {
+        return SyscallOutcome::errno(EACCES);
+    }
+    if !node.executable {
+        return SyscallOutcome::errno(EACCES);
+    }
+
+    let argv = match scan_exec_string_vector(argv_ptr, MAX_EXEC_ARG_COUNT, MAX_EXEC_ARG_ENV_BYTES) {
+        Ok(summary) => summary,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let env_budget = MAX_EXEC_ARG_ENV_BYTES.saturating_sub(argv.total_bytes);
+    let envp = match scan_exec_string_vector(envp_ptr, MAX_EXEC_ENV_COUNT, env_budget) {
+        Ok(summary) => summary,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if argv
+        .total_bytes
+        .checked_add(envp.total_bytes)
+        .is_none_or(|total| total > MAX_EXEC_ARG_ENV_BYTES)
+    {
+        return SyscallOutcome::errno(E2BIG);
+    }
+
+    let prep = match vfs::prepare_executable_load(&node.path) {
+        Ok(prep) => prep,
+        Err(error) => return SyscallOutcome::errno(map_exec_load_prep_error(error)),
+    };
+    match prep.format {
+        ExecutableFormat::Elf => {}
+        ExecutableFormat::ShebangScript => {
+            if !prep.interpreter_resolved {
+                return SyscallOutcome::errno(ENOENT);
+            }
+        }
+        ExecutableFormat::Text | ExecutableFormat::Unknown => return SyscallOutcome::errno(ENOEXEC),
+    }
+
+    let _ = (
+        prep.program_header_count,
+        prep.load_segment_count,
+        argv.count,
+        envp.count,
+    );
+
+    // Phase 3.5 preflight: validates path/argv/envp and loader compatibility.
+    // Process image replacement and non-returning handoff are still pending.
+    SyscallOutcome::errno(ENOSYS)
+}
+
+fn resolve_exec_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> Result<String, i64> {
+    if flags & !AT_EMPTY_PATH != 0 {
+        return Err(EINVAL);
+    }
+
+    let raw_path = copyin_c_string(path_ptr, MAX_PATH_BYTES)?;
+    if raw_path.is_empty() {
+        if flags & AT_EMPTY_PATH == 0 {
+            return Err(ENOENT);
+        }
+        if dirfd == AT_FDCWD {
+            return Err(EINVAL);
+        }
+
+        let fd = i32::try_from(dirfd).map_err(|_| EBADF)?;
+        let (path, kind) = open_file_path_and_kind_for_process(fd)?;
+        if kind != VfsNodeKind::File {
+            return Err(EACCES);
+        }
+        return Ok(path);
+    }
+
+    if raw_path.starts_with('/') {
+        return Ok(raw_path);
+    }
+
+    let mut base = base_path_for_dirfd(dirfd)?;
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    base.push_str(&raw_path);
+    Ok(base)
+}
+
+fn scan_exec_string_vector(
+    vector_ptr: usize,
+    max_count: usize,
+    max_total_bytes: usize,
+) -> Result<ExecStringVectorSummary, i64> {
+    if vector_ptr == 0 {
+        return Ok(ExecStringVectorSummary {
+            count: 0,
+            total_bytes: 0,
+        });
+    }
+
+    let mut count = 0usize;
+    let mut total_bytes = 0usize;
+    while count < max_count {
+        let item_ptr = copyin_usize_at(vector_ptr, count)?;
+        if item_ptr == 0 {
+            return Ok(ExecStringVectorSummary { count, total_bytes });
+        }
+
+        let text = copyin_c_string(item_ptr, MAX_PATH_BYTES)?;
+        total_bytes = total_bytes
+            .checked_add(text.len().saturating_add(1))
+            .ok_or(E2BIG)?;
+        if total_bytes > max_total_bytes {
+            return Err(E2BIG);
+        }
+
+        count += 1;
+    }
+
+    Err(E2BIG)
+}
+
+fn copyin_usize_at(array_ptr: usize, index: usize) -> Result<usize, i64> {
+    let stride = size_of::<u64>();
+    let offset = index.checked_mul(stride).ok_or(ERANGE)?;
+    let address = array_ptr.checked_add(offset).ok_or(ERANGE)?;
+    let bytes = copyin_bytes(address, stride)?;
+    if bytes.len() != stride {
+        return Err(EINVAL);
+    }
+
+    let raw = u64::from_le_bytes(bytes[0..8].try_into().map_err(|_| EINVAL)?);
+    usize::try_from(raw).map_err(|_| ERANGE)
+}
+
+fn map_exec_load_prep_error(error: vfs::ExecutableLoadPrepError) -> i64 {
+    match error {
+        vfs::ExecutableLoadPrepError::Discovery(error) => map_exec_discovery_error(error),
+        vfs::ExecutableLoadPrepError::Parse(_) => ENOEXEC,
+    }
+}
+
+fn map_exec_discovery_error(error: vfs::ExecutableDiscoveryError) -> i64 {
+    match error {
+        vfs::ExecutableDiscoveryError::VfsUnavailable => EIO,
+        vfs::ExecutableDiscoveryError::PathNotFound => ENOENT,
+        vfs::ExecutableDiscoveryError::NotAFile => EACCES,
+        vfs::ExecutableDiscoveryError::BackendUnavailable => EIO,
+        vfs::ExecutableDiscoveryError::ParseFailed(_) => ENOEXEC,
     }
 }
 

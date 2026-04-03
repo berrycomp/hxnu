@@ -64,6 +64,7 @@ Current status:
 - Bootstrap `arch_prctl(ARCH_SET_FS/ARCH_GET_FS/ARCH_SET_GS/ARCH_GET_GS)` and `futex(WAIT/WAKE)` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `pipe/pipe2` and `poll/ppoll` syscall facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `fork/vfork/clone` synthetic child-spawn and `wait4` child-reap facades are online for Linux/Ghost/HXNU personalities
+- Bootstrap `exec` preflight (`execve/execveat` for Linux, `exec` for Ghost/HXNU) now validates path + `argv/envp` + loader compatibility before returning `ENOSYS` pending real image replacement
 - Portability-level matrix for Linux/Unix-style userland bring-up is documented in `docs/portability-matrix.md`
 - SXRC-derived memory compression integration contract is documented in `docs/sxrc-derivative-plan.md`
 - `tools/sxrc-profile-gen` host-side skeleton and generated kernel profile artifact (`kernel/src/mm/compress/profile_generated.rs`) are online
