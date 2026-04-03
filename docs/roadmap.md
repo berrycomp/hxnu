@@ -74,6 +74,7 @@ Current status:
 - `/proc/compress` endpoint is online with compression runtime/store/pager observability counters on `x86_64`
 - Bootstrap block-device layer is online with initrd-backed read-only sector facade on `x86_64`
 - Block driver registry with `InitrdRamdisk` first driver contract is online on `x86_64`
+- Dynamic block node aliases are online in `devfs` (`/dev/sdX`, `/dev/nvmeXn1`, `/dev/nvmXn` and partition variants)
 - MBR signature probe and primary partition discovery scaffold are online via block layer on `x86_64`
 - GPT header (`EFI PART`) probe and bounded entry discovery with MBR fallback are online on `x86_64`
 - FAT16/32 read-only root directory listing mount is online at `/fat` when a valid partition is present
@@ -120,6 +121,15 @@ Cross-repo status (as of 2026-03-29):
 - MADT and FADT parsing
 - Reboot and poweroff plumbing
 - Userspace ABI planning
+
+## Phase 3.5
+- Real `execve` path with user stack construction (`argv/envp/auxv`) and interpreter (`PT_INTERP`) handoff
+- VFS core object model hardening (`inode`/`dentry`/open-file separation and descriptor lifecycle)
+- Writable `tmpfs` bootstrap for early userland runtime paths (`/tmp`, `/run`)
+- FAT v2 read-only expansion (file content reads, subdirectory traversal, staged LFN support)
+- Syscall/process core hardening for real child runtime beyond synthetic spawn (`fork/clone` follow-up)
+- Signal delivery baseline (`sigaction` wiring to scheduler/process state and `SIGCHLD` behavior)
+- Acceptance focus: boot to userspace with `execve`, deterministic FD lifecycle, and stable `/dev` + `/proc` + `/fat` observability
 
 ## Phase 4
 - SMP bring-up on `x86_64`
