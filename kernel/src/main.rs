@@ -1262,6 +1262,20 @@ pub extern "C" fn _start() -> ! {
             devlist,
         );
     }
+    if let Some(sda) = vfs::preview("/dev/sda", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: devfs preview sda={}",
+            sda,
+        );
+    }
+    if let Some(sda1) = vfs::preview("/dev/sda1", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: devfs preview sda1={}",
+            sda1,
+        );
+    }
     if let Some(initrd_root) = vfs::preview("/initrd", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
