@@ -215,6 +215,38 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    match mm::compress::initialize() {
+        Ok(summary) => {
+            kprintln!(
+                "HXNU: mm compress online backend={} profile={} v{} page={} unit={} little-endian={} dynamic-patterns={} dict={} patterns={}",
+                summary.backend,
+                summary.profile,
+                summary.profile_version,
+                summary.page_bytes,
+                summary.compression_unit_bytes,
+                yes_no(summary.little_endian),
+                yes_no(summary.dynamic_patterns),
+                summary.static_dictionary_entries,
+                summary.static_pattern_entries,
+            );
+            let stats = mm::compress::stats();
+            kprintln!(
+                "HXNU: mm compress counters encoded={} decoded={} zero={} same={} sxrc={} raw={} raw-fallback={}",
+                stats.encoded_pages,
+                stats.decoded_pages,
+                stats.zero_pages,
+                stats.same_pages,
+                stats.sxrc_pages,
+                stats.raw_pages,
+                stats.fallback_raw_pages,
+            );
+        }
+        Err(error) => {
+            kprintln!("HXNU: mm compress init failed: {}", error.as_str());
+            halt();
+        }
+    }
+
     arch::x86_64::initialize();
     let selectors = arch::x86_64::segment_selectors();
     kprintln!(
