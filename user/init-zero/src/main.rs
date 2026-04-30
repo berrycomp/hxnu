@@ -20,6 +20,8 @@ const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
 const HXNU_SYS_EXEC: u64 = 0x484e_0040;
+const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
+const HXNU_SYS_RENAME: u64 = 0x484e_0043;
 const PR_GET_NAME: u64 = 16;
 const TASK_COMM_LEN: usize = 16;
 const F_OK: u64 = 0;
@@ -30,6 +32,8 @@ const INIT_PATH: &[u8] = b"/initrd/init\0";
 const INIT_ARG0: &[u8] = b"/initrd/init\0";
 const INIT_ARG1_REEXEC: &[u8] = b"--reexec\0";
 const REEXEC_MARKER_PATH: &[u8] = b"/run/init-zero.reexec\0";
+const TMPFS_SMOKE_SOURCE_PATH: &[u8] = b"/run/init-zero-smoke.a\0";
+const TMPFS_SMOKE_DESTINATION_PATH: &[u8] = b"/run/init-zero-smoke.b\0";
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -70,6 +74,10 @@ pub extern "C" fn _start() -> ! {
         uptime_ns,
     );
     log_bytes(line.as_bytes());
+
+    if reexec_stage == "post-exec" {
+        run_tmpfs_smoke();
+    }
 
     loop {
         let _ = syscall0(HXNU_SYS_SCHED_YIELD);
@@ -171,6 +179,59 @@ fn maybe_reexec_once() -> &'static str {
     );
     log_bytes(line.as_bytes());
     "exec-failed"
+}
+
+fn run_tmpfs_smoke() {
+    let source_fd = syscall2(
+        HXNU_SYS_OPEN,
+        TMPFS_SMOKE_SOURCE_PATH.as_ptr() as u64,
+        O_WRONLY | O_CREAT | O_TRUNC,
+    );
+    if source_fd < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: tmpfs smoke open failed errno={}\n",
+            source_fd,
+        );
+        log_bytes(line.as_bytes());
+        return;
+    }
+    let _ = syscall1(HXNU_SYS_CLOSE, source_fd as u64);
+
+    let rename_result = syscall2(
+        HXNU_SYS_RENAME,
+        TMPFS_SMOKE_SOURCE_PATH.as_ptr() as u64,
+        TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64,
+    );
+    if rename_result < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: tmpfs smoke rename failed errno={}\n",
+            rename_result,
+        );
+        log_bytes(line.as_bytes());
+        return;
+    }
+
+    let source_access = syscall2(HXNU_SYS_ACCESS, TMPFS_SMOKE_SOURCE_PATH.as_ptr() as u64, F_OK);
+    let destination_access =
+        syscall2(HXNU_SYS_ACCESS, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64, F_OK);
+    let unlink_result = syscall1(HXNU_SYS_UNLINK, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64);
+    let removed_access = syscall2(HXNU_SYS_ACCESS, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64, F_OK);
+
+    let mut line = StackLine::<192>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: tmpfs smoke rename={} source-access={} dest-access={} unlink={} removed-access={}\n",
+        rename_result,
+        source_access,
+        destination_access,
+        unlink_result,
+        removed_access,
+    );
+    log_bytes(line.as_bytes());
 }
 
 struct StackLine<const N: usize> {

@@ -60,6 +60,8 @@ pub const LINUX_SYS_FCNTL: u64 = 72;
 pub const LINUX_SYS_GETCWD: u64 = 79;
 pub const LINUX_SYS_CHDIR: u64 = 80;
 pub const LINUX_SYS_FCHDIR: u64 = 81;
+pub const LINUX_SYS_UNLINKAT: u64 = 263;
+pub const LINUX_SYS_RENAMEAT: u64 = 264;
 pub const LINUX_SYS_UMASK: u64 = 95;
 pub const LINUX_SYS_GETTIMEOFDAY: u64 = 96;
 pub const LINUX_SYS_GETRLIMIT: u64 = 97;
@@ -227,6 +229,8 @@ pub const HXNU_SYS_FORK: u64 = 0x484e_003e;
 pub const HXNU_SYS_VFORK: u64 = 0x484e_003f;
 pub const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 pub const HXNU_SYS_CPUCAPS: u64 = 0x484e_0041;
+pub const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
+pub const HXNU_SYS_RENAME: u64 = 0x484e_0043;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -235,6 +239,7 @@ const LINUX_CLOCK_MONOTONIC: i32 = 1;
 const AT_FDCWD: i64 = -100;
 const AT_EACCESS: u64 = 0x200;
 const AT_EMPTY_PATH: u64 = 0x1000;
+const AT_REMOVEDIR: u64 = 0x200;
 const LINUX_TIOCGWINSZ: u64 = 0x5413;
 const F_DUPFD: i32 = 0;
 const F_GETFD: i32 = 1;
@@ -388,6 +393,7 @@ const ERANGE: i64 = 34;
 const ENOENT: i64 = 2;
 const EACCES: i64 = 13;
 const EBUSY: i64 = 16;
+const EXDEV: i64 = 18;
 const ENOTTY: i64 = 25;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
@@ -1435,6 +1441,8 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_CHDIR => linux_chdir(args),
         LINUX_SYS_FCHDIR => linux_fchdir(args),
         LINUX_SYS_OPENAT => linux_openat(args),
+        LINUX_SYS_UNLINKAT => linux_unlinkat(args),
+        LINUX_SYS_RENAMEAT => linux_renameat(args),
         LINUX_SYS_NEWFSTATAT => linux_newfstatat(args),
         LINUX_SYS_READLINKAT => linux_readlinkat(args),
         LINUX_SYS_FACCESSAT => linux_faccessat(args),
@@ -1578,6 +1586,8 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_STAT => stat_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
         HXNU_SYS_READLINK => readlink_path_at(AT_FDCWD, args[0] as usize, args[1] as usize, args[2]),
         HXNU_SYS_ACCESS => access_path_at(AT_FDCWD, args[0] as usize, args[1], 0),
+        HXNU_SYS_UNLINK => unlink_path_at(AT_FDCWD, args[0] as usize, args[1]),
+        HXNU_SYS_RENAME => rename_path_at(AT_FDCWD, args[0] as usize, AT_FDCWD, args[1] as usize),
         HXNU_SYS_SEEK => seek_fd(args),
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
@@ -3684,6 +3694,17 @@ fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
     open_path_at(dirfd, args[1] as usize, args[2])
 }
 
+fn linux_unlinkat(args: [u64; 6]) -> SyscallOutcome {
+    let dirfd = args[0] as i64;
+    unlink_path_at(dirfd, args[1] as usize, args[2])
+}
+
+fn linux_renameat(args: [u64; 6]) -> SyscallOutcome {
+    let old_dirfd = args[0] as i64;
+    let new_dirfd = args[2] as i64;
+    rename_path_at(old_dirfd, args[1] as usize, new_dirfd, args[3] as usize)
+}
+
 fn linux_mmap(args: [u64; 6]) -> SyscallOutcome {
     process_mmap(args)
 }
@@ -5531,6 +5552,60 @@ fn status_flags_from_open_mode(mode: OpenMode, kind: VfsNodeKind) -> u64 {
     flags
 }
 
+fn unlink_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
+    if flags != 0 && flags != AT_REMOVEDIR {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let resolved_path = match resolve_path_at(dirfd, path_ptr) {
+        Ok(path) => path,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    if !tmpfs::handles_path(&resolved_path) {
+        return SyscallOutcome::errno(EROFS);
+    }
+    if flags == AT_REMOVEDIR {
+        return SyscallOutcome::errno(EISDIR);
+    }
+
+    match tmpfs::unlink_file(&resolved_path) {
+        Ok(()) => SyscallOutcome::success(0),
+        Err(error) => SyscallOutcome::errno(map_tmpfs_error(error)),
+    }
+}
+
+fn rename_path_at(
+    old_dirfd: i64,
+    old_path_ptr: usize,
+    new_dirfd: i64,
+    new_path_ptr: usize,
+) -> SyscallOutcome {
+    let source_path = match resolve_path_at(old_dirfd, old_path_ptr) {
+        Ok(path) => path,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let destination_path = match resolve_path_at(new_dirfd, new_path_ptr) {
+        Ok(path) => path,
+        Err(error) => return SyscallOutcome::errno(error),
+    };
+    let source_tmpfs = tmpfs::handles_path(&source_path);
+    let destination_tmpfs = tmpfs::handles_path(&destination_path);
+    if source_tmpfs != destination_tmpfs {
+        return SyscallOutcome::errno(EXDEV);
+    }
+    if !source_tmpfs {
+        return SyscallOutcome::errno(EROFS);
+    }
+
+    match tmpfs::rename_file(&source_path, &destination_path) {
+        Ok(()) => {
+            retarget_open_files_for_path(&source_path, &destination_path);
+            SyscallOutcome::success(0)
+        }
+        Err(error) => SyscallOutcome::errno(map_tmpfs_error(error)),
+    }
+}
+
 fn stat_path_at(dirfd: i64, path_ptr: usize, stat_ptr: u64, flags: u64) -> SyscallOutcome {
     if flags != 0 {
         return SyscallOutcome::errno(EINVAL);
@@ -6333,6 +6408,15 @@ fn map_tmpfs_error(error: tmpfs::TmpfsError) -> i64 {
         tmpfs::TmpfsError::NotFound => ENOENT,
         tmpfs::TmpfsError::IsDirectory => EISDIR,
         tmpfs::TmpfsError::FileLimitReached => ENOSPC,
+    }
+}
+
+fn retarget_open_files_for_path(source_path: &str, destination_path: &str) {
+    let table = fd_table_mut();
+    for file in &mut table.files {
+        if file.mount == VfsMountKind::Tmpfs && file.path == source_path {
+            file.path = String::from(destination_path);
+        }
     }
 }
 

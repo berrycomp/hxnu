@@ -221,6 +221,52 @@ pub fn write_file(path: &str, content: &[u8]) -> Result<(), TmpfsError> {
     Ok(())
 }
 
+pub fn unlink_file(path: &str) -> Result<(), TmpfsError> {
+    let normalized = normalize_path(path).ok_or(TmpfsError::InvalidPath)?;
+    if normalized == TMP_ROOT_PATH || normalized == RUN_ROOT_PATH {
+        return Err(TmpfsError::IsDirectory);
+    }
+
+    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
+    let Some(index) = state.files.iter().position(|file| file.path == normalized) else {
+        return Err(TmpfsError::NotFound);
+    };
+    state.files.remove(index);
+    Ok(())
+}
+
+pub fn rename_file(source_path: &str, destination_path: &str) -> Result<(), TmpfsError> {
+    let source = normalize_path(source_path).ok_or(TmpfsError::InvalidPath)?;
+    let destination = normalize_path(destination_path).ok_or(TmpfsError::InvalidPath)?;
+    ensure_tmpfs_parent(&source)?;
+    ensure_tmpfs_parent(&destination)?;
+    if source == TMP_ROOT_PATH
+        || source == RUN_ROOT_PATH
+        || destination == TMP_ROOT_PATH
+        || destination == RUN_ROOT_PATH
+    {
+        return Err(TmpfsError::IsDirectory);
+    }
+    if source == destination {
+        return Ok(());
+    }
+
+    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
+    let Some(mut source_index) = state.files.iter().position(|file| file.path == source) else {
+        return Err(TmpfsError::NotFound);
+    };
+
+    if let Some(destination_index) = state.files.iter().position(|file| file.path == destination) {
+        state.files.remove(destination_index);
+        if destination_index < source_index {
+            source_index -= 1;
+        }
+    }
+
+    state.files[source_index].path = destination;
+    Ok(())
+}
+
 fn ensure_tmpfs_parent(path: &str) -> Result<(), TmpfsError> {
     if !handles_path(path) {
         return Err(TmpfsError::InvalidPath);

@@ -91,7 +91,7 @@ Current status:
 - GPT header (`EFI PART`) probe and bounded entry discovery with MBR fallback are online on `x86_64`
 - FAT16/32 read-only root directory listing mount is online at `/fat` when a valid partition is present
 - `/proc/block` now includes block driver and partition-table observability, and `/proc/fat` is online for FAT mount status
-- Writable `tmpfs` bootstrap is online at `/tmp` and `/run` with file create/truncate/append paths (`open/openat` + `read/write/pread64/pwrite64/writev` on regular files)
+- Writable `tmpfs` bootstrap is online at `/tmp` and `/run` with file create/truncate/append paths plus constrained rename/unlink smoke coverage (`open/openat` + `read/write/pread64/pwrite64/writev` + `rename/unlink` on regular files)
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)
