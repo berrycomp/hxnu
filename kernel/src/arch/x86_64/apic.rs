@@ -78,6 +78,7 @@ impl From<early_map::MapError> for TimerError {
         match value {
             early_map::MapError::AddressOverflow => Self::MissingBaseAddress,
             early_map::MapError::PageTableAllocationFailed => Self::PageTableAllocationFailed,
+            early_map::MapError::MappingConflict => Self::MissingBaseAddress,
         }
     }
 }

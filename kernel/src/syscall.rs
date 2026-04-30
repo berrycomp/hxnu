@@ -1329,6 +1329,23 @@ struct ExecStackLayout {
     argv0_defaulted: bool,
 }
 
+pub struct BootstrapExecStackImage {
+    pub stack_pointer: u64,
+    pub stack_top: u64,
+    pub stack_bytes: usize,
+    pub argv_count: usize,
+    pub env_count: usize,
+    pub auxv_count: usize,
+    pub entry_point: Option<u64>,
+    pub signature: u64,
+    pub bytes: Vec<u8>,
+}
+
+struct BuiltExecStack {
+    layout: ExecStackLayout,
+    image: Vec<u8>,
+}
+
 struct ExecPreflightRecord {
     process_id: u64,
     path: String,
@@ -4935,6 +4952,34 @@ fn build_exec_stack_layout(
     argv: &[String],
     envp: &[String],
 ) -> Result<ExecStackLayout, i64> {
+    let built = build_exec_stack_image(exec_path, prep, argv, envp)?;
+    Ok(built.layout)
+}
+
+pub fn build_bootstrap_exec_stack(
+    exec_path: &str,
+    prep: &vfs::ExecutableLoadPrep,
+) -> Result<BootstrapExecStackImage, i64> {
+    let built = build_exec_stack_image(exec_path, prep, &[], &[])?;
+    Ok(BootstrapExecStackImage {
+        stack_pointer: built.layout.stack_pointer,
+        stack_top: built.layout.stack_top,
+        stack_bytes: built.layout.stack_bytes,
+        argv_count: built.layout.argv_count,
+        env_count: built.layout.env_count,
+        auxv_count: built.layout.auxv_count,
+        entry_point: built.layout.entry_point,
+        signature: built.layout.signature,
+        bytes: built.image,
+    })
+}
+
+fn build_exec_stack_image(
+    exec_path: &str,
+    prep: &vfs::ExecutableLoadPrep,
+    argv: &[String],
+    envp: &[String],
+) -> Result<BuiltExecStack, i64> {
     let (effective_argv, shebang_rewritten, argv0_defaulted) = build_effective_exec_argv(exec_path, prep, argv)?;
     let mut blob = Vec::new();
     let mut argv_offsets = Vec::with_capacity(effective_argv.len());
@@ -5065,25 +5110,29 @@ fn build_exec_stack_layout(
     }
     image[cursor..blob_end].copy_from_slice(&blob);
 
-    Ok(ExecStackLayout {
-        stack_pointer,
-        stack_top: EXEC_STACK_TOP,
-        stack_bytes,
-        table_bytes,
-        blob_bytes: blob.len(),
-        padding_bytes,
-        argv_count: effective_argv.len(),
-        env_count: envp.len(),
-        auxv_count,
-        hwcap: caps.base_bits,
-        hwcap2: caps.ext_bits,
-        entry_point: prep.entry_point,
-        signature: fnv1a64(&image),
-        execfn: String::from(exec_path),
-        interpreter_source: prep.interpreter_source.clone(),
-        interpreter_argument: prep.interpreter_argument.clone(),
-        shebang_rewritten,
-        argv0_defaulted,
+    let signature = fnv1a64(&image);
+    Ok(BuiltExecStack {
+        layout: ExecStackLayout {
+            stack_pointer,
+            stack_top: EXEC_STACK_TOP,
+            stack_bytes,
+            table_bytes,
+            blob_bytes: blob.len(),
+            padding_bytes,
+            argv_count: effective_argv.len(),
+            env_count: envp.len(),
+            auxv_count,
+            hwcap: caps.base_bits,
+            hwcap2: caps.ext_bits,
+            entry_point: prep.entry_point,
+            signature,
+            execfn: String::from(exec_path),
+            interpreter_source: prep.interpreter_source.clone(),
+            interpreter_argument: prep.interpreter_argument.clone(),
+            shebang_rewritten,
+            argv0_defaulted,
+        },
+        image,
     })
 }
 

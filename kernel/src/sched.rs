@@ -619,6 +619,7 @@ pub fn on_timer_interrupt(_apic_tick: u64) {
 
     let tick = SCHEDULER_TICKS.fetch_add(1, Ordering::AcqRel) + 1;
     let dispatch = unsafe { (*SCHEDULER.get()).on_timer_tick() };
+    crate::init_exec::observe_timer_tick(tick);
     if tick <= BOOTSTRAP_TARGET_TICKS {
         if let Some(dispatch) = dispatch {
             kprintln!(

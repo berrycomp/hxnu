@@ -85,6 +85,15 @@ pub fn ensure_physical_region_mapped(
     early_map::ensure_region_mapped(hhdm_offset, physical_address, length, extra_flags)
 }
 
+pub fn map_virtual_page(
+    hhdm_offset: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    extra_flags: u64,
+) -> Result<(), MapError> {
+    early_map::map_virtual_page(hhdm_offset, virtual_address, physical_address, extra_flags)
+}
+
 pub fn initialize_kernel_thread_context(
     context: &mut TaskContext,
     stack: &'static mut [u8],

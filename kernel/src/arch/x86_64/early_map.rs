@@ -16,6 +16,7 @@ const PAGE_SIZE: u64 = 4096;
 pub enum MapError {
     AddressOverflow,
     PageTableAllocationFailed,
+    MappingConflict,
 }
 
 pub fn ensure_region_mapped(
@@ -36,7 +37,7 @@ pub fn ensure_region_mapped(
 
     let mut page = start_page;
     loop {
-        ensure_page_mapping(hhdm_offset, page, extra_flags)?;
+        ensure_page_mapping(hhdm_offset, virtual_address_for_hhdm(hhdm_offset, page)?, page, extra_flags)?;
         if page == end_page {
             break;
         }
@@ -46,14 +47,26 @@ pub fn ensure_region_mapped(
     Ok(virtual_address)
 }
 
-fn ensure_page_mapping(
+pub fn map_virtual_page(
     hhdm_offset: u64,
+    virtual_address: u64,
     physical_address: u64,
     extra_flags: u64,
 ) -> Result<(), MapError> {
-    let virtual_address = hhdm_offset
-        .checked_add(physical_address)
-        .ok_or(MapError::AddressOverflow)?;
+    ensure_page_mapping(
+        hhdm_offset,
+        virtual_address & !0xfff,
+        physical_address & !0xfff,
+        extra_flags,
+    )
+}
+
+fn ensure_page_mapping(
+    hhdm_offset: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    extra_flags: u64,
+) -> Result<(), MapError> {
     let pml4 = hhdm_offset
         .checked_add(read_cr3() & PAGE_ADDRESS_MASK)
         .ok_or(MapError::AddressOverflow)? as *mut u64;
@@ -88,9 +101,17 @@ fn ensure_page_mapping(
             );
         }
         invalidate_page(virtual_address);
+    } else if entry & PAGE_ADDRESS_MASK != physical_address & PAGE_ADDRESS_MASK {
+        return Err(MapError::MappingConflict);
     }
 
     Ok(())
+}
+
+fn virtual_address_for_hhdm(hhdm_offset: u64, physical_address: u64) -> Result<u64, MapError> {
+    hhdm_offset
+        .checked_add(physical_address)
+        .ok_or(MapError::AddressOverflow)
 }
 
 fn next_table(table: *mut u64, index: usize, hhdm_offset: u64) -> Result<NextTable, MapError> {

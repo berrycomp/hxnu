@@ -26,6 +26,7 @@ Reason: the current bootstrap code is not a clean-room implementation. It alread
 - `kernel/`: Rust kernel crate
 - `boot/`: Limine configuration
 - `scripts/`: bootstrap, ISO build, and QEMU run helpers
+- `user/`: bootstrap init payloads and early userland experiments
 - `docs/`: roadmap and architecture notes
 
 Core design notes live in `docs/architecture.md`.
@@ -42,10 +43,12 @@ Core design notes live in `docs/architecture.md`.
 
 ```bash
 ./scripts/bootstrap.sh
-cargo build -p hxnu-kernel
+./scripts/build-kernel.sh
 ```
 
-Current builds use Rust's built-in `x86_64-unknown-none` target with a custom linker script. A dedicated HXNU target JSON can be introduced later when the kernel ABI and memory model diverge enough to justify it.
+`build-kernel.sh` prefers the external HXNU toolchain and builds the kernel as `x86_64-unknown-hxnu` when `hxnu-cargo` is available. It checks `HXNU_CARGO_BIN`, `hxnu-cargo` on `PATH`, and can bootstrap from a local compiler checkout at `../compilers/hxnu-rustc-compiler-x86_64`. If none are available, it falls back to Rust's built-in `x86_64-unknown-none` target with the same linker script.
+
+For wrapper-only validation, set `HXNU_BUILD_DRIVER=hxnu` to make the script fail instead of falling back.
 
 ## Build A Bootable ISO
 
@@ -53,9 +56,11 @@ Current builds use Rust's built-in `x86_64-unknown-none` target with a custom li
 ./scripts/build-iso.sh
 ```
 
+`build-iso.sh` reuses `build-kernel.sh`, so ISO creation follows the same toolchain selection rules.
+
 `prepare-limine.sh` first tries to reuse a local `../heartix/target/limine-9.2.0` tree during bootstrap. If that does not exist, it downloads the pinned Limine binary archive for `9.2.0` and stages the required artifacts under `vendor/`.
 
-`build-initrd.sh` generates a small `cpio` `newc` archive from `initrd/` and places it at `/boot/initrd.cpio` in the ISO. Limine exposes it to the kernel as the `initrd` boot module.
+`build-initrd.sh` generates a small `cpio` `newc` archive and places it at `/boot/initrd.cpio` in the ISO. It now prefers the repo-local `hxnu-init` ELF payload under `user/init-zero/` for `/initrd/init`, falls back to the adjacent compiler workspace's `init-like` ELF example when needed, and finally falls back to the checked-in script placeholder. Set `HXNU_INITRD_INIT_MODE=elf|script|auto` to force the mode. Limine exposes the archive to the kernel as the `initrd` boot module.
 
 ## Run Under QEMU
 
@@ -70,8 +75,17 @@ Expected first output on the serial console:
 ```text
 HXNU: x86_64 early bootstrap
 HXNU: Limine protocol handshake ok
-HXNU: Rust kernel skeleton online
 ```
+
+When `/initrd/init` is staged as an ELF payload, later bring-up logs should also include:
+
+```text
+HXNU: init launch transfer path=/initrd/init ...
+HXNU: init launch heartbeat tick=...
+HXNU-INIT: payload online via int 0x80
+```
+
+Those lines indicate the kernel mapped the ELF load image plus bootstrap exec stack, transferred control into the loaded init image, and exercised the HXNU native syscall path from the launched payload.
 
 ## FAT Smoke Acceptance
 

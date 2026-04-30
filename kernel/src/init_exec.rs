@@ -1,14 +1,27 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
+use core::ptr;
+use core::sync::atomic::{AtomicU32, Ordering};
 
+use crate::arch;
+use crate::kprintln;
+use crate::limine;
+use crate::mm;
+use crate::syscall;
 use crate::vfs;
 use crate::vfs::{ExecutableFormat, VmMapImageEntry};
 
 struct GlobalInitExec(UnsafeCell<InitExecState>);
 
 unsafe impl Sync for GlobalInitExec {}
+
+const PAGE_BYTES: usize = mm::frame::PAGE_SIZE as usize;
+const PAGE_MASK: u64 = mm::frame::PAGE_SIZE - 1;
+const ELF_MACHINE_X86_64: u16 = 0x003e;
+const INIT_LAUNCH_MONITOR_TICKS: u32 = 3;
 
 impl GlobalInitExec {
     const fn new() -> Self {
@@ -21,10 +34,12 @@ impl GlobalInitExec {
 }
 
 static INIT_EXEC: GlobalInitExec = GlobalInitExec::new();
+static LAUNCH_MONITOR_BUDGET: AtomicU32 = AtomicU32::new(0);
 
 struct InitExecState {
     activation: Option<ActivatedInitImage>,
     last_error: Option<InitExecActivateError>,
+    last_launch_error: Option<InitExecLaunchError>,
 }
 
 impl InitExecState {
@@ -32,6 +47,7 @@ impl InitExecState {
         Self {
             activation: None,
             last_error: None,
+            last_launch_error: None,
         }
     }
 }
@@ -110,6 +126,43 @@ impl InitExecActivateError {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum InitExecLaunchError {
+    NotArmed,
+    UnsupportedMachine,
+    Prep(vfs::ExecutableLoadPrepError),
+    StackBuild(i64),
+    MissingHhdm,
+    StackRangeInvalid,
+    SegmentRangeInvalid,
+    FrameAllocationFailed,
+    Map(arch::x86_64::MapError),
+}
+
+impl InitExecLaunchError {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotArmed => "init executable handoff is not armed",
+            Self::UnsupportedMachine => "init executable machine is not supported for launch",
+            Self::Prep(error) => error.as_str(),
+            Self::StackBuild(_) => "init bootstrap stack image could not be built",
+            Self::MissingHhdm => "limine HHDM offset is not available",
+            Self::StackRangeInvalid => "init bootstrap stack range is invalid",
+            Self::SegmentRangeInvalid => "init executable segment range is invalid",
+            Self::FrameAllocationFailed => "physical frame allocation failed during init launch",
+            Self::Map(arch::x86_64::MapError::AddressOverflow) => {
+                "init executable mapping overflowed the address space"
+            }
+            Self::Map(arch::x86_64::MapError::PageTableAllocationFailed) => {
+                "init executable mapping could not allocate page tables"
+            }
+            Self::Map(arch::x86_64::MapError::MappingConflict) => {
+                "init executable launch hit an existing virtual mapping"
+            }
+        }
+    }
+}
+
 pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError> {
     let result = (|| {
         let image = vfs::materialize_init_image().map_err(InitExecActivateError::Load)?;
@@ -122,12 +175,78 @@ pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError>
             let summary = activation_summary(&activation);
             state.activation = Some(activation);
             state.last_error = None;
+            state.last_launch_error = None;
             Ok(summary)
         }
         Err(error) => {
             state.activation = None;
             state.last_error = Some(error);
+            state.last_launch_error = None;
             Err(error)
+        }
+    }
+}
+
+pub fn launch_armed_init() -> Result<(), InitExecLaunchError> {
+    let result = (|| {
+        let state = state_ref();
+        let activation = state.activation.as_ref().ok_or(InitExecLaunchError::NotArmed)?;
+        if activation.machine != ELF_MACHINE_X86_64 {
+            return Err(InitExecLaunchError::UnsupportedMachine);
+        }
+
+        let hhdm_offset = limine::hhdm_offset().ok_or(InitExecLaunchError::MissingHhdm)?;
+        let prep = vfs::prepare_executable_load(&activation.path).map_err(InitExecLaunchError::Prep)?;
+        let stack =
+            syscall::build_bootstrap_exec_stack(&activation.path, &prep).map_err(InitExecLaunchError::StackBuild)?;
+        let launch_entry_point = stack.entry_point.unwrap_or(activation.entry_point);
+
+        map_stack_image(&stack, hhdm_offset)?;
+        for segment in &activation.segments {
+            map_loaded_segment(segment, hhdm_offset)?;
+        }
+
+        kprintln!(
+            "HXNU: init launch transfer path={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
+            activation.path,
+            launch_entry_point,
+            stack.stack_pointer,
+            stack.stack_bytes,
+            stack.argv_count,
+            stack.env_count,
+            stack.auxv_count,
+            stack.signature,
+        );
+        LAUNCH_MONITOR_BUDGET.store(INIT_LAUNCH_MONITOR_TICKS, Ordering::Release);
+        unsafe { jump_to_loaded_image(launch_entry_point, stack.stack_pointer) }
+    })();
+
+    let state = state_mut();
+    state.last_launch_error = match result {
+        Ok(()) => None,
+        Err(error) => Some(error),
+    };
+    result
+}
+
+pub fn observe_timer_tick(tick: u64) {
+    let mut remaining = LAUNCH_MONITOR_BUDGET.load(Ordering::Acquire);
+    while remaining != 0 {
+        match LAUNCH_MONITOR_BUDGET.compare_exchange(
+            remaining,
+            remaining - 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                kprintln!(
+                    "HXNU: init launch heartbeat tick={} remaining={}",
+                    tick,
+                    remaining - 1,
+                );
+                return;
+            }
+            Err(updated) => remaining = updated,
         }
     }
 }
@@ -181,6 +300,11 @@ pub fn render_status() -> String {
 
     let last_error = state.last_error.map(|error| error.as_str()).unwrap_or("<none>");
     let _ = writeln!(text, "last_error {}", last_error);
+    let last_launch_error = state
+        .last_launch_error
+        .map(|error| error.as_str())
+        .unwrap_or("<none>");
+    let _ = writeln!(text, "last_launch_error {}", last_launch_error);
     text
 }
 
@@ -280,6 +404,104 @@ fn activation_summary(activation: &ActivatedInitImage) -> InitExecSummary {
         vm_end: activation.vm_end,
         entry_segment_index: activation.entry_segment_index,
         entry_segment_map_offset: activation.entry_segment_map_offset,
+    }
+}
+
+fn map_stack_image(
+    stack: &syscall::BootstrapExecStackImage,
+    hhdm_offset: u64,
+) -> Result<(), InitExecLaunchError> {
+    let stack_end = stack
+        .stack_pointer
+        .checked_add(stack.stack_bytes as u64)
+        .ok_or(InitExecLaunchError::StackRangeInvalid)?;
+    if stack.stack_bytes != stack.bytes.len() || stack_end != stack.stack_top {
+        return Err(InitExecLaunchError::StackRangeInvalid);
+    }
+    map_image_bytes(stack.stack_pointer, &stack.bytes, hhdm_offset)
+}
+
+fn map_loaded_segment(
+    segment: &ActivatedSegment,
+    hhdm_offset: u64,
+) -> Result<(), InitExecLaunchError> {
+    let mapped_len = segment
+        .map_end
+        .checked_sub(segment.map_start)
+        .ok_or(InitExecLaunchError::SegmentRangeInvalid)?;
+    let actual_len =
+        u64::try_from(segment.bytes.len()).map_err(|_| InitExecLaunchError::SegmentRangeInvalid)?;
+    if mapped_len != actual_len {
+        return Err(InitExecLaunchError::SegmentRangeInvalid);
+    }
+    map_image_bytes(segment.map_start, &segment.bytes, hhdm_offset)
+}
+
+fn map_image_bytes(
+    virtual_start: u64,
+    bytes: &[u8],
+    hhdm_offset: u64,
+) -> Result<(), InitExecLaunchError> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+
+    let image_end = virtual_start
+        .checked_add(bytes.len() as u64)
+        .ok_or(InitExecLaunchError::SegmentRangeInvalid)?;
+    let mut source_offset = 0usize;
+    let first_page = virtual_start & !PAGE_MASK;
+    let mut page_address = first_page;
+    let end_page = image_end.saturating_sub(1) & !PAGE_MASK;
+
+    loop {
+        let frame = mm::frame::allocate_frame().ok_or(InitExecLaunchError::FrameAllocationFailed)?;
+        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), 0)
+            .map_err(InitExecLaunchError::Map)?;
+
+        let frame_ptr = hhdm_offset
+            .checked_add(frame.start_address())
+            .ok_or(InitExecLaunchError::Map(arch::x86_64::MapError::AddressOverflow))?
+            as *mut u8;
+        let page_offset = if page_address == first_page {
+            usize::try_from(virtual_start.saturating_sub(page_address))
+                .map_err(|_| InitExecLaunchError::SegmentRangeInvalid)?
+        } else {
+            0
+        };
+        let copy_len = PAGE_BYTES
+            .saturating_sub(page_offset)
+            .min(bytes.len().saturating_sub(source_offset));
+
+        unsafe {
+            ptr::write_bytes(frame_ptr, 0, PAGE_BYTES);
+            ptr::copy_nonoverlapping(bytes.as_ptr().add(source_offset), frame_ptr.add(page_offset), copy_len);
+        }
+
+        source_offset = source_offset.saturating_add(copy_len);
+        if page_address == end_page {
+            break;
+        }
+
+        page_address = page_address
+            .checked_add(mm::frame::PAGE_SIZE)
+            .ok_or(InitExecLaunchError::SegmentRangeInvalid)?;
+    }
+
+    Ok(())
+}
+
+unsafe fn jump_to_loaded_image(entry_point: u64, stack_pointer: u64) -> ! {
+    unsafe {
+        asm!(
+            "mov rsp, {stack}",
+            "xor rbp, rbp",
+            "sti",
+            "jmp {entry}",
+            stack = in(reg) stack_pointer,
+            entry = in(reg) entry_point,
+            options(noreturn),
+        );
     }
 }
 

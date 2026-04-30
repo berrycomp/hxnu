@@ -6,15 +6,11 @@ VENDOR_VERSION="${LIMINE_VERSION:-9.2.0}"
 LIMINE_DIR="${ROOT}/vendor/limine-${VENDOR_VERSION}"
 ISO_ROOT="${ROOT}/build/iso"
 ISO_PATH="${ROOT}/build/hxnu.iso"
-KERNEL_PATH="${ROOT}/target/x86_64-unknown-none/release/hxnu-kernel"
+KERNEL_PATH="$("${ROOT}/scripts/build-kernel.sh" --print-path)"
 
 "${ROOT}/scripts/prepare-limine.sh"
 "${ROOT}/scripts/build-initrd.sh"
-if [ -n "${HXNU_CARGO_ARGS:-}" ]; then
-    cargo build --release -p hxnu-kernel ${HXNU_CARGO_ARGS}
-else
-    cargo build --release -p hxnu-kernel
-fi
+"${ROOT}/scripts/build-kernel.sh"
 
 rm -rf "${ISO_ROOT}"
 mkdir -p "${ISO_ROOT}/boot/limine"

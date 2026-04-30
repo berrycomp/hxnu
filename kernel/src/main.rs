@@ -22,6 +22,7 @@ mod mm;
 mod panic;
 mod power;
 mod procfs;
+mod runtime;
 mod sched;
 mod serial;
 mod smp;
@@ -1399,6 +1400,23 @@ pub extern "C" fn _start() -> ! {
             "HXNU: devfs preview console={}",
             console,
         );
+    }
+
+    if init_handoff.is_ok() {
+        match init_exec::launch_armed_init() {
+            Ok(()) => {}
+            Err(init_exec::InitExecLaunchError::StackBuild(errno)) => kprintln_style!(
+                crate::tty::ConsoleStyle::Warning,
+                "HXNU: init launch deferred reason={} errno={}",
+                init_exec::InitExecLaunchError::StackBuild(errno).as_str(),
+                errno,
+            ),
+            Err(error) => kprintln_style!(
+                crate::tty::ConsoleStyle::Warning,
+                "HXNU: init launch deferred reason={}",
+                error.as_str()
+            ),
+        }
     }
 
     kprintln!("HXNU: Rust kernel skeleton online");
