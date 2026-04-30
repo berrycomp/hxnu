@@ -18,12 +18,15 @@ const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
 const HXNU_SYS_OPEN: u64 = 0x484e_0007;
 const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
+const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
 const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
 const HXNU_SYS_RENAME: u64 = 0x484e_0043;
 const PR_GET_NAME: u64 = 16;
 const TASK_COMM_LEN: usize = 16;
+const F_SETFD: u64 = 2;
+const FD_CLOEXEC: u64 = 1;
 const F_OK: u64 = 0;
 const O_WRONLY: u64 = 1;
 const O_CREAT: u64 = 0x40;
@@ -32,6 +35,7 @@ const INIT_PATH: &[u8] = b"/initrd/init\0";
 const INIT_ARG0: &[u8] = b"/initrd/init\0";
 const INIT_ARG1_REEXEC: &[u8] = b"--reexec\0";
 const REEXEC_MARKER_PATH: &[u8] = b"/run/init-zero.reexec\0";
+const CLOEXEC_SMOKE_PATH: &[u8] = b"/run/init-zero.cloexec\0";
 const TMPFS_SMOKE_SOURCE_PATH: &[u8] = b"/run/init-zero-smoke.a\0";
 const TMPFS_SMOKE_DESTINATION_PATH: &[u8] = b"/run/init-zero-smoke.b\0";
 
@@ -159,7 +163,27 @@ fn maybe_reexec_once() -> &'static str {
     }
     let _ = syscall1(HXNU_SYS_CLOSE, marker_fd as u64);
 
-    log_static("HXNU-INIT: self-exec requested path=/initrd/init\n");
+    let cloexec_fd = match arm_cloexec_smoke() {
+        Ok(fd) => fd,
+        Err(errno) => {
+            let mut line = StackLine::<160>::new();
+            let _ = write!(
+                &mut line,
+                "HXNU-INIT: cloexec smoke arm failed errno={}\n",
+                errno,
+            );
+            log_bytes(line.as_bytes());
+            -1
+        }
+    };
+
+    let mut line = StackLine::<160>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: self-exec requested path=/initrd/init cloexec-fd={}\n",
+        cloexec_fd,
+    );
+    log_bytes(line.as_bytes());
     let argv = [
         INIT_ARG0.as_ptr() as u64,
         INIT_ARG1_REEXEC.as_ptr() as u64,
@@ -178,7 +202,29 @@ fn maybe_reexec_once() -> &'static str {
         exec_result,
     );
     log_bytes(line.as_bytes());
+    if cloexec_fd >= 0 {
+        let _ = syscall1(HXNU_SYS_CLOSE, cloexec_fd as u64);
+    }
     "exec-failed"
+}
+
+fn arm_cloexec_smoke() -> Result<i64, i64> {
+    let fd = syscall2(
+        HXNU_SYS_OPEN,
+        CLOEXEC_SMOKE_PATH.as_ptr() as u64,
+        O_WRONLY | O_CREAT | O_TRUNC,
+    );
+    if fd < 0 {
+        return Err(fd);
+    }
+
+    let setfd_result = syscall3(HXNU_SYS_FCNTL, fd as u64, F_SETFD, FD_CLOEXEC);
+    if setfd_result < 0 {
+        let _ = syscall1(HXNU_SYS_CLOSE, fd as u64);
+        return Err(setfd_result);
+    }
+
+    Ok(fd)
 }
 
 fn run_tmpfs_smoke() {
