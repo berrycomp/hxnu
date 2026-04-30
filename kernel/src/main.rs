@@ -1329,6 +1329,13 @@ pub extern "C" fn _start() -> ! {
             exec_status,
         );
     }
+    if let Some(signal_status) = vfs::preview("/proc/signals", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: procfs preview signals={}",
+            signal_status,
+        );
+    }
     if let Some(vector_status) = vfs::preview("/proc/vector", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,

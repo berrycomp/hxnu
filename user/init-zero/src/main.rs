@@ -16,18 +16,26 @@ const HXNU_SYS_UPTIME_NSEC: u64 = 0x484e_0004;
 const HXNU_SYS_SCHED_YIELD: u64 = 0x484e_0005;
 const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
 const HXNU_SYS_OPEN: u64 = 0x484e_0007;
+const HXNU_SYS_READ: u64 = 0x484e_0008;
 const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
+const HXNU_SYS_RT_SIGACTION: u64 = 0x484e_0026;
+const HXNU_SYS_WAIT4: u64 = 0x484e_002c;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
+const HXNU_SYS_FORK: u64 = 0x484e_003e;
 const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
 const HXNU_SYS_RENAME: u64 = 0x484e_0043;
 const PR_GET_NAME: u64 = 16;
 const TASK_COMM_LEN: usize = 16;
+const RT_SIGSET_SIZE: u64 = 8;
+const SIGCHLD: u64 = 17;
+const WNOHANG: u64 = 1;
 const F_SETFD: u64 = 2;
 const FD_CLOEXEC: u64 = 1;
 const F_OK: u64 = 0;
+const O_RDONLY: u64 = 0;
 const O_WRONLY: u64 = 1;
 const O_CREAT: u64 = 0x40;
 const O_TRUNC: u64 = 0x200;
@@ -38,6 +46,7 @@ const REEXEC_MARKER_PATH: &[u8] = b"/run/init-zero.reexec\0";
 const CLOEXEC_SMOKE_PATH: &[u8] = b"/run/init-zero.cloexec\0";
 const TMPFS_SMOKE_SOURCE_PATH: &[u8] = b"/run/init-zero-smoke.a\0";
 const TMPFS_SMOKE_DESTINATION_PATH: &[u8] = b"/run/init-zero-smoke.b\0";
+const SIGNALS_PROC_PATH: &[u8] = b"/proc/signals\0";
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -45,6 +54,15 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
     loop {
         spin_loop();
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct LinuxKernelSigAction {
+    handler: u64,
+    flags: u64,
+    restorer: u64,
+    mask: u64,
 }
 
 #[unsafe(no_mangle)]
@@ -81,6 +99,7 @@ pub extern "C" fn _start() -> ! {
 
     if reexec_stage == "post-exec" {
         run_tmpfs_smoke();
+        run_signal_smoke();
     }
 
     loop {
@@ -111,6 +130,10 @@ fn syscall2(number: u64, arg0: u64, arg1: u64) -> i64 {
 
 fn syscall3(number: u64, arg0: u64, arg1: u64, arg2: u64) -> i64 {
     syscall(number, [arg0, arg1, arg2, 0, 0, 0])
+}
+
+fn syscall4(number: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> i64 {
+    syscall(number, [arg0, arg1, arg2, arg3, 0, 0])
 }
 
 fn syscall(number: u64, args: [u64; 6]) -> i64 {
@@ -280,6 +303,117 @@ fn run_tmpfs_smoke() {
     log_bytes(line.as_bytes());
 }
 
+fn run_signal_smoke() {
+    let action = LinuxKernelSigAction {
+        handler: 0x51_47_43_48_4c_44,
+        flags: 0,
+        restorer: 0,
+        mask: 0,
+    };
+    let sigaction_result = syscall4(
+        HXNU_SYS_RT_SIGACTION,
+        SIGCHLD,
+        (&action as *const LinuxKernelSigAction) as u64,
+        0,
+        RT_SIGSET_SIZE,
+    );
+    if sigaction_result < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: signal smoke sigaction failed errno={}\n",
+            sigaction_result,
+        );
+        log_bytes(line.as_bytes());
+        return;
+    }
+
+    let fork_result = syscall0(HXNU_SYS_FORK);
+    if fork_result < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: signal smoke fork failed errno={}\n",
+            fork_result,
+        );
+        log_bytes(line.as_bytes());
+        return;
+    }
+
+    let mut before_buffer = [0u8; 512];
+    let before_len = read_proc_snapshot(SIGNALS_PROC_PATH, &mut before_buffer);
+    let before_pending = before_len >= 0
+        && snapshot_contains(&before_buffer[..before_len as usize], b"sigchld_pending yes");
+    let before_handler = before_len >= 0
+        && snapshot_contains(&before_buffer[..before_len as usize], b"sigchld_disposition handler");
+
+    let mut wait_status = 0i32;
+    let wait_result = syscall4(
+        HXNU_SYS_WAIT4,
+        fork_result as u64,
+        (&mut wait_status as *mut i32) as u64,
+        WNOHANG,
+        0,
+    );
+
+    let mut after_buffer = [0u8; 512];
+    let after_len = read_proc_snapshot(SIGNALS_PROC_PATH, &mut after_buffer);
+    let after_pending = after_len >= 0
+        && snapshot_contains(&after_buffer[..after_len as usize], b"sigchld_pending yes");
+
+    let mut line = StackLine::<224>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: signal smoke sigaction={} fork={} pending-before={} handler={} wait4={} status={} pending-after={}\n",
+        sigaction_result,
+        fork_result,
+        yes_no(before_pending),
+        yes_no(before_handler),
+        wait_result,
+        wait_status,
+        yes_no(after_pending),
+    );
+    log_bytes(line.as_bytes());
+}
+
+fn read_proc_snapshot(path: &[u8], buffer: &mut [u8]) -> i64 {
+    let fd = syscall2(HXNU_SYS_OPEN, path.as_ptr() as u64, O_RDONLY);
+    if fd < 0 {
+        return fd;
+    }
+
+    let read_result = syscall3(
+        HXNU_SYS_READ,
+        fd as u64,
+        buffer.as_mut_ptr() as u64,
+        buffer.len() as u64,
+    );
+    let _ = syscall1(HXNU_SYS_CLOSE, fd as u64);
+    read_result
+}
+
+fn snapshot_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+
+    let mut offset = 0usize;
+    while offset + needle.len() <= haystack.len() {
+        if &haystack[offset..offset + needle.len()] == needle {
+            return true;
+        }
+        offset += 1;
+    }
+    false
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
 struct StackLine<const N: usize> {
     bytes: [u8; N],
     len: usize,
@@ -341,4 +475,22 @@ pub unsafe extern "C" fn memset(dest: *mut c_void, value: c_int, len: usize) -> 
     }
 
     dest.cast::<c_void>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memcmp(lhs: *const c_void, rhs: *const c_void, len: usize) -> c_int {
+    let lhs = lhs.cast::<u8>();
+    let rhs = rhs.cast::<u8>();
+
+    let mut index = 0usize;
+    while index < len {
+        let left = unsafe { *lhs.add(index) };
+        let right = unsafe { *rhs.add(index) };
+        if left != right {
+            return i32::from(left) - i32::from(right);
+        }
+        index += 1;
+    }
+
+    0
 }

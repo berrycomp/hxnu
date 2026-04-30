@@ -88,9 +88,10 @@ HXNU-INIT: payload online via int 0x80
 HXNU: exec replace old-path=/initrd/init ...
 HXNU: init exec-commit pid=1 comm=init cloexec-closed=1 ...
 HXNU-INIT: abi=0x10000 pid=1 tid=1 comm=init stage=post-exec ...
+HXNU-INIT: signal smoke sigaction=0 fork=10000 pending-before=yes handler=yes wait4=10000 status=0 pending-after=no
 ```
 
-Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, and then survived a payload-driven self-`exec` that replaced the previous lower-half image in place.
+Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, survived a payload-driven self-`exec` that replaced the previous lower-half image in place, and then exercised synthetic `fork/wait4` with observable `SIGCHLD` pending/clear behavior through `/proc/signals`.
 
 ## FAT Smoke Acceptance
 

@@ -285,6 +285,8 @@ const SIG_BLOCK: i32 = 0;
 const SIG_UNBLOCK: i32 = 1;
 const SIG_SETMASK: i32 = 2;
 const MAX_SIGNAL_NUMBER: u64 = 64;
+const SIG_DFL: u64 = 0;
+const SIG_IGN: u64 = 1;
 const SIGKILL: u64 = 9;
 const SIGCHLD: u64 = 17;
 const SIGSTOP: u64 = 19;
@@ -1069,6 +1071,27 @@ impl GlobalSignalMaskTable {
 
 static SIGNAL_MASK_TABLE: GlobalSignalMaskTable = GlobalSignalMaskTable::new();
 
+struct ProcessPendingSignals {
+    process_id: u64,
+    pending_mask: u64,
+}
+
+struct GlobalPendingSignalTable(UnsafeCell<Option<Vec<ProcessPendingSignals>>>);
+
+unsafe impl Sync for GlobalPendingSignalTable {}
+
+impl GlobalPendingSignalTable {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn get(&self) -> *mut Option<Vec<ProcessPendingSignals>> {
+        self.0.get()
+    }
+}
+
+static PENDING_SIGNAL_TABLE: GlobalPendingSignalTable = GlobalPendingSignalTable::new();
+
 struct ProcessSignalAction {
     process_id: u64,
     signum: u8,
@@ -1695,6 +1718,45 @@ pub fn render_exec_status() -> String {
         );
         let _ = writeln!(text, "stack_signature {:#018x}", layout.signature);
     }
+    text
+}
+
+pub fn render_signal_status() -> String {
+    let process_id = current_process_id_value();
+    let blocked_mask = current_process_signal_mask();
+    let pending_mask = current_process_pending_signals();
+    let sigchld_action = current_signal_action(SIGCHLD as u8);
+    let sigchld_bit = signal_mask_bit(SIGCHLD as u8);
+    let sigchld_pending = pending_mask & sigchld_bit != 0;
+    let sigchld_blocked = blocked_mask & sigchld_bit != 0;
+    let sigchld_disposition = if sigchld_action.handler == SIG_IGN {
+        "ignore"
+    } else if sigchld_action.handler == SIG_DFL {
+        "default"
+    } else {
+        "handler"
+    };
+
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "process_id {} blocked_mask {:#018x} pending_mask {:#018x} sigchld_pending {} sigchld_blocked {} sigchld_disposition {} sigchld_handler {:#x} sigchld_flags {:#x}",
+        process_id,
+        blocked_mask,
+        pending_mask,
+        yes_no(sigchld_pending),
+        yes_no(sigchld_blocked),
+        sigchld_disposition,
+        sigchld_action.handler,
+        sigchld_action.flags,
+    );
+    let _ = writeln!(text, "blocked_mask {:#018x}", blocked_mask);
+    let _ = writeln!(text, "pending_mask {:#018x}", pending_mask);
+    let _ = writeln!(text, "sigchld_pending {}", yes_no(sigchld_pending));
+    let _ = writeln!(text, "sigchld_blocked {}", yes_no(sigchld_blocked));
+    let _ = writeln!(text, "sigchld_disposition {}", sigchld_disposition);
+    let _ = writeln!(text, "sigchld_handler {:#x}", sigchld_action.handler);
+    let _ = writeln!(text, "sigchld_flags {:#x}", sigchld_action.flags);
     text
 }
 
@@ -3926,12 +3988,8 @@ fn process_wait4(args: [u64; 6]) -> SyscallOutcome {
         return SyscallOutcome::success(child_pid);
     }
 
-    let current_pid = match i64::try_from(parent_process_id) {
-        Ok(value) => value,
-        Err(_) => return SyscallOutcome::errno(ERANGE),
-    };
     if options & WNOHANG != 0 {
-        if pid == -1 || pid == 0 || pid == current_pid {
+        if has_matching_synthetic_child(parent_process_id, pid) {
             return SyscallOutcome::success(0);
         }
         return SyscallOutcome::errno(ECHILD);
@@ -6159,6 +6217,7 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
     purge_process_robust_list_state(process_id);
     purge_process_rseq_state(process_id);
     purge_process_signal_mask(process_id);
+    purge_process_pending_signals(process_id);
     purge_process_signal_actions(process_id);
     SyscallOutcome {
         value: 0,
@@ -6584,6 +6643,7 @@ fn spawn_synthetic_child(exit_status: i32) -> Result<i64, i64> {
         child_process_id,
         exit_status,
     });
+    queue_process_signal(parent_process_id, SIGCHLD as u8);
 
     i64::try_from(child_process_id).map_err(|_| ERANGE)
 }
@@ -6603,9 +6663,24 @@ fn reap_synthetic_child(parent_process_id: u64, requested_pid: i64, status_ptr: 
         copyout_struct(status_ptr, &status)?;
     }
     table.children.remove(index);
+    if !table
+        .children
+        .iter()
+        .any(|entry| entry.parent_process_id == parent_process_id)
+    {
+        clear_process_pending_signal(parent_process_id, SIGCHLD as u8);
+    }
 
     let child_pid = i64::try_from(child.child_process_id).map_err(|_| ERANGE)?;
     Ok(Some(child_pid))
+}
+
+fn has_matching_synthetic_child(parent_process_id: u64, requested_pid: i64) -> bool {
+    let table = child_exit_table_mut();
+    table.children.iter().any(|child| {
+        child.parent_process_id == parent_process_id
+            && wait_request_matches_child(parent_process_id, requested_pid, child.child_process_id)
+    })
 }
 
 fn wait_request_matches_child(parent_process_id: u64, requested_pid: i64, child_process_id: u64) -> bool {
@@ -7222,16 +7297,7 @@ fn clear_process_rseq_state() {
 
 fn current_process_signal_mask() -> u64 {
     let process_id = current_process_id_value();
-    let table = signal_mask_table_mut();
-    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
-        return entry.mask;
-    }
-
-    table.push(ProcessSignalMask {
-        process_id,
-        mask: 0,
-    });
-    0
+    ensure_process_signal_mask_entry(process_id)
 }
 
 fn set_process_signal_mask(mask: u64) {
@@ -7247,12 +7313,7 @@ fn set_process_signal_mask(mask: u64) {
 
 fn current_signal_action(signum: u8) -> LinuxKernelSigAction {
     let process_id = current_process_id_value();
-    let table = signal_action_table_mut();
-    table
-        .iter()
-        .find(|entry| entry.process_id == process_id && entry.signum == signum)
-        .map(|entry| entry.action)
-        .unwrap_or_else(LinuxKernelSigAction::empty)
+    signal_action_for_process(process_id, signum)
 }
 
 fn set_signal_action(signum: u8, action: LinuxKernelSigAction) {
@@ -7271,6 +7332,91 @@ fn set_signal_action(signum: u8, action: LinuxKernelSigAction) {
         signum,
         action,
     });
+}
+
+fn current_process_pending_signals() -> u64 {
+    let process_id = current_process_id_value();
+    ensure_process_pending_signal_entry(process_id)
+}
+
+fn queue_process_signal(process_id: u64, signum: u8) {
+    if signum == 0 || u64::from(signum) > MAX_SIGNAL_NUMBER {
+        return;
+    }
+
+    let mask = signal_mask_bit(signum);
+    let next = pending_signal_mask_for_process(process_id) | mask;
+    set_process_pending_signals(process_id, next);
+}
+
+fn clear_process_pending_signal(process_id: u64, signum: u8) {
+    if signum == 0 || u64::from(signum) > MAX_SIGNAL_NUMBER {
+        return;
+    }
+
+    let mask = signal_mask_bit(signum);
+    let next = pending_signal_mask_for_process(process_id) & !mask;
+    set_process_pending_signals(process_id, next);
+}
+
+fn signal_action_for_process(process_id: u64, signum: u8) -> LinuxKernelSigAction {
+    let table = signal_action_table_mut();
+    table
+        .iter()
+        .find(|entry| entry.process_id == process_id && entry.signum == signum)
+        .map(|entry| entry.action)
+        .unwrap_or_else(LinuxKernelSigAction::empty)
+}
+
+fn pending_signal_mask_for_process(process_id: u64) -> u64 {
+    ensure_process_pending_signal_entry(process_id)
+}
+
+fn ensure_process_signal_mask_entry(process_id: u64) -> u64 {
+    let table = signal_mask_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.mask;
+    }
+
+    table.push(ProcessSignalMask {
+        process_id,
+        mask: 0,
+    });
+    0
+}
+
+fn ensure_process_pending_signal_entry(process_id: u64) -> u64 {
+    let table = pending_signal_table_mut();
+    if let Some(entry) = table.iter().find(|entry| entry.process_id == process_id) {
+        return entry.pending_mask;
+    }
+
+    table.push(ProcessPendingSignals {
+        process_id,
+        pending_mask: 0,
+    });
+    0
+}
+
+fn set_process_pending_signals(process_id: u64, pending_mask: u64) {
+    let table = pending_signal_table_mut();
+    if let Some(entry) = table.iter_mut().find(|entry| entry.process_id == process_id) {
+        entry.pending_mask = pending_mask;
+        return;
+    }
+
+    table.push(ProcessPendingSignals {
+        process_id,
+        pending_mask,
+    });
+}
+
+const fn signal_mask_bit(signum: u8) -> u64 {
+    1u64 << (signum - 1)
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 fn map_anonymous_region(length: usize, prot: u64) -> Result<i64, i64> {
@@ -7947,6 +8093,11 @@ fn purge_process_signal_mask(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
+fn purge_process_pending_signals(process_id: u64) {
+    let table = pending_signal_table_mut();
+    table.retain(|entry| entry.process_id != process_id);
+}
+
 fn purge_process_signal_actions(process_id: u64) -> usize {
     let table = signal_action_table_mut();
     let original_len = table.len();
@@ -8072,6 +8223,14 @@ fn signal_mask_table_mut() -> &'static mut Vec<ProcessSignalMask> {
         *slot = Some(Vec::new());
     }
     slot.as_mut().expect("signal mask table initialized")
+}
+
+fn pending_signal_table_mut() -> &'static mut Vec<ProcessPendingSignals> {
+    let slot = unsafe { &mut *PENDING_SIGNAL_TABLE.get() };
+    if slot.is_none() {
+        *slot = Some(Vec::new());
+    }
+    slot.as_mut().expect("pending signal table initialized")
 }
 
 fn signal_action_table_mut() -> &'static mut Vec<ProcessSignalAction> {

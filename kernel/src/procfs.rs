@@ -16,12 +16,13 @@ use crate::time;
 use crate::vector;
 
 const PROCFS_DIRECTORIES: [&str; 2] = ["/", "/proc"];
-const PROCFS_FILES: [&str; 14] = [
+const PROCFS_FILES: [&str; 15] = [
     "/proc/version",
     "/proc/uptime",
     "/proc/meminfo",
     "/proc/cpuinfo",
     "/proc/percpu",
+    "/proc/signals",
     "/proc/vector",
     "/proc/accel",
     "/proc/schedstat",
@@ -118,6 +119,7 @@ pub fn read(path: &str) -> Option<String> {
         "/proc/meminfo" => Some(render_meminfo()),
         "/proc/cpuinfo" => Some(render_cpuinfo(state)),
         "/proc/percpu" => Some(percpu::render_status()),
+        "/proc/signals" => Some(syscall::render_signal_status()),
         "/proc/vector" => Some(render_vector()),
         "/proc/accel" => Some(render_accel()),
         "/proc/schedstat" => Some(render_schedstat()),

@@ -50,6 +50,7 @@ Current status:
 - Repo-local `hxnu-init` bootstrap payload is now staged into `initrd` during local builds and exercises HXNU-native `int 0x80` logging/identity/prctl syscalls after handoff on `x86_64`
 - Bootstrap `hxnu-init` now performs a one-shot self-`exec`, proving lower-half image replacement and post-`exec` payload recovery on `x86_64`
 - Bootstrap `hxnu-init` now leaves a `FD_CLOEXEC` tmpfs descriptor armed across self-`exec`, and the second exec-commit deterministically reports `cloexec-closed=1` on `x86_64`
+- Bootstrap `hxnu-init` now exercises synthetic `fork/wait4` after self-`exec`, proving observable pending `SIGCHLD` notification before reap and clear-on-reap behavior through `/proc/signals` on `x86_64`
 - Early Unix-like shebang interpreter fallback from `/bin/*` to `/initrd/bin/*` is online on `x86_64`
 - Local ISO builds now stage a repo-local ELF init payload first, with compiler repo `init-like` fallback when needed, exercising the real `/initrd/init` ELF load + non-returning bootstrap handoff path on `x86_64`
 - Partial Linux + Ghost + HXNU-native syscall compatibility dispatcher bootstrap is online on `x86_64`
@@ -71,6 +72,7 @@ Current status:
 - Bootstrap `fork/vfork/clone` synthetic child-spawn and `wait4` child-reap facades are online for Linux/Ghost/HXNU personalities
 - Bootstrap `exec` preflight (`execve/execveat` for Linux, `exec` for Ghost/HXNU) now validates path + `argv/envp` + loader compatibility before returning `ENOSYS` pending real image replacement
 - `/proc/exec` endpoint now reports last exec preflight status (`ready/error`), path, mount, format, loader geometry, argument/environment sizing counters, and deferred `CLOEXEC` teardown forecast
+- `/proc/signals` endpoint is online for bootstrap signal-mask/disposition/pending observability, including `SIGCHLD` tracking on synthetic child exit/reap
 - ELF64 executable inspection now supports both little-endian and big-endian headers/program headers (`EI_DATA`) while keeping ELFCLASS64 enforcement
 - Architecture-neutral vector capability facade is online with `x86_64` CPUID/XGETBV probing (`avx/avx2/avx512*`) and eager context policy selection (`xsave` or `fxsave`)
 - `x86_64` scheduler context-switch path now preserves vector register state with eager `xsave/xrstor` or `fxsave/fxrstor` flow when available
