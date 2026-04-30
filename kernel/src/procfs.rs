@@ -468,6 +468,7 @@ fn render_fat() -> String {
     );
     let _ = writeln!(text, "root_entry_count {}", summary.root_entry_count);
     let _ = writeln!(text, "directory_count {}", summary.directory_count);
+    let _ = writeln!(text, "file_count {}", summary.file_count);
     text
 }
 

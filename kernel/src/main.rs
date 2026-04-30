@@ -684,13 +684,14 @@ pub extern "C" fn _start() -> ! {
     match fat::initialize() {
         Ok(summary) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
-            "HXNU: fat online table={} partition={:?} device={:?} type={} root-entries={} directories={}",
+            "HXNU: fat online table={} partition={:?} device={:?} type={} root-entries={} directories={} files={}",
             summary.partition_table.map_or("<none>", |kind| kind.as_str()),
             summary.partition_id,
             summary.device_id,
             summary.fat_type.map_or("<none>", |kind| kind.as_str()),
             summary.root_entry_count,
             summary.directory_count,
+            summary.file_count,
         ),
         Err(error) => kprintln_style!(
             crate::tty::ConsoleStyle::Warning,
@@ -1419,6 +1420,26 @@ pub extern "C" fn _start() -> ! {
             "HXNU: fat preview root={}",
             fat_root,
         );
+    }
+    if let Some(fat_file_path) = fat::first_root_file_path() {
+        if let Some(fat_file) = vfs::preview(&fat_file_path, 80) {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Muted,
+                "HXNU: fat preview file path={} data={}",
+                fat_file_path,
+                fat_file,
+            );
+        }
+    }
+    if let Some(fat_nested_path) = fat::first_nested_file_path() {
+        if let Some(fat_nested) = vfs::preview(&fat_nested_path, 80) {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Muted,
+                "HXNU: fat preview nested path={} data={}",
+                fat_nested_path,
+                fat_nested,
+            );
+        }
     }
     if let Some(console) = vfs::preview("/dev/console", 80) {
         kprintln_style!(

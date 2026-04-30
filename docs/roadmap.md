@@ -92,7 +92,7 @@ Current status:
 - Dynamic block node aliases are online in `devfs` (`/dev/sdX`, `/dev/nvmeXn1`, `/dev/nvmXn` and partition variants)
 - MBR signature probe and primary partition discovery scaffold are online via block layer on `x86_64`
 - GPT header (`EFI PART`) probe and bounded entry discovery with MBR fallback are online on `x86_64`
-- FAT16/32 read-only root directory listing mount is online at `/fat` when a valid partition is present
+- FAT16/32 read-only mount is online at `/fat`, with root-directory listing, subdirectory traversal, and file-content reads through the VFS path when a valid partition is present
 - `/proc/block` now includes block driver and partition-table observability, and `/proc/fat` is online for FAT mount status
 - Writable `tmpfs` bootstrap is online at `/tmp` and `/run` with file create/truncate/append paths plus constrained rename/unlink smoke coverage (`open/openat` + `read/write/pread64/pwrite64/writev` + `rename/unlink` on regular files)
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors

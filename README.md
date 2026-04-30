@@ -101,6 +101,15 @@ Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/
 
 This command builds a synthetic GPT + FAT16 smoke image, boots it under QEMU, and verifies `/fat` mount visibility from kernel logs (`block`, `fat`, and `vfs` acceptance lines).
 
+Expected FAT bring-up lines now also include:
+
+```text
+HXNU: fat preview file path=/fat/HELLO.TXT data=Hello HXNU!
+HXNU: fat preview nested path=/fat/BIN/README.TXT data=Nested README
+```
+
+Those lines show that the FAT mount is no longer limited to root-directory listing: HXNU can now traverse into subdirectories and read file content back through the normal VFS preview path.
+
 Current bring-up logs also include:
 
 - boot-relative timestamps

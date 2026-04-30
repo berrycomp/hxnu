@@ -46,7 +46,6 @@ echo "HXNU: building baseline ISO"
 
 rm -rf "${SMOKE_WORK_DIR}"
 mkdir -p "${SMOKE_WORK_DIR}" "${SMOKE_ISO_ROOT}"
-
 TMP_INITRD_DIR="$(mktemp -d "${SMOKE_WORK_DIR}/initrd-src.XXXXXX")"
 trap 'rm -rf "${TMP_INITRD_DIR}"' EXIT
 
@@ -146,13 +145,14 @@ for fat_lba in (fat1_lba, fat2_lba):
     data[offset + 2 : offset + 4] = (0xFFFF).to_bytes(2, "little")
     data[offset + 4 : offset + 6] = (0xFFFF).to_bytes(2, "little")
     data[offset + 6 : offset + 8] = (0xFFFF).to_bytes(2, "little")
+    data[offset + 8 : offset + 10] = (0xFFFF).to_bytes(2, "little")
 
 root_offset = root_lba * SECTOR
 hello_entry = bytearray(32)
 hello_entry[0:11] = b"HELLO   TXT"
 hello_entry[11] = 0x20
 hello_entry[26:28] = (2).to_bytes(2, "little")
-hello_entry[28:32] = (12).to_bytes(4, "little")
+hello_entry[28:32] = (11).to_bytes(4, "little")
 data[root_offset : root_offset + 32] = hello_entry
 
 bin_entry = bytearray(32)
@@ -163,9 +163,22 @@ data[root_offset + 32 : root_offset + 64] = bin_entry
 
 data[root_offset + 64] = 0x00
 
-payload = b"Hello HXNU!\n"
+payload = b"Hello HXNU!"
 cluster2_offset = first_data_lba * SECTOR
 data[cluster2_offset : cluster2_offset + len(payload)] = payload
+
+cluster3_offset = (first_data_lba + 1) * SECTOR
+readme_entry = bytearray(32)
+readme_entry[0:11] = b"README  TXT"
+readme_entry[11] = 0x20
+readme_entry[26:28] = (4).to_bytes(2, "little")
+readme_entry[28:32] = (13).to_bytes(4, "little")
+data[cluster3_offset : cluster3_offset + 32] = readme_entry
+data[cluster3_offset + 32] = 0x00
+
+nested_payload = b"Nested README"
+cluster4_offset = (first_data_lba + 2) * SECTOR
+data[cluster4_offset : cluster4_offset + len(nested_payload)] = nested_payload
 
 out.write_bytes(data)
 PY
@@ -226,7 +239,7 @@ kill -INT "${QEMU_PID}" 2>/dev/null || true
 wait "${QEMU_PID}" 2>/dev/null || true
 
 assert_log "HXNU: block online .*gpt-devices=1"
-assert_log "HXNU: fat online table=gpt"
+assert_log "HXNU: fat online table=gpt .*directories=2 files=2"
 assert_log "HXNU: vfs online mounts=4"
 assert_log "HXNU: vfs preview root=.*fat"
 assert_log "HXNU: devfs preview sda=path /dev/sda"
@@ -237,8 +250,10 @@ assert_log "HXNU: devfs preview nvm0n=path /dev/nvm0n"
 assert_log "HXNU: devfs preview nvm0np1=path /dev/nvm0np1"
 assert_log "HXNU: fat preview root="
 assert_log "HXNU: init candidate path=/initrd/init"
+assert_log "HXNU: fat preview file path=/fat/HELLO.TXT data=Hello HXNU!"
+assert_log "HXNU: fat preview nested path=/fat/BIN/README.TXT data=Nested README"
 
 echo "HXNU: FAT smoke acceptance passed"
-grep -En "HXNU: (block online|fat online|vfs online|vfs preview root|devfs preview sda|devfs preview sda1|devfs preview nvme0n1|devfs preview nvme0n1p1|devfs preview nvm0n|devfs preview nvm0np1|fat preview root|init candidate)" "${SMOKE_LOG}"
+grep -En "HXNU: (block online|fat online|vfs online|vfs preview root|devfs preview sda|devfs preview sda1|devfs preview nvme0n1|devfs preview nvme0n1p1|devfs preview nvm0n|devfs preview nvm0np1|fat preview root|fat preview file|fat preview nested|init candidate)" "${SMOKE_LOG}"
 echo "HXNU: iso=${SMOKE_ISO}"
 echo "HXNU: log=${SMOKE_LOG}"
