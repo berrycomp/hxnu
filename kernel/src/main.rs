@@ -1387,13 +1387,6 @@ pub extern "C" fn _start() -> ! {
             fat_root,
         );
     }
-    if let Some(init) = vfs::preview("/initrd/init", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: initrd preview init={}",
-            init,
-        );
-    }
     if let Some(console) = vfs::preview("/dev/console", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
@@ -1403,19 +1396,28 @@ pub extern "C" fn _start() -> ! {
     }
 
     if init_handoff.is_ok() {
-        match init_exec::launch_armed_init() {
-            Ok(()) => {}
-            Err(init_exec::InitExecLaunchError::StackBuild(errno)) => kprintln_style!(
+        let init_path = b"/initrd/init\0";
+        let init_argv = [init_path.as_ptr() as u64, 0];
+        let init_envp = [0u64];
+        let exec_outcome = syscall::dispatch(
+            syscall::SyscallAbi::HxnuNativeBootstrap,
+            syscall::HXNU_SYS_EXEC,
+            [
+                init_path.as_ptr() as u64,
+                init_argv.as_ptr() as u64,
+                init_envp.as_ptr() as u64,
+                0,
+                0,
+                0,
+            ],
+        );
+        if let syscall::SyscallAction::Continue = exec_outcome.action {
+            let errno = exec_outcome.value.saturating_neg();
+            kprintln_style!(
                 crate::tty::ConsoleStyle::Warning,
-                "HXNU: init launch deferred reason={} errno={}",
-                init_exec::InitExecLaunchError::StackBuild(errno).as_str(),
+                "HXNU: init exec syscall deferred errno={}",
                 errno,
-            ),
-            Err(error) => kprintln_style!(
-                crate::tty::ConsoleStyle::Warning,
-                "HXNU: init launch deferred reason={}",
-                error.as_str()
-            ),
+            );
         }
     }
 

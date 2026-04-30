@@ -10,6 +10,7 @@ use core::mem::{size_of, size_of_val};
 use core::slice;
 use core::str;
 
+use crate::init_exec;
 use crate::sched;
 use crate::time;
 use crate::tmpfs;
@@ -385,6 +386,7 @@ const ENOSYS: i64 = 38;
 const ERANGE: i64 = 34;
 const ENOENT: i64 = 2;
 const EACCES: i64 = 13;
+const EBUSY: i64 = 16;
 const ENOTTY: i64 = 25;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
@@ -1339,6 +1341,19 @@ pub struct BootstrapExecStackImage {
     pub entry_point: Option<u64>,
     pub signature: u64,
     pub bytes: Vec<u8>,
+}
+
+pub struct ExecCommitSummary {
+    pub process_id: u64,
+    pub comm_name: String,
+    pub cloexec_closed: usize,
+    pub mappings_cleared: usize,
+    pub signal_actions_cleared: usize,
+    pub brk_reset: bool,
+    pub clear_tid_cleared: bool,
+    pub arch_prctl_reset: bool,
+    pub robust_list_cleared: bool,
+    pub rseq_cleared: bool,
 }
 
 struct BuiltExecStack {
@@ -4871,12 +4886,24 @@ fn process_exec_at(
     };
     telemetry.cloexec_would_close = cloexec_descriptor_count_for_process(process_id);
     record_exec_preflight(&telemetry, ExecPreflightStatus::Ready);
+    let stack = match build_exec_stack_for_launch(&node.path, &prep, &argv.values, &envp.values) {
+        Ok(stack) => stack,
+        Err(error) => fail_exec!(error),
+    };
+    crate::kprintln!(
+        "HXNU: exec syscall path={} pid={} argv={} env={} cloexec={} format={}",
+        node.path,
+        process_id,
+        telemetry.argv_count,
+        telemetry.env_count,
+        telemetry.cloexec_would_close,
+        telemetry.format.as_str(),
+    );
 
-    // Phase 3.5.1 preflight: validates path/argv/envp, loader compatibility,
-    // and builds an initial argc/argv/envp/auxv stack image.
-    // Process image replacement and non-returning handoff are still pending.
-    // CLOEXEC teardown will happen as part of the real handoff path.
-    SyscallOutcome::errno(ENOSYS)
+    match init_exec::launch_exec_path(&node.path, stack) {
+        Ok(()) => unreachable!("exec launch path does not return on success"),
+        Err(error) => SyscallOutcome::errno(map_init_exec_launch_error(error)),
+    }
 }
 
 fn resolve_exec_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> Result<String, i64> {
@@ -4956,11 +4983,13 @@ fn build_exec_stack_layout(
     Ok(built.layout)
 }
 
-pub fn build_bootstrap_exec_stack(
+pub fn build_exec_stack_for_launch(
     exec_path: &str,
     prep: &vfs::ExecutableLoadPrep,
+    argv: &[String],
+    envp: &[String],
 ) -> Result<BootstrapExecStackImage, i64> {
-    let built = build_exec_stack_image(exec_path, prep, &[], &[])?;
+    let built = build_exec_stack_image(exec_path, prep, argv, envp)?;
     Ok(BootstrapExecStackImage {
         stack_pointer: built.layout.stack_pointer,
         stack_top: built.layout.stack_top,
@@ -4972,6 +5001,35 @@ pub fn build_bootstrap_exec_stack(
         signature: built.layout.signature,
         bytes: built.image,
     })
+}
+
+pub fn commit_bootstrap_exec(exec_path: &str) -> ExecCommitSummary {
+    let process_id = current_process_id_value();
+    let comm_name = String::from(exec_comm_label(exec_path));
+    let cloexec_closed = close_cloexec_open_files_for_process(process_id);
+    let mappings_cleared = purge_process_mappings(process_id);
+    let brk_reset = purge_process_brk(process_id);
+    let clear_tid_cleared = purge_process_clear_tid_address(process_id);
+    let signal_actions_cleared = purge_process_signal_actions(process_id);
+    let arch_prctl_reset = purge_process_arch_prctl_state(process_id);
+    let robust_list_cleared = purge_process_robust_list_state(process_id);
+    let rseq_cleared = purge_process_rseq_state(process_id);
+
+    set_process_dumpable(1);
+    set_process_comm_name(exec_comm_name_from_path(exec_path));
+
+    ExecCommitSummary {
+        process_id,
+        comm_name,
+        cloexec_closed,
+        mappings_cleared,
+        signal_actions_cleared,
+        brk_reset,
+        clear_tid_cleared,
+        arch_prctl_reset,
+        robust_list_cleared,
+        rseq_cleared,
+    }
 }
 
 fn build_exec_stack_image(
@@ -5237,6 +5295,29 @@ fn map_exec_load_prep_error(error: vfs::ExecutableLoadPrepError) -> i64 {
     match error {
         vfs::ExecutableLoadPrepError::Discovery(error) => map_exec_discovery_error(error),
         vfs::ExecutableLoadPrepError::Parse(_) => ENOEXEC,
+    }
+}
+
+fn map_init_exec_launch_error(error: init_exec::InitExecLaunchError) -> i64 {
+    match error {
+        init_exec::InitExecLaunchError::Activation(error) => match error {
+            init_exec::InitExecActivateError::Load(error) => map_exec_load_prep_error(error),
+            init_exec::InitExecActivateError::UnsupportedFormat => ENOEXEC,
+            init_exec::InitExecActivateError::MissingEntryPoint
+            | init_exec::InitExecActivateError::MissingImageType
+            | init_exec::InitExecActivateError::MissingMachine
+            | init_exec::InitExecActivateError::NoLoadSegments
+            | init_exec::InitExecActivateError::NoExecutableSegments
+            | init_exec::InitExecActivateError::EntryOutsideExecutableSegments
+            | init_exec::InitExecActivateError::InvalidSegmentMap => ENOEXEC,
+        },
+        init_exec::InitExecLaunchError::UnsupportedMachine => ENOEXEC,
+        init_exec::InitExecLaunchError::Prep(error) => map_exec_load_prep_error(error),
+        init_exec::InitExecLaunchError::MissingHhdm => EIO,
+        init_exec::InitExecLaunchError::StackRangeInvalid
+        | init_exec::InitExecLaunchError::SegmentRangeInvalid => EINVAL,
+        init_exec::InitExecLaunchError::FrameAllocationFailed => ENOMEM,
+        init_exec::InitExecLaunchError::Map(_) => EBUSY,
     }
 }
 
@@ -6550,6 +6631,21 @@ fn default_process_comm_name() -> [u8; TASK_COMM_LEN] {
     name
 }
 
+fn exec_comm_label(exec_path: &str) -> &str {
+    exec_path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("process")
+}
+
+fn exec_comm_name_from_path(exec_path: &str) -> [u8; TASK_COMM_LEN] {
+    let mut name = [0u8; TASK_COMM_LEN];
+    let label = exec_comm_label(exec_path).as_bytes();
+    let copy_len = min(label.len(), TASK_COMM_LEN.saturating_sub(1));
+    name[..copy_len].copy_from_slice(&label[..copy_len]);
+    name
+}
+
 fn current_process_prctl_state() -> ProcessPrctlState {
     let process_id = current_process_id_value();
     let table = prctl_table_mut();
@@ -7342,6 +7438,27 @@ fn cloexec_descriptor_count_for_process(process_id: u64) -> usize {
         .count()
 }
 
+fn close_cloexec_open_files_for_process(process_id: u64) -> usize {
+    let table = fd_table_mut();
+    let mut index = 0usize;
+    let mut closed = 0usize;
+    while index < table.files.len() {
+        if table.files[index].owner_process_id != process_id
+            || table.files[index].fd_flags & FD_CLOEXEC == 0
+        {
+            index = index.saturating_add(1);
+            continue;
+        }
+
+        let open = table.files.remove(index);
+        closed = closed.saturating_add(1);
+        if let Some(endpoint) = open.pipe_endpoint {
+            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+        }
+    }
+    closed
+}
+
 fn alloc_open_file(
     path: String,
     mount: VfsMountKind,
@@ -7660,14 +7777,17 @@ fn purge_process_umask(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
-fn purge_process_clear_tid_address(process_id: u64) {
+fn purge_process_clear_tid_address(process_id: u64) -> bool {
     let table = clear_tid_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    table.len() != original_len
 }
 
-fn purge_process_mappings(process_id: u64) {
+fn purge_process_mappings(process_id: u64) -> usize {
     let table = mapping_table_mut();
     let mut index = 0usize;
+    let mut cleared = 0usize;
     while index < table.len() {
         if table[index].process_id != process_id {
             index = index.saturating_add(1);
@@ -7675,12 +7795,16 @@ fn purge_process_mappings(process_id: u64) {
         }
         let mapping = table.remove(index);
         let _ = free_mapping(mapping);
+        cleared = cleared.saturating_add(1);
     }
+    cleared
 }
 
-fn purge_process_brk(process_id: u64) {
+fn purge_process_brk(process_id: u64) -> bool {
     let table = brk_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    table.len() != original_len
 }
 
 fn purge_process_group_state(process_id: u64) {
@@ -7705,19 +7829,25 @@ fn purge_process_prctl_state(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
-fn purge_process_arch_prctl_state(process_id: u64) {
+fn purge_process_arch_prctl_state(process_id: u64) -> bool {
     let table = arch_prctl_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    table.len() != original_len
 }
 
-fn purge_process_robust_list_state(process_id: u64) {
+fn purge_process_robust_list_state(process_id: u64) -> bool {
     let table = robust_list_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    table.len() != original_len
 }
 
-fn purge_process_rseq_state(process_id: u64) {
+fn purge_process_rseq_state(process_id: u64) -> bool {
     let table = rseq_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    table.len() != original_len
 }
 
 fn purge_process_signal_mask(process_id: u64) {
@@ -7725,9 +7855,11 @@ fn purge_process_signal_mask(process_id: u64) {
     table.retain(|entry| entry.process_id != process_id);
 }
 
-fn purge_process_signal_actions(process_id: u64) {
+fn purge_process_signal_actions(process_id: u64) -> usize {
     let table = signal_action_table_mut();
+    let original_len = table.len();
     table.retain(|entry| entry.process_id != process_id);
+    original_len.saturating_sub(table.len())
 }
 
 fn fd_table_mut() -> &'static mut FdTable {

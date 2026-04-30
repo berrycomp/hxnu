@@ -80,12 +80,15 @@ HXNU: Limine protocol handshake ok
 When `/initrd/init` is staged as an ELF payload, later bring-up logs should also include:
 
 ```text
+HXNU: exec syscall path=/initrd/init ...
+HXNU: init exec-commit pid=1 comm=init ...
 HXNU: init launch transfer path=/initrd/init ...
 HXNU: init launch heartbeat tick=...
 HXNU-INIT: payload online via int 0x80
+HXNU-INIT: abi=0x10000 pid=1 tid=1 comm=init ...
 ```
 
-Those lines indicate the kernel mapped the ELF load image plus bootstrap exec stack, transferred control into the loaded init image, and exercised the HXNU native syscall path from the launched payload.
+Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus bootstrap exec stack, transferred control into the loaded init image, and exercised the HXNU native syscall path from the launched payload.
 
 ## FAT Smoke Acceptance
 

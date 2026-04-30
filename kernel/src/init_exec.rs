@@ -128,10 +128,9 @@ impl InitExecActivateError {
 
 #[derive(Copy, Clone)]
 pub enum InitExecLaunchError {
-    NotArmed,
+    Activation(InitExecActivateError),
     UnsupportedMachine,
     Prep(vfs::ExecutableLoadPrepError),
-    StackBuild(i64),
     MissingHhdm,
     StackRangeInvalid,
     SegmentRangeInvalid,
@@ -142,10 +141,9 @@ pub enum InitExecLaunchError {
 impl InitExecLaunchError {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::NotArmed => "init executable handoff is not armed",
+            Self::Activation(error) => error.as_str(),
             Self::UnsupportedMachine => "init executable machine is not supported for launch",
             Self::Prep(error) => error.as_str(),
-            Self::StackBuild(_) => "init bootstrap stack image could not be built",
             Self::MissingHhdm => "limine HHDM offset is not available",
             Self::StackRangeInvalid => "init bootstrap stack range is invalid",
             Self::SegmentRangeInvalid => "init executable segment range is invalid",
@@ -187,46 +185,13 @@ pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError>
     }
 }
 
-pub fn launch_armed_init() -> Result<(), InitExecLaunchError> {
-    let result = (|| {
-        let state = state_ref();
-        let activation = state.activation.as_ref().ok_or(InitExecLaunchError::NotArmed)?;
-        if activation.machine != ELF_MACHINE_X86_64 {
-            return Err(InitExecLaunchError::UnsupportedMachine);
-        }
-
-        let hhdm_offset = limine::hhdm_offset().ok_or(InitExecLaunchError::MissingHhdm)?;
-        let prep = vfs::prepare_executable_load(&activation.path).map_err(InitExecLaunchError::Prep)?;
-        let stack =
-            syscall::build_bootstrap_exec_stack(&activation.path, &prep).map_err(InitExecLaunchError::StackBuild)?;
-        let launch_entry_point = stack.entry_point.unwrap_or(activation.entry_point);
-
-        map_stack_image(&stack, hhdm_offset)?;
-        for segment in &activation.segments {
-            map_loaded_segment(segment, hhdm_offset)?;
-        }
-
-        kprintln!(
-            "HXNU: init launch transfer path={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
-            activation.path,
-            launch_entry_point,
-            stack.stack_pointer,
-            stack.stack_bytes,
-            stack.argv_count,
-            stack.env_count,
-            stack.auxv_count,
-            stack.signature,
-        );
-        LAUNCH_MONITOR_BUDGET.store(INIT_LAUNCH_MONITOR_TICKS, Ordering::Release);
-        unsafe { jump_to_loaded_image(launch_entry_point, stack.stack_pointer) }
-    })();
-
-    let state = state_mut();
-    state.last_launch_error = match result {
-        Ok(()) => None,
-        Err(error) => Some(error),
-    };
-    result
+pub fn launch_exec_path(
+    exec_path: &str,
+    stack: syscall::BootstrapExecStackImage,
+) -> Result<(), InitExecLaunchError> {
+    let image = vfs::materialize_executable_image(exec_path).map_err(InitExecLaunchError::Prep)?;
+    let activation = build_activation(image).map_err(InitExecLaunchError::Activation)?;
+    launch_activation(&activation, stack)
 }
 
 pub fn observe_timer_tick(tick: u64) {
@@ -405,6 +370,51 @@ fn activation_summary(activation: &ActivatedInitImage) -> InitExecSummary {
         entry_segment_index: activation.entry_segment_index,
         entry_segment_map_offset: activation.entry_segment_map_offset,
     }
+}
+
+fn launch_activation(
+    activation: &ActivatedInitImage,
+    stack: syscall::BootstrapExecStackImage,
+) -> Result<(), InitExecLaunchError> {
+    if activation.machine != ELF_MACHINE_X86_64 {
+        return Err(InitExecLaunchError::UnsupportedMachine);
+    }
+
+    let hhdm_offset = limine::hhdm_offset().ok_or(InitExecLaunchError::MissingHhdm)?;
+    let launch_entry_point = stack.entry_point.unwrap_or(activation.entry_point);
+
+    map_stack_image(&stack, hhdm_offset)?;
+    for segment in &activation.segments {
+        map_loaded_segment(segment, hhdm_offset)?;
+    }
+    let exec_commit = syscall::commit_bootstrap_exec(&activation.path);
+
+    kprintln!(
+        "HXNU: init exec-commit pid={} comm={} cloexec-closed={} mappings-cleared={} brk-reset={} clear-tid-cleared={} sigactions-cleared={} tls-reset={} robust-list-cleared={} rseq-cleared={}",
+        exec_commit.process_id,
+        exec_commit.comm_name,
+        exec_commit.cloexec_closed,
+        exec_commit.mappings_cleared,
+        exec_commit.brk_reset,
+        exec_commit.clear_tid_cleared,
+        exec_commit.signal_actions_cleared,
+        exec_commit.arch_prctl_reset,
+        exec_commit.robust_list_cleared,
+        exec_commit.rseq_cleared,
+    );
+    kprintln!(
+        "HXNU: init launch transfer path={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
+        activation.path,
+        launch_entry_point,
+        stack.stack_pointer,
+        stack.stack_bytes,
+        stack.argv_count,
+        stack.env_count,
+        stack.auxv_count,
+        stack.signature,
+    );
+    LAUNCH_MONITOR_BUDGET.store(INIT_LAUNCH_MONITOR_TICKS, Ordering::Release);
+    unsafe { jump_to_loaded_image(launch_entry_point, stack.stack_pointer) }
 }
 
 fn map_stack_image(

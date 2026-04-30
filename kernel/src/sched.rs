@@ -319,47 +319,20 @@ impl Scheduler {
         }
 
         let current_slot = self.runqueue[self.current_runqueue_index];
-        if self.threads[current_slot].state == ThreadState::Running {
-            self.threads[current_slot].total_ticks = self.threads[current_slot]
-                .total_ticks
-                .saturating_add(1);
-        }
-
-        if self.runqueue_depth == 1 {
-            if self.threads[current_slot].state == ThreadState::Exited {
-                return None;
-            }
-            return Some(self.dispatch_snapshot(current_slot));
-        }
-
-        if self.threads[current_slot].state == ThreadState::Running {
-            self.threads[current_slot].state = ThreadState::Runnable;
-        }
-        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
-        let mut found = false;
-        for _ in 0..self.runqueue_depth {
-            let candidate = self.runqueue[next_index];
-            if self.threads[candidate].state != ThreadState::Exited {
-                found = true;
-                break;
-            }
-            next_index = (next_index + 1) % self.runqueue_depth;
-        }
-        if !found {
+        if self.threads[current_slot].state == ThreadState::Exited {
             return None;
         }
 
-        self.current_runqueue_index = next_index;
-        let next_slot = self.runqueue[next_index];
-        self.threads[next_slot].state = ThreadState::Running;
-        self.threads[next_slot].dispatch_count = self.threads[next_slot]
-            .dispatch_count
-            .saturating_add(1);
-        if next_slot != current_slot {
-            self.context_switches = self.context_switches.saturating_add(1);
+        if self.threads[current_slot].state != ThreadState::Running {
+            self.threads[current_slot].state = ThreadState::Running;
         }
+        self.threads[current_slot].total_ticks = self.threads[current_slot]
+            .total_ticks
+            .saturating_add(1);
 
-        Some(self.dispatch_snapshot(next_slot))
+        // Timer interrupts only account for time; the current thread changes
+        // only when we perform an explicit context switch or retire a thread.
+        Some(self.dispatch_snapshot(current_slot))
     }
 
     fn dispatch_snapshot(&self, slot: usize) -> DispatchDecision {

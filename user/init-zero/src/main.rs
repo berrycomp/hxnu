@@ -6,6 +6,7 @@ use core::ffi::{c_int, c_void};
 use core::fmt::{self, Write};
 use core::hint::spin_loop;
 use core::panic::PanicInfo;
+use core::str;
 
 const ABI_HXNU_NATIVE_BOOTSTRAP: u64 = 2;
 const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
@@ -14,6 +15,9 @@ const HXNU_SYS_PROCESS_SELF: u64 = 0x484e_0003;
 const HXNU_SYS_UPTIME_NSEC: u64 = 0x484e_0004;
 const HXNU_SYS_SCHED_YIELD: u64 = 0x484e_0005;
 const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
+const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
+const PR_GET_NAME: u64 = 16;
+const TASK_COMM_LEN: usize = 16;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -31,14 +35,23 @@ pub extern "C" fn _start() -> ! {
     let process_id = syscall0(HXNU_SYS_PROCESS_SELF);
     let thread_id = syscall0(HXNU_SYS_THREAD_SELF);
     let uptime_ns = syscall0(HXNU_SYS_UPTIME_NSEC);
+    let mut comm_name = [0u8; TASK_COMM_LEN];
+    let comm_result = syscall2(HXNU_SYS_PRCTL, PR_GET_NAME, comm_name.as_mut_ptr() as u64);
+    let comm_len = c_string_len(&comm_name);
+    let comm_text = if comm_result == 0 {
+        str::from_utf8(&comm_name[..comm_len]).unwrap_or("<invalid>")
+    } else {
+        "<unavailable>"
+    };
 
-    let mut line = StackLine::<160>::new();
+    let mut line = StackLine::<192>::new();
     let _ = write!(
         &mut line,
-        "HXNU-INIT: abi={:#x} pid={} tid={} uptime-ns={}\n",
+        "HXNU-INIT: abi={:#x} pid={} tid={} comm={} uptime-ns={}\n",
         abi,
         process_id,
         thread_id,
+        comm_text,
         uptime_ns,
     );
     log_bytes(line.as_bytes());
@@ -83,6 +96,14 @@ fn syscall(number: u64, args: [u64; 6]) -> i64 {
         );
     }
     result as i64
+}
+
+fn c_string_len(bytes: &[u8]) -> usize {
+    let mut len = 0usize;
+    while len < bytes.len() && bytes[len] != 0 {
+        len += 1;
+    }
+    len
 }
 
 struct StackLine<const N: usize> {
