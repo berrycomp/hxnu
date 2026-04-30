@@ -3,6 +3,7 @@ use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::ptr;
 
+use crate::init_exec;
 use crate::kprintln;
 use crate::panic::write_fatal_line;
 use crate::syscall::{self, SyscallAbi, SyscallAction};
@@ -12,10 +13,27 @@ use super::apic;
 const SYSCALL_VECTOR: usize = 0x80;
 const INTERRUPT_GATE: u8 = 0x8e;
 const USER_INTERRUPT_GATE: u8 = 0xee;
+const EXEC_LAUNCH_STACK_BYTES: usize = 64 * 1024;
 
 unsafe extern "C" {
     fn hxnu_x86_64_syscall_entry();
+    fn hxnu_x86_64_exec_stack_call(
+        process_id: u64,
+        path_ptr: *const u8,
+        path_len: usize,
+        stack_ptr: *const u8,
+    ) -> i64;
 }
+
+#[repr(align(16))]
+struct ExecLaunchStack {
+    _bytes: [u8; EXEC_LAUNCH_STACK_BYTES],
+}
+
+static mut EXEC_LAUNCH_STACK: ExecLaunchStack = ExecLaunchStack {
+    _bytes: [0; EXEC_LAUNCH_STACK_BYTES],
+};
+static mut EXEC_LAUNCH_PREVIOUS_RSP: u64 = 0;
 
 global_asm!(
     r#"
@@ -60,6 +78,25 @@ hxnu_x86_64_syscall_entry:
     pop r15
     iretq
 "#
+);
+
+global_asm!(
+    r#"
+    .global hxnu_x86_64_exec_stack_call
+    .type hxnu_x86_64_exec_stack_call,@function
+hxnu_x86_64_exec_stack_call:
+    mov [rip + {saved_rsp}], rsp
+    lea rsp, [rip + {stack}]
+    add rsp, {stack_bytes}
+    and rsp, -16
+    call {impl}
+    mov rsp, [rip + {saved_rsp}]
+    ret
+"#,
+    saved_rsp = sym EXEC_LAUNCH_PREVIOUS_RSP,
+    stack = sym EXEC_LAUNCH_STACK,
+    stack_bytes = const EXEC_LAUNCH_STACK_BYTES,
+    impl = sym hxnu_x86_64_exec_stack_call_impl,
 );
 
 #[repr(C)]
@@ -219,6 +256,17 @@ pub fn initialize() {
     }
 }
 
+pub fn launch_exec_on_syscall_stack(
+    process_id: u64,
+    path_ptr: *const u8,
+    path_len: usize,
+    stack: &syscall::BootstrapExecStackImage,
+) -> i64 {
+    unsafe {
+        hxnu_x86_64_exec_stack_call(process_id, path_ptr, path_len, stack as *const _ as *const u8)
+    }
+}
+
 pub fn trigger_breakpoint() {
     unsafe {
         asm!("int3", options(nomem, nostack, preserves_flags));
@@ -284,6 +332,22 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
             }
             outcome.value as u64
         }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn hxnu_x86_64_exec_stack_call_impl(
+    process_id: u64,
+    path_ptr: *const u8,
+    path_len: usize,
+    stack_ptr: *const u8,
+) -> i64 {
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let exec_path = unsafe { core::str::from_utf8_unchecked(path_bytes) };
+    let stack = unsafe { &*(stack_ptr as *const syscall::BootstrapExecStackImage) };
+    match init_exec::launch_exec_path(process_id, exec_path, stack) {
+        Ok(()) => unreachable!("exec launch path does not return on success"),
+        Err(error) => syscall::map_init_exec_launch_errno(error),
     }
 }
 

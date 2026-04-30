@@ -1396,6 +1396,9 @@ pub extern "C" fn _start() -> ! {
     }
 
     if init_handoff.is_ok() {
+        drop(init_load_image);
+        drop(init_load_prep);
+        init_exec::discard_staged_activation();
         let init_path = b"/initrd/init\0";
         let init_argv = [init_path.as_ptr() as u64, 0];
         let init_envp = [0u64];

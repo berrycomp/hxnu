@@ -4,7 +4,7 @@ use core::ptr::null_mut;
 
 use crate::mm::frame;
 
-const HEAP_PAGES: usize = 32;
+const HEAP_PAGES: usize = 64;
 
 struct BumpAllocator {
     start: usize,

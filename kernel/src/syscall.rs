@@ -1,4 +1,5 @@
 use alloc::alloc::{alloc_zeroed, dealloc};
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -4887,7 +4888,7 @@ fn process_exec_at(
     telemetry.cloexec_would_close = cloexec_descriptor_count_for_process(process_id);
     record_exec_preflight(&telemetry, ExecPreflightStatus::Ready);
     let stack = match build_exec_stack_for_launch(&node.path, &prep, &argv.values, &envp.values) {
-        Ok(stack) => stack,
+        Ok(stack) => Box::new(stack),
         Err(error) => fail_exec!(error),
     };
     crate::kprintln!(
@@ -4900,10 +4901,13 @@ fn process_exec_at(
         telemetry.format.as_str(),
     );
 
-    match init_exec::launch_exec_path(&node.path, stack) {
-        Ok(()) => unreachable!("exec launch path does not return on success"),
-        Err(error) => SyscallOutcome::errno(map_init_exec_launch_error(error)),
-    }
+    let launch_errno = crate::arch::x86_64::launch_exec_on_syscall_stack(
+        process_id,
+        node.path.as_ptr(),
+        node.path.len(),
+        stack.as_ref(),
+    );
+    SyscallOutcome::errno(launch_errno)
 }
 
 fn resolve_exec_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> Result<String, i64> {
@@ -5319,6 +5323,10 @@ fn map_init_exec_launch_error(error: init_exec::InitExecLaunchError) -> i64 {
         init_exec::InitExecLaunchError::FrameAllocationFailed => ENOMEM,
         init_exec::InitExecLaunchError::Map(_) => EBUSY,
     }
+}
+
+pub fn map_init_exec_launch_errno(error: init_exec::InitExecLaunchError) -> i64 {
+    map_init_exec_launch_error(error)
 }
 
 fn map_exec_discovery_error(error: vfs::ExecutableDiscoveryError) -> i64 {

@@ -15,9 +15,21 @@ const HXNU_SYS_PROCESS_SELF: u64 = 0x484e_0003;
 const HXNU_SYS_UPTIME_NSEC: u64 = 0x484e_0004;
 const HXNU_SYS_SCHED_YIELD: u64 = 0x484e_0005;
 const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
+const HXNU_SYS_OPEN: u64 = 0x484e_0007;
+const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
+const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
+const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 const PR_GET_NAME: u64 = 16;
 const TASK_COMM_LEN: usize = 16;
+const F_OK: u64 = 0;
+const O_WRONLY: u64 = 1;
+const O_CREAT: u64 = 0x40;
+const O_TRUNC: u64 = 0x200;
+const INIT_PATH: &[u8] = b"/initrd/init\0";
+const INIT_ARG0: &[u8] = b"/initrd/init\0";
+const INIT_ARG1_REEXEC: &[u8] = b"--reexec\0";
+const REEXEC_MARKER_PATH: &[u8] = b"/run/init-zero.reexec\0";
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -30,6 +42,8 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     log_static("HXNU-INIT: payload online via int 0x80\n");
+
+    let reexec_stage = maybe_reexec_once();
 
     let abi = syscall0(HXNU_SYS_ABI_VERSION);
     let process_id = syscall0(HXNU_SYS_PROCESS_SELF);
@@ -47,11 +61,12 @@ pub extern "C" fn _start() -> ! {
     let mut line = StackLine::<192>::new();
     let _ = write!(
         &mut line,
-        "HXNU-INIT: abi={:#x} pid={} tid={} comm={} uptime-ns={}\n",
+        "HXNU-INIT: abi={:#x} pid={} tid={} comm={} stage={} uptime-ns={}\n",
         abi,
         process_id,
         thread_id,
         comm_text,
+        reexec_stage,
         uptime_ns,
     );
     log_bytes(line.as_bytes());
@@ -74,8 +89,16 @@ fn syscall0(number: u64) -> i64 {
     syscall(number, [0; 6])
 }
 
+fn syscall1(number: u64, arg0: u64) -> i64 {
+    syscall(number, [arg0, 0, 0, 0, 0, 0])
+}
+
 fn syscall2(number: u64, arg0: u64, arg1: u64) -> i64 {
     syscall(number, [arg0, arg1, 0, 0, 0, 0])
+}
+
+fn syscall3(number: u64, arg0: u64, arg1: u64, arg2: u64) -> i64 {
+    syscall(number, [arg0, arg1, arg2, 0, 0, 0])
 }
 
 fn syscall(number: u64, args: [u64; 6]) -> i64 {
@@ -104,6 +127,50 @@ fn c_string_len(bytes: &[u8]) -> usize {
         len += 1;
     }
     len
+}
+
+fn maybe_reexec_once() -> &'static str {
+    if syscall2(HXNU_SYS_ACCESS, REEXEC_MARKER_PATH.as_ptr() as u64, F_OK) == 0 {
+        return "post-exec";
+    }
+
+    let marker_fd = syscall2(
+        HXNU_SYS_OPEN,
+        REEXEC_MARKER_PATH.as_ptr() as u64,
+        O_WRONLY | O_CREAT | O_TRUNC,
+    );
+    if marker_fd < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: reexec marker create failed errno={}\n",
+            marker_fd,
+        );
+        log_bytes(line.as_bytes());
+        return "marker-failed";
+    }
+    let _ = syscall1(HXNU_SYS_CLOSE, marker_fd as u64);
+
+    log_static("HXNU-INIT: self-exec requested path=/initrd/init\n");
+    let argv = [
+        INIT_ARG0.as_ptr() as u64,
+        INIT_ARG1_REEXEC.as_ptr() as u64,
+        0,
+    ];
+    let exec_result = syscall3(
+        HXNU_SYS_EXEC,
+        INIT_PATH.as_ptr() as u64,
+        argv.as_ptr() as u64,
+        0,
+    );
+    let mut line = StackLine::<160>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: self-exec returned errno={}\n",
+        exec_result,
+    );
+    log_bytes(line.as_bytes());
+    "exec-failed"
 }
 
 struct StackLine<const N: usize> {

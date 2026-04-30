@@ -22,6 +22,7 @@ const PAGE_BYTES: usize = mm::frame::PAGE_SIZE as usize;
 const PAGE_MASK: u64 = mm::frame::PAGE_SIZE - 1;
 const ELF_MACHINE_X86_64: u16 = 0x003e;
 const INIT_LAUNCH_MONITOR_TICKS: u32 = 3;
+const BOOTSTRAP_STACK_RESERVE_BYTES: u64 = 64 * 1024;
 
 impl GlobalInitExec {
     const fn new() -> Self {
@@ -40,6 +41,7 @@ struct InitExecState {
     activation: Option<ActivatedInitImage>,
     last_error: Option<InitExecActivateError>,
     last_launch_error: Option<InitExecLaunchError>,
+    active_launch: Option<ActiveLaunch>,
 }
 
 impl InitExecState {
@@ -48,8 +50,22 @@ impl InitExecState {
             activation: None,
             last_error: None,
             last_launch_error: None,
+            active_launch: None,
         }
     }
+}
+
+#[derive(Clone)]
+struct ActiveLaunch {
+    process_id: u64,
+    path: String,
+    pages: Vec<TrackedPage>,
+}
+
+#[derive(Copy, Clone)]
+struct TrackedPage {
+    virtual_address: u64,
+    physical_address: u64,
 }
 
 struct ActivatedInitImage {
@@ -186,12 +202,25 @@ pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError>
 }
 
 pub fn launch_exec_path(
+    process_id: u64,
     exec_path: &str,
-    stack: syscall::BootstrapExecStackImage,
+    stack: &syscall::BootstrapExecStackImage,
 ) -> Result<(), InitExecLaunchError> {
-    let image = vfs::materialize_executable_image(exec_path).map_err(InitExecLaunchError::Prep)?;
-    let activation = build_activation(image).map_err(InitExecLaunchError::Activation)?;
-    launch_activation(&activation, stack)
+    let result = (|| {
+        let image = vfs::materialize_executable_image(exec_path).map_err(InitExecLaunchError::Prep)?;
+        let activation = build_activation(image).map_err(InitExecLaunchError::Activation)?;
+        launch_activation(process_id, &activation, stack)
+    })();
+
+    state_mut().last_launch_error = match result {
+        Ok(()) => None,
+        Err(error) => Some(error),
+    };
+    result
+}
+
+pub fn discard_staged_activation() {
+    state_mut().activation = None;
 }
 
 pub fn observe_timer_tick(tick: u64) {
@@ -373,8 +402,9 @@ fn activation_summary(activation: &ActivatedInitImage) -> InitExecSummary {
 }
 
 fn launch_activation(
+    process_id: u64,
     activation: &ActivatedInitImage,
-    stack: syscall::BootstrapExecStackImage,
+    stack: &syscall::BootstrapExecStackImage,
 ) -> Result<(), InitExecLaunchError> {
     if activation.machine != ELF_MACHINE_X86_64 {
         return Err(InitExecLaunchError::UnsupportedMachine);
@@ -382,11 +412,34 @@ fn launch_activation(
 
     let hhdm_offset = limine::hhdm_offset().ok_or(InitExecLaunchError::MissingHhdm)?;
     let launch_entry_point = stack.entry_point.unwrap_or(activation.entry_point);
+    let mut previous_launch = take_active_launch(process_id);
+    let mut newly_mapped_pages = Vec::new();
 
-    map_stack_image(&stack, hhdm_offset)?;
-    for segment in &activation.segments {
-        map_loaded_segment(segment, hhdm_offset)?;
+    if let Some(previous) = previous_launch.as_ref() {
+        teardown_launch(previous, hhdm_offset)?;
     }
+    if let Err(error) = map_stack_image(&stack, hhdm_offset, &mut newly_mapped_pages) {
+        kprintln!("HXNU: exec replace stack-map failed reason={}", error.as_str());
+        rollback_launch(previous_launch.as_ref(), &newly_mapped_pages, hhdm_offset);
+        return Err(error);
+    }
+    for segment in &activation.segments {
+        if let Err(error) = map_loaded_segment(segment, hhdm_offset, &mut newly_mapped_pages) {
+            kprintln!(
+                "HXNU: exec replace segment-map failed path={} idx={} reason={}",
+                activation.path,
+                segment.index,
+                error.as_str(),
+            );
+            rollback_launch(previous_launch.as_ref(), &newly_mapped_pages, hhdm_offset);
+            return Err(error);
+        }
+    }
+    record_active_launch(ActiveLaunch {
+        process_id,
+        path: activation.path.clone(),
+        pages: newly_mapped_pages,
+    });
     let exec_commit = syscall::commit_bootstrap_exec(&activation.path);
 
     kprintln!(
@@ -402,6 +455,15 @@ fn launch_activation(
         exec_commit.robust_list_cleared,
         exec_commit.rseq_cleared,
     );
+    if let Some(previous) = previous_launch.take() {
+        kprintln!(
+            "HXNU: exec replace old-path={} old-pages={} new-path={} new-pages={}",
+            previous.path,
+            previous.pages.len(),
+            activation.path,
+            active_launch_page_count(),
+        );
+    }
     kprintln!(
         "HXNU: init launch transfer path={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
         activation.path,
@@ -420,6 +482,7 @@ fn launch_activation(
 fn map_stack_image(
     stack: &syscall::BootstrapExecStackImage,
     hhdm_offset: u64,
+    tracked_pages: &mut Vec<TrackedPage>,
 ) -> Result<(), InitExecLaunchError> {
     let stack_end = stack
         .stack_pointer
@@ -428,12 +491,18 @@ fn map_stack_image(
     if stack.stack_bytes != stack.bytes.len() || stack_end != stack.stack_top {
         return Err(InitExecLaunchError::StackRangeInvalid);
     }
-    map_image_bytes(stack.stack_pointer, &stack.bytes, hhdm_offset)
+    let image_page_start = align_down_to_page(stack.stack_pointer);
+    let reserve_start = align_down_to_page(stack.stack_pointer.saturating_sub(BOOTSTRAP_STACK_RESERVE_BYTES));
+    if reserve_start < image_page_start {
+        map_zero_pages(reserve_start, image_page_start, hhdm_offset, tracked_pages)?;
+    }
+    map_image_bytes(stack.stack_pointer, &stack.bytes, hhdm_offset, tracked_pages)
 }
 
 fn map_loaded_segment(
     segment: &ActivatedSegment,
     hhdm_offset: u64,
+    tracked_pages: &mut Vec<TrackedPage>,
 ) -> Result<(), InitExecLaunchError> {
     let mapped_len = segment
         .map_end
@@ -444,13 +513,14 @@ fn map_loaded_segment(
     if mapped_len != actual_len {
         return Err(InitExecLaunchError::SegmentRangeInvalid);
     }
-    map_image_bytes(segment.map_start, &segment.bytes, hhdm_offset)
+    map_image_bytes(segment.map_start, &segment.bytes, hhdm_offset, tracked_pages)
 }
 
 fn map_image_bytes(
     virtual_start: u64,
     bytes: &[u8],
     hhdm_offset: u64,
+    tracked_pages: &mut Vec<TrackedPage>,
 ) -> Result<(), InitExecLaunchError> {
     if bytes.is_empty() {
         return Ok(());
@@ -468,6 +538,10 @@ fn map_image_bytes(
         let frame = mm::frame::allocate_frame().ok_or(InitExecLaunchError::FrameAllocationFailed)?;
         arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), 0)
             .map_err(InitExecLaunchError::Map)?;
+        tracked_pages.push(TrackedPage {
+            virtual_address: page_address,
+            physical_address: frame.start_address(),
+        });
 
         let frame_ptr = hhdm_offset
             .checked_add(frame.start_address())
@@ -499,6 +573,107 @@ fn map_image_bytes(
     }
 
     Ok(())
+}
+
+fn map_zero_pages(
+    start: u64,
+    end: u64,
+    hhdm_offset: u64,
+    tracked_pages: &mut Vec<TrackedPage>,
+) -> Result<(), InitExecLaunchError> {
+    let mut page_address = align_down_to_page(start);
+    let page_end = align_down_to_page(end);
+    while page_address < page_end {
+        let frame = mm::frame::allocate_frame().ok_or(InitExecLaunchError::FrameAllocationFailed)?;
+        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), 0)
+            .map_err(InitExecLaunchError::Map)?;
+        tracked_pages.push(TrackedPage {
+            virtual_address: page_address,
+            physical_address: frame.start_address(),
+        });
+
+        let frame_ptr = hhdm_offset
+            .checked_add(frame.start_address())
+            .ok_or(InitExecLaunchError::Map(arch::x86_64::MapError::AddressOverflow))?
+            as *mut u8;
+        unsafe {
+            ptr::write_bytes(frame_ptr, 0, PAGE_BYTES);
+        }
+
+        page_address = page_address
+            .checked_add(mm::frame::PAGE_SIZE)
+            .ok_or(InitExecLaunchError::SegmentRangeInvalid)?;
+    }
+    Ok(())
+}
+
+const fn align_down_to_page(address: u64) -> u64 {
+    address & !PAGE_MASK
+}
+
+fn take_active_launch(process_id: u64) -> Option<ActiveLaunch> {
+    let state = state_mut();
+    let launch = state.active_launch.take()?;
+    if launch.process_id == process_id {
+        return Some(launch);
+    }
+    state.active_launch = Some(launch);
+    None
+}
+
+fn record_active_launch(launch: ActiveLaunch) {
+    state_mut().active_launch = Some(launch);
+}
+
+fn active_launch_page_count() -> usize {
+    state_ref()
+        .active_launch
+        .as_ref()
+        .map_or(0, |launch| launch.pages.len())
+}
+
+fn teardown_launch(launch: &ActiveLaunch, hhdm_offset: u64) -> Result<(), InitExecLaunchError> {
+    for page in &launch.pages {
+        arch::x86_64::unmap_virtual_page(hhdm_offset, page.virtual_address)
+            .map_err(InitExecLaunchError::Map)?;
+    }
+    Ok(())
+}
+
+fn restore_launch(launch: &ActiveLaunch, hhdm_offset: u64) -> Result<(), InitExecLaunchError> {
+    for page in &launch.pages {
+        arch::x86_64::map_virtual_page(
+            hhdm_offset,
+            page.virtual_address,
+            page.physical_address,
+            0,
+        )
+        .map_err(InitExecLaunchError::Map)?;
+    }
+    Ok(())
+}
+
+fn cleanup_partial_launch(
+    mapped_pages: &[TrackedPage],
+    hhdm_offset: u64,
+) -> Result<(), InitExecLaunchError> {
+    for page in mapped_pages {
+        arch::x86_64::unmap_virtual_page(hhdm_offset, page.virtual_address)
+            .map_err(InitExecLaunchError::Map)?;
+    }
+    Ok(())
+}
+
+fn rollback_launch(
+    previous_launch: Option<&ActiveLaunch>,
+    newly_mapped_pages: &[TrackedPage],
+    hhdm_offset: u64,
+) {
+    let _ = cleanup_partial_launch(newly_mapped_pages, hhdm_offset);
+    if let Some(previous) = previous_launch {
+        let _ = restore_launch(previous, hhdm_offset);
+        record_active_launch(previous.clone());
+    }
 }
 
 unsafe fn jump_to_loaded_image(entry_point: u64, stack_pointer: u64) -> ! {

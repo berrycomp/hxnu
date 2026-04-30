@@ -94,6 +94,10 @@ pub fn map_virtual_page(
     early_map::map_virtual_page(hhdm_offset, virtual_address, physical_address, extra_flags)
 }
 
+pub fn unmap_virtual_page(hhdm_offset: u64, virtual_address: u64) -> Result<Option<u64>, MapError> {
+    early_map::unmap_virtual_page(hhdm_offset, virtual_address)
+}
+
 pub fn initialize_kernel_thread_context(
     context: &mut TaskContext,
     stack: &'static mut [u8],
@@ -135,4 +139,13 @@ pub fn run_syscall_self_test() -> SyscallSelfTest {
         hxnu_close_result: result.hxnu_close_result,
         hxnu_abi_version_result: result.hxnu_abi_version_result,
     }
+}
+
+pub fn launch_exec_on_syscall_stack(
+    process_id: u64,
+    path_ptr: *const u8,
+    path_len: usize,
+    stack: &crate::syscall::BootstrapExecStackImage,
+) -> i64 {
+    interrupts::launch_exec_on_syscall_stack(process_id, path_ptr, path_len, stack)
 }

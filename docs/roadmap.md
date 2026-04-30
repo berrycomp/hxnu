@@ -48,6 +48,7 @@ Current status:
 - `/initrd/init` handoff state now validates entry-on-executable-segment, maps staged ELF load images plus a bootstrap exec stack, commits an initial exec-style state reset (`comm`, `dumpable`, transient user mappings/TLS/rseq/robust-list state), and transfers control into the loaded init image on `x86_64`
 - Bootstrap init handoff now enters through the real HXNU native `exec` syscall path (`process_exec_at`) for `/initrd/init` on `x86_64`
 - Repo-local `hxnu-init` bootstrap payload is now staged into `initrd` during local builds and exercises HXNU-native `int 0x80` logging/identity/prctl syscalls after handoff on `x86_64`
+- Bootstrap `hxnu-init` now performs a one-shot self-`exec`, proving lower-half image replacement and post-`exec` payload recovery on `x86_64`
 - Early Unix-like shebang interpreter fallback from `/bin/*` to `/initrd/bin/*` is online on `x86_64`
 - Local ISO builds now stage a repo-local ELF init payload first, with compiler repo `init-like` fallback when needed, exercising the real `/initrd/init` ELF load + non-returning bootstrap handoff path on `x86_64`
 - Partial Linux + Ghost + HXNU-native syscall compatibility dispatcher bootstrap is online on `x86_64`

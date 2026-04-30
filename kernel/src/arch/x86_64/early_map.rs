@@ -61,6 +61,39 @@ pub fn map_virtual_page(
     )
 }
 
+pub fn unmap_virtual_page(hhdm_offset: u64, virtual_address: u64) -> Result<Option<u64>, MapError> {
+    let page_address = virtual_address & !0xfff;
+    let pml4 = hhdm_offset
+        .checked_add(read_cr3() & PAGE_ADDRESS_MASK)
+        .ok_or(MapError::AddressOverflow)? as *mut u64;
+    let pml4_index = page_table_index(page_address, 39);
+    let pdpt_index = page_table_index(page_address, 30);
+    let pd_index = page_table_index(page_address, 21);
+    let pt_index = page_table_index(page_address, 12);
+
+    let Some(pdpt) = existing_next_table(pml4, pml4_index, hhdm_offset)? else {
+        return Ok(None);
+    };
+    let Some(pd) = existing_next_table(pdpt, pdpt_index, hhdm_offset)? else {
+        return Ok(None);
+    };
+    let Some(pt) = existing_next_table(pd, pd_index, hhdm_offset)? else {
+        return Ok(None);
+    };
+
+    let pte = unsafe { pt.add(pt_index) };
+    let entry = unsafe { read_volatile(pte) };
+    if entry & PAGE_PRESENT == 0 {
+        return Ok(None);
+    }
+
+    unsafe {
+        write_volatile(pte, 0);
+    }
+    invalidate_page(page_address);
+    Ok(Some(entry & PAGE_ADDRESS_MASK))
+}
+
 fn ensure_page_mapping(
     hhdm_offset: u64,
     virtual_address: u64,
@@ -133,6 +166,24 @@ fn next_table(table: *mut u64, index: usize, hhdm_offset: u64) -> Result<NextTab
     }
 
     Ok(NextTable::Table(
+        hhdm_offset
+            .checked_add(entry & PAGE_ADDRESS_MASK)
+            .ok_or(MapError::AddressOverflow)? as *mut u64,
+    ))
+}
+
+fn existing_next_table(
+    table: *mut u64,
+    index: usize,
+    hhdm_offset: u64,
+) -> Result<Option<*mut u64>, MapError> {
+    let entry_ptr = unsafe { table.add(index) };
+    let entry = unsafe { read_volatile(entry_ptr) };
+    if entry & PAGE_PRESENT == 0 || entry & PAGE_HUGE != 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(
         hhdm_offset
             .checked_add(entry & PAGE_ADDRESS_MASK)
             .ok_or(MapError::AddressOverflow)? as *mut u64,
