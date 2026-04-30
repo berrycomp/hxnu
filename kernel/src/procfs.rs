@@ -8,6 +8,7 @@ use crate::block;
 use crate::fat;
 use crate::init_exec;
 use crate::mm;
+use crate::percpu;
 use crate::sched;
 use crate::smp;
 use crate::syscall;
@@ -15,11 +16,12 @@ use crate::time;
 use crate::vector;
 
 const PROCFS_DIRECTORIES: [&str; 2] = ["/", "/proc"];
-const PROCFS_FILES: [&str; 13] = [
+const PROCFS_FILES: [&str; 14] = [
     "/proc/version",
     "/proc/uptime",
     "/proc/meminfo",
     "/proc/cpuinfo",
+    "/proc/percpu",
     "/proc/vector",
     "/proc/accel",
     "/proc/schedstat",
@@ -115,6 +117,7 @@ pub fn read(path: &str) -> Option<String> {
         "/proc/uptime" => Some(render_uptime()),
         "/proc/meminfo" => Some(render_meminfo()),
         "/proc/cpuinfo" => Some(render_cpuinfo(state)),
+        "/proc/percpu" => Some(percpu::render_status()),
         "/proc/vector" => Some(render_vector()),
         "/proc/accel" => Some(render_accel()),
         "/proc/schedstat" => Some(render_schedstat()),

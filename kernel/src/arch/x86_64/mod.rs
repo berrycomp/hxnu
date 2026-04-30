@@ -50,6 +50,10 @@ pub fn probe_cpu() -> cpu::CpuInfo {
     cpu::probe()
 }
 
+pub fn current_initial_apic_id() -> u32 {
+    cpu::current_initial_apic_id()
+}
+
 pub fn cpuid(leaf: u32) -> CpuidResult {
     cpuid::query(leaf)
 }

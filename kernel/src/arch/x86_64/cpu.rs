@@ -85,6 +85,10 @@ pub fn probe() -> CpuInfo {
     }
 }
 
+pub fn current_initial_apic_id() -> u32 {
+    (cpuid::query(1).ebx >> 24) & 0xff
+}
+
 fn read_msr(msr: u32) -> u64 {
     let low: u32;
     let high: u32;

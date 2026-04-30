@@ -20,6 +20,7 @@ mod log;
 mod limine;
 mod mm;
 mod panic;
+mod percpu;
 mod power;
 mod procfs;
 mod runtime;
@@ -522,6 +523,24 @@ pub extern "C" fn _start() -> ! {
                                             yes_no(target.online_capable),
                                         );
                                     }
+                                }
+                                match percpu::initialize() {
+                                    Ok(summary) => kprintln_style!(
+                                        crate::tty::ConsoleStyle::Success,
+                                        "HXNU: percpu online cpus={} online={} current={} apic={} area={} total={} header={}",
+                                        summary.cpu_count,
+                                        summary.online_cpus,
+                                        summary.current_cpu_index,
+                                        summary.current_apic_id,
+                                        summary.area_bytes,
+                                        summary.total_bytes,
+                                        percpu::header_size(),
+                                    ),
+                                    Err(error) => kprintln_style!(
+                                        crate::tty::ConsoleStyle::Error,
+                                        "HXNU: percpu offline reason={}",
+                                        error.as_str()
+                                    ),
                                 }
                             }
                             Err(error) => kprintln_style!(
@@ -1322,6 +1341,13 @@ pub extern "C" fn _start() -> ! {
             crate::tty::ConsoleStyle::Muted,
             "HXNU: procfs preview accel={}",
             accel_status,
+        );
+    }
+    if let Some(percpu_status) = vfs::preview("/proc/percpu", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: procfs preview percpu={}",
+            percpu_status,
         );
     }
     if let Some(devlist) = vfs::preview("/dev", 80) {
