@@ -196,6 +196,8 @@ pub struct ExecutableLoadPrep {
     pub machine: Option<u16>,
     pub entry_point: Option<u64>,
     pub program_header_count: usize,
+    pub program_header_entry_size: usize,
+    pub program_header_virtual_address: Option<u64>,
     pub load_segment_count: usize,
     pub load_base: Option<u64>,
     pub load_offset: Option<u64>,
@@ -224,6 +226,9 @@ pub struct ExecutableLoadImage {
     pub image_type: Option<u16>,
     pub machine: Option<u16>,
     pub entry_point: Option<u64>,
+    pub program_header_count: usize,
+    pub program_header_entry_size: usize,
+    pub program_header_virtual_address: Option<u64>,
     pub interpreter: Option<String>,
     pub interpreter_source: Option<String>,
     pub interpreter_argument: Option<String>,
@@ -398,6 +403,7 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
     match image {
         exec::ExecutableImage::Elf64(elf) => {
             let load_plan = exec::build_load_plan(&elf).map_err(ExecutableLoadPrepError::Parse)?;
+            let program_header_virtual_address = program_header_virtual_address(&elf, &load_plan);
             let mut load_segment_count = 0usize;
             let mut load_base = None;
             let mut load_offset = None;
@@ -472,6 +478,8 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 machine: Some(elf.machine),
                 entry_point: Some(elf.entry_point),
                 program_header_count: elf.program_headers.len(),
+                program_header_entry_size: elf.program_header_entry_size,
+                program_header_virtual_address,
                 load_segment_count,
                 load_base,
                 load_offset,
@@ -504,6 +512,8 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 machine: None,
                 entry_point: None,
                 program_header_count: 0,
+                program_header_entry_size: 0,
+                program_header_virtual_address: None,
                 load_segment_count: 0,
                 load_base: None,
                 load_offset: None,
@@ -533,6 +543,8 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
             machine: None,
             entry_point: None,
             program_header_count: 0,
+            program_header_entry_size: 0,
+            program_header_virtual_address: None,
             load_segment_count: 0,
             load_base: None,
             load_offset: None,
@@ -564,6 +576,7 @@ pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, E
     match image {
         exec::ExecutableImage::Elf64(elf) => {
             let load_plan = exec::build_load_plan(&elf).map_err(ExecutableLoadPrepError::Parse)?;
+            let program_header_virtual_address = program_header_virtual_address(&elf, &load_plan);
             let mapped_segments =
                 exec::materialize_load_segments(bytes, &load_plan).map_err(ExecutableLoadPrepError::Parse)?;
             let mut vm_map_images = Vec::with_capacity(load_plan.len());
@@ -607,6 +620,9 @@ pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, E
                 image_type: Some(elf.image_type),
                 machine: Some(elf.machine),
                 entry_point: Some(elf.entry_point),
+                program_header_count: elf.program_headers.len(),
+                program_header_entry_size: elf.program_header_entry_size,
+                program_header_virtual_address,
                 interpreter,
                 interpreter_source,
                 interpreter_argument: None,
@@ -628,6 +644,9 @@ pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, E
                 image_type: None,
                 machine: None,
                 entry_point: None,
+                program_header_count: 0,
+                program_header_entry_size: 0,
+                program_header_virtual_address: None,
                 interpreter: Some(script.interpreter),
                 interpreter_source,
                 interpreter_argument: script.argument,
@@ -646,6 +665,9 @@ pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, E
             image_type: None,
             machine: None,
             entry_point: None,
+            program_header_count: 0,
+            program_header_entry_size: 0,
+            program_header_virtual_address: None,
             interpreter: None,
             interpreter_source: None,
             interpreter_argument: None,
@@ -655,6 +677,37 @@ pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, E
             vm_map_zero_fill_bytes: 0,
         }),
     }
+}
+
+fn program_header_virtual_address(
+    elf: &exec::ElfImage,
+    load_plan: &[exec::LoadSegmentPlan],
+) -> Option<u64> {
+    if let Some(header) = elf
+        .program_headers
+        .iter()
+        .find(|header| header.segment_type == exec::ProgramHeaderType::ProgramHeaderTable)
+    {
+        return Some(header.virtual_address);
+    }
+
+    let phdr_bytes = u64::try_from(
+        elf.program_header_entry_size
+            .checked_mul(elf.program_headers.len())?,
+    )
+    .ok()?;
+    let phdr_end = elf.program_header_offset.checked_add(phdr_bytes)?;
+    for segment in load_plan {
+        let file_end = segment.file_offset.checked_add(segment.file_bytes)?;
+        if elf.program_header_offset < segment.file_offset || phdr_end > file_end {
+            continue;
+        }
+
+        let relative = elf.program_header_offset.checked_sub(segment.file_offset)?;
+        return segment.virtual_start.checked_add(relative);
+    }
+
+    None
 }
 
 fn resolve_node(path: &str) -> Option<VfsNode> {

@@ -754,7 +754,7 @@ pub extern "C" fn _start() -> ! {
     match &init_load_prep {
         Ok(prep) => kprintln_style!(
             crate::tty::ConsoleStyle::Accent,
-            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-src={} interp-ok={} interp-arg={}",
+            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} ph-ent={} ph-vaddr={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-src={} interp-ok={} interp-arg={}",
             prep.path,
             prep.mount.as_str(),
             prep.format.as_str(),
@@ -764,6 +764,8 @@ pub extern "C" fn _start() -> ! {
             vfs::format_u16_hex(prep.machine),
             vfs::format_u16_hex(prep.image_type),
             prep.program_header_count,
+            prep.program_header_entry_size,
+            vfs::format_u64_hex(prep.program_header_virtual_address),
             prep.load_segment_count,
             vfs::format_u64_hex(prep.load_base),
             vfs::format_u64_hex(prep.load_offset),
@@ -792,7 +794,7 @@ pub extern "C" fn _start() -> ! {
     match &init_load_image {
         Ok(image) => kprintln_style!(
             crate::tty::ConsoleStyle::Accent,
-            "HXNU: init load-image path={} mount={} format={} size={} executable={} entry={} machine={} type={} vm-map={} vm-bytes={} vm-zero={} interp={} interp-src={} interp-ok={} interp-arg={}",
+            "HXNU: init load-image path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} ph-ent={} ph-vaddr={} vm-map={} vm-bytes={} vm-zero={} interp={} interp-src={} interp-ok={} interp-arg={}",
             image.path,
             image.mount.as_str(),
             image.format.as_str(),
@@ -801,6 +803,9 @@ pub extern "C" fn _start() -> ! {
             vfs::format_u64_hex(image.entry_point),
             vfs::format_u16_hex(image.machine),
             vfs::format_u16_hex(image.image_type),
+            image.program_header_count,
+            image.program_header_entry_size,
+            vfs::format_u64_hex(image.program_header_virtual_address),
             image.vm_map_images.len(),
             image.vm_map_total_bytes,
             image.vm_map_zero_fill_bytes,

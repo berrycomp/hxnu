@@ -51,6 +51,7 @@ Current status:
 - Bootstrap `hxnu-init` now performs a one-shot self-`exec`, proving lower-half image replacement and post-`exec` payload recovery on `x86_64`
 - Bootstrap `hxnu-init` now leaves a `FD_CLOEXEC` tmpfs descriptor armed across self-`exec`, and the second exec-commit deterministically reports `cloexec-closed=1` on `x86_64`
 - Bootstrap `hxnu-init` now exercises synthetic `fork/wait4` after self-`exec`, proving observable pending `SIGCHLD` notification before reap and clear-on-reap behavior through `/proc/signals` on `x86_64`
+- Bootstrap `exec` now carries PT_INTERP launch metadata through stack construction (`launch_entry_point`, `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_BASE`), maps the main ELF image plus a distinct interpreter ELF when present, and is acceptance-covered by `scripts/smoke-ptinterp.sh` on `x86_64`
 - Early Unix-like shebang interpreter fallback from `/bin/*` to `/initrd/bin/*` is online on `x86_64`
 - Local ISO builds now stage a repo-local ELF init payload first, with compiler repo `init-like` fallback when needed, exercising the real `/initrd/init` ELF load + non-returning bootstrap handoff path on `x86_64`
 - Partial Linux + Ghost + HXNU-native syscall compatibility dispatcher bootstrap is online on `x86_64`
@@ -147,7 +148,7 @@ Cross-repo status (as of 2026-03-29):
 - FAT v2 read-only expansion (file content reads, subdirectory traversal, staged LFN support)
 - Syscall/process core hardening for real child runtime beyond synthetic spawn (`fork/clone` follow-up)
 - Signal delivery baseline (`sigaction` wiring to scheduler/process state and `SIGCHLD` behavior)
-- Acceptance focus: boot to userspace with `execve`, deterministic FD lifecycle, and stable `/dev` + `/proc` + `/fat` observability
+- Acceptance focus: boot to userspace with `execve` + `PT_INTERP`, deterministic FD lifecycle, and stable `/dev` + `/proc` + `/fat` observability
 
 ## Phase 4
 - SMP bring-up on `x86_64`

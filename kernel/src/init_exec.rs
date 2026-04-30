@@ -147,6 +147,7 @@ pub enum InitExecLaunchError {
     Activation(InitExecActivateError),
     UnsupportedMachine,
     Prep(vfs::ExecutableLoadPrepError),
+    MissingInterpreter,
     MissingHhdm,
     StackRangeInvalid,
     SegmentRangeInvalid,
@@ -160,6 +161,7 @@ impl InitExecLaunchError {
             Self::Activation(error) => error.as_str(),
             Self::UnsupportedMachine => "init executable machine is not supported for launch",
             Self::Prep(error) => error.as_str(),
+            Self::MissingInterpreter => "exec interpreter could not be resolved",
             Self::MissingHhdm => "limine HHDM offset is not available",
             Self::StackRangeInvalid => "init bootstrap stack range is invalid",
             Self::SegmentRangeInvalid => "init executable segment range is invalid",
@@ -208,8 +210,37 @@ pub fn launch_exec_path(
 ) -> Result<(), InitExecLaunchError> {
     let result = (|| {
         let image = vfs::materialize_executable_image(exec_path).map_err(InitExecLaunchError::Prep)?;
-        let activation = build_activation(image).map_err(InitExecLaunchError::Activation)?;
-        launch_activation(process_id, &activation, stack)
+        match image.format {
+            ExecutableFormat::Elf => {
+                let interpreter_source = image.interpreter_source.clone();
+                let activation = build_activation(image).map_err(InitExecLaunchError::Activation)?;
+                if let Some(interpreter_path) = interpreter_source.as_deref() {
+                    let interpreter_activation = materialize_launch_activation(interpreter_path)?;
+                    launch_activation(
+                        process_id,
+                        exec_path,
+                        Some(&activation),
+                        &interpreter_activation,
+                        stack,
+                    )
+                } else {
+                    launch_activation(process_id, exec_path, None, &activation, stack)
+                }
+            }
+            ExecutableFormat::ShebangScript => {
+                let interpreter_path = image
+                    .interpreter_source
+                    .as_deref()
+                    .ok_or(InitExecLaunchError::MissingInterpreter)?;
+                let interpreter_activation = materialize_launch_activation(interpreter_path)?;
+                launch_activation(process_id, exec_path, None, &interpreter_activation, stack)
+            }
+            ExecutableFormat::Text | ExecutableFormat::Unknown => {
+                Err(InitExecLaunchError::Activation(
+                    InitExecActivateError::UnsupportedFormat,
+                ))
+            }
+        }
     })();
 
     state_mut().last_launch_error = match result {
@@ -403,15 +434,23 @@ fn activation_summary(activation: &ActivatedInitImage) -> InitExecSummary {
 
 fn launch_activation(
     process_id: u64,
-    activation: &ActivatedInitImage,
+    exec_path: &str,
+    program_activation: Option<&ActivatedInitImage>,
+    launch_activation: &ActivatedInitImage,
     stack: &syscall::BootstrapExecStackImage,
 ) -> Result<(), InitExecLaunchError> {
-    if activation.machine != ELF_MACHINE_X86_64 {
+    if launch_activation.machine != ELF_MACHINE_X86_64 {
+        return Err(InitExecLaunchError::UnsupportedMachine);
+    }
+    if program_activation.is_some_and(|activation| activation.machine != ELF_MACHINE_X86_64) {
         return Err(InitExecLaunchError::UnsupportedMachine);
     }
 
     let hhdm_offset = limine::hhdm_offset().ok_or(InitExecLaunchError::MissingHhdm)?;
-    let launch_entry_point = stack.entry_point.unwrap_or(activation.entry_point);
+    let launch_entry_point = stack
+        .launch_entry_point
+        .or(stack.entry_point)
+        .unwrap_or(launch_activation.entry_point);
     let mut previous_launch = take_active_launch(process_id);
     let mut newly_mapped_pages = Vec::new();
 
@@ -423,11 +462,25 @@ fn launch_activation(
         rollback_launch(previous_launch.as_ref(), &newly_mapped_pages, hhdm_offset);
         return Err(error);
     }
-    for segment in &activation.segments {
+    if let Some(activation) = program_activation {
+        for segment in &activation.segments {
+            if let Err(error) = map_loaded_segment(segment, hhdm_offset, &mut newly_mapped_pages) {
+                kprintln!(
+                    "HXNU: exec replace segment-map failed path={} idx={} reason={}",
+                    activation.path,
+                    segment.index,
+                    error.as_str(),
+                );
+                rollback_launch(previous_launch.as_ref(), &newly_mapped_pages, hhdm_offset);
+                return Err(error);
+            }
+        }
+    }
+    for segment in &launch_activation.segments {
         if let Err(error) = map_loaded_segment(segment, hhdm_offset, &mut newly_mapped_pages) {
             kprintln!(
                 "HXNU: exec replace segment-map failed path={} idx={} reason={}",
-                activation.path,
+                launch_activation.path,
                 segment.index,
                 error.as_str(),
             );
@@ -437,10 +490,10 @@ fn launch_activation(
     }
     record_active_launch(ActiveLaunch {
         process_id,
-        path: activation.path.clone(),
+        path: String::from(exec_path),
         pages: newly_mapped_pages,
     });
-    let exec_commit = syscall::commit_bootstrap_exec(&activation.path);
+    let exec_commit = syscall::commit_bootstrap_exec(exec_path);
 
     kprintln!(
         "HXNU: init exec-commit pid={} comm={} cloexec-closed={} mappings-cleared={} brk-reset={} clear-tid-cleared={} sigactions-cleared={} tls-reset={} robust-list-cleared={} rseq-cleared={}",
@@ -460,13 +513,14 @@ fn launch_activation(
             "HXNU: exec replace old-path={} old-pages={} new-path={} new-pages={}",
             previous.path,
             previous.pages.len(),
-            activation.path,
+            exec_path,
             active_launch_page_count(),
         );
     }
     kprintln!(
-        "HXNU: init launch transfer path={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
-        activation.path,
+        "HXNU: init launch transfer path={} launch={} entry={:#018x} stack={:#018x} bytes={} argv={} env={} auxv={} sig={:#018x}",
+        exec_path,
+        launch_activation.path,
         launch_entry_point,
         stack.stack_pointer,
         stack.stack_bytes,
@@ -477,6 +531,11 @@ fn launch_activation(
     );
     LAUNCH_MONITOR_BUDGET.store(INIT_LAUNCH_MONITOR_TICKS, Ordering::Release);
     unsafe { jump_to_loaded_image(launch_entry_point, stack.stack_pointer) }
+}
+
+fn materialize_launch_activation(path: &str) -> Result<ActivatedInitImage, InitExecLaunchError> {
+    let image = vfs::materialize_executable_image(path).map_err(InitExecLaunchError::Prep)?;
+    build_activation(image).map_err(InitExecLaunchError::Activation)
 }
 
 fn map_stack_image(

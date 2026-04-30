@@ -7,6 +7,10 @@ name = "hxnu-init"
 version = "0.1.0"
 
 [[package]]
+name = "hxnu-interp-zero"
+version = "0.1.0"
+
+[[package]]
 name = "hxnu-kernel"
 version = "0.1.0"
 

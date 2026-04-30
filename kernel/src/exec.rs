@@ -121,6 +121,8 @@ pub struct ElfImage {
     #[allow(dead_code)]
     pub endianness: ElfEndianness,
     pub entry_point: u64,
+    pub program_header_offset: u64,
+    pub program_header_entry_size: usize,
     pub interpreter: Option<String>,
     pub program_headers: Vec<ProgramHeader>,
 }
@@ -335,6 +337,8 @@ fn parse_elf64(image: &[u8]) -> Result<ElfImage, ParseError> {
         machine,
         endianness,
         entry_point,
+        program_header_offset: program_header_offset as u64,
+        program_header_entry_size,
         interpreter,
         program_headers,
     })

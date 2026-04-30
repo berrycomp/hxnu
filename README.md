@@ -93,6 +93,24 @@ HXNU-INIT: signal smoke sigaction=0 fork=10000 pending-before=yes handler=yes wa
 
 Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, survived a payload-driven self-`exec` that replaced the previous lower-half image in place, and then exercised synthetic `fork/wait4` with observable `SIGCHLD` pending/clear behavior through `/proc/signals`.
 
+## PT_INTERP Smoke Acceptance
+
+```bash
+./scripts/smoke-ptinterp.sh
+```
+
+This command builds a dedicated PT_INTERP smoke ISO, boots it under QEMU, and verifies that HXNU maps both the main ELF image and a separate interpreter ELF before transferring control to the interpreter entry point.
+
+Expected acceptance lines include:
+
+```text
+HXNU: init load-prep path=/initrd/init ... interp=/initrd/interp-zero interp-src=/initrd/interp-zero interp-ok=yes ...
+HXNU: init launch transfer path=/initrd/init launch=/initrd/interp-zero ...
+HXNU-INTERP: abi=0x10000 pid=1 tid=1 argc=1 argv0=/initrd/init execfn=/initrd/init at-entry=0x0000000000503110 at-base=0x0000000000300000 at-phdr=0x0000000000500040 ...
+```
+
+Those lines show that the bootstrap `exec` stack now carries the main-program auxv view (`AT_ENTRY`, `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`) while control is transferred to a distinct interpreter image with a non-zero `AT_BASE`.
+
 ## FAT Smoke Acceptance
 
 ```bash

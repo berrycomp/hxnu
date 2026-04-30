@@ -1353,6 +1353,11 @@ struct ExecStackLayout {
     hwcap: u64,
     hwcap2: u64,
     entry_point: Option<u64>,
+    launch_entry_point: Option<u64>,
+    at_phdr: u64,
+    at_phent: u64,
+    at_phnum: u64,
+    at_base: u64,
     signature: u64,
     execfn: String,
     interpreter_source: Option<String>,
@@ -1369,6 +1374,7 @@ pub struct BootstrapExecStackImage {
     pub env_count: usize,
     pub auxv_count: usize,
     pub entry_point: Option<u64>,
+    pub launch_entry_point: Option<u64>,
     pub signature: u64,
     pub bytes: Vec<u8>,
 }
@@ -1388,7 +1394,14 @@ pub struct ExecCommitSummary {
 
 struct BuiltExecStack {
     layout: ExecStackLayout,
+    launch_entry_point: Option<u64>,
     image: Vec<u8>,
+}
+
+struct ExecInterpreterContext {
+    runtime_path: String,
+    launch_entry_point: u64,
+    at_base: u64,
 }
 
 struct ExecPreflightRecord {
@@ -1699,6 +1712,15 @@ pub fn render_exec_status() -> String {
         } else {
             let _ = writeln!(text, "entry_point <none>");
         }
+        if let Some(entry_point) = layout.launch_entry_point {
+            let _ = writeln!(text, "launch_entry_point {:#018x}", entry_point);
+        } else {
+            let _ = writeln!(text, "launch_entry_point <none>");
+        }
+        let _ = writeln!(text, "at_phdr {:#018x}", layout.at_phdr);
+        let _ = writeln!(text, "at_phent {}", layout.at_phent);
+        let _ = writeln!(text, "at_phnum {}", layout.at_phnum);
+        let _ = writeln!(text, "at_base {:#018x}", layout.at_base);
         let _ = writeln!(text, "execfn {}", layout.execfn);
         if let Some(interpreter) = layout.interpreter_source.as_ref() {
             let _ = writeln!(text, "interpreter_runtime {}", interpreter);
@@ -5081,6 +5103,7 @@ pub fn build_exec_stack_for_launch(
         env_count: built.layout.env_count,
         auxv_count: built.layout.auxv_count,
         entry_point: built.layout.entry_point,
+        launch_entry_point: built.launch_entry_point,
         signature: built.layout.signature,
         bytes: built.image,
     })
@@ -5122,6 +5145,11 @@ fn build_exec_stack_image(
     envp: &[String],
 ) -> Result<BuiltExecStack, i64> {
     let (effective_argv, shebang_rewritten, argv0_defaulted) = build_effective_exec_argv(exec_path, prep, argv)?;
+    let interpreter_context = resolve_exec_interpreter_context(prep)?;
+    let launch_entry_point = interpreter_context
+        .as_ref()
+        .map(|context| context.launch_entry_point)
+        .or(prep.entry_point);
     let mut blob = Vec::new();
     let mut argv_offsets = Vec::with_capacity(effective_argv.len());
     for arg in &effective_argv {
@@ -5145,12 +5173,16 @@ fn build_exec_stack_image(
     let platform_offset = append_c_string(&mut blob, "x86_64")?;
 
     let caps = vector::caps();
+    let at_phdr = prep.program_header_virtual_address.unwrap_or(0);
+    let at_phent = prep.program_header_entry_size as u64;
+    let at_phnum = prep.program_header_count as u64;
+    let at_base = interpreter_context.as_ref().map_or(0, |context| context.at_base);
     let mut auxv = vec![
-        (AUX_AT_PHDR, 0),
-        (AUX_AT_PHENT, 0),
-        (AUX_AT_PHNUM, 0),
+        (AUX_AT_PHDR, at_phdr),
+        (AUX_AT_PHENT, at_phent),
+        (AUX_AT_PHNUM, at_phnum),
         (AUX_AT_PAGESZ, MMAP_PAGE_SIZE as u64),
-        (AUX_AT_BASE, 0),
+        (AUX_AT_BASE, at_base),
         (AUX_AT_FLAGS, 0),
         (AUX_AT_UID, 0),
         (AUX_AT_EUID, 0),
@@ -5266,13 +5298,22 @@ fn build_exec_stack_image(
             hwcap: caps.base_bits,
             hwcap2: caps.ext_bits,
             entry_point: prep.entry_point,
+            launch_entry_point,
+            at_phdr,
+            at_phent,
+            at_phnum,
+            at_base,
             signature,
             execfn: String::from(exec_path),
-            interpreter_source: prep.interpreter_source.clone(),
+            interpreter_source: interpreter_context
+                .as_ref()
+                .map(|context| context.runtime_path.clone())
+                .or_else(|| prep.interpreter_source.clone()),
             interpreter_argument: prep.interpreter_argument.clone(),
             shebang_rewritten,
             argv0_defaulted,
         },
+        launch_entry_point,
         image,
     })
 }
@@ -5322,6 +5363,34 @@ fn build_effective_exec_argv(
     }
 
     Ok((effective_argv, shebang_rewritten, argv0_defaulted))
+}
+
+fn resolve_exec_interpreter_context(
+    prep: &vfs::ExecutableLoadPrep,
+) -> Result<Option<ExecInterpreterContext>, i64> {
+    let Some(runtime_path) = prep.interpreter_source.as_ref() else {
+        return Ok(None);
+    };
+
+    let interpreter_prep =
+        vfs::prepare_executable_load(runtime_path).map_err(map_exec_load_prep_error)?;
+    if interpreter_prep.format != ExecutableFormat::Elf {
+        return Err(ENOEXEC);
+    }
+    if interpreter_prep.interpreter_source.is_some() {
+        return Err(ENOEXEC);
+    }
+
+    let launch_entry_point = interpreter_prep.entry_point.ok_or(ENOEXEC)?;
+    let at_base = interpreter_prep
+        .vm_map_start
+        .or(interpreter_prep.load_base)
+        .ok_or(ENOEXEC)?;
+    Ok(Some(ExecInterpreterContext {
+        runtime_path: runtime_path.clone(),
+        launch_entry_point,
+        at_base,
+    }))
 }
 
 fn append_c_string(blob: &mut Vec<u8>, value: &str) -> Result<usize, i64> {
@@ -5396,6 +5465,7 @@ fn map_init_exec_launch_error(error: init_exec::InitExecLaunchError) -> i64 {
         },
         init_exec::InitExecLaunchError::UnsupportedMachine => ENOEXEC,
         init_exec::InitExecLaunchError::Prep(error) => map_exec_load_prep_error(error),
+        init_exec::InitExecLaunchError::MissingInterpreter => ENOENT,
         init_exec::InitExecLaunchError::MissingHhdm => EIO,
         init_exec::InitExecLaunchError::StackRangeInvalid
         | init_exec::InitExecLaunchError::SegmentRangeInvalid => EINVAL,
@@ -5446,6 +5516,11 @@ fn record_exec_preflight(telemetry: &ExecPreflightTelemetry, status: ExecPreflig
             hwcap: layout.hwcap,
             hwcap2: layout.hwcap2,
             entry_point: layout.entry_point,
+            launch_entry_point: layout.launch_entry_point,
+            at_phdr: layout.at_phdr,
+            at_phent: layout.at_phent,
+            at_phnum: layout.at_phnum,
+            at_base: layout.at_base,
             signature: layout.signature,
             execfn: layout.execfn.clone(),
             interpreter_source: layout.interpreter_source.clone(),
