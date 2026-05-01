@@ -47,6 +47,7 @@ struct FatNode {
     name: String,
     kind: FatNodeKind,
     size: usize,
+    used_long_name: bool,
     content: Vec<u8>,
     children: Vec<usize>,
 }
@@ -57,33 +58,68 @@ struct FatDirectoryEntry {
     kind: FatNodeKind,
     size: usize,
     first_cluster: u32,
+    used_long_name: bool,
 }
 
 struct PendingLongName {
     fragments: Vec<String>,
+    checksum: Option<u8>,
+    expected_sequence: Option<u8>,
 }
 
 impl PendingLongName {
     fn new() -> Self {
         Self {
             fragments: Vec::new(),
+            checksum: None,
+            expected_sequence: None,
         }
     }
 
     fn clear(&mut self) {
         self.fragments.clear();
+        self.checksum = None;
+        self.expected_sequence = None;
     }
 
-    fn push_fragment(&mut self, fragment: String, reset: bool) {
-        if reset {
-            self.fragments.clear();
+    fn push_fragment(
+        &mut self,
+        fragment: String,
+        sequence: u8,
+        checksum: u8,
+        starts_chain: bool,
+    ) -> bool {
+        if sequence == 0 {
+            self.clear();
+            return false;
         }
+        if starts_chain {
+            self.fragments.clear();
+            self.checksum = Some(checksum);
+            self.expected_sequence = Some(sequence);
+        }
+
+        if self.checksum != Some(checksum) || self.expected_sequence != Some(sequence) {
+            self.clear();
+            return false;
+        }
+
         self.fragments.push(fragment);
+        self.expected_sequence = if sequence > 1 {
+            Some(sequence - 1)
+        } else {
+            None
+        };
+        true
     }
 
-    fn take_or(&mut self, fallback: String) -> String {
-        if self.fragments.is_empty() {
-            return fallback;
+    fn take_if_matches(&mut self, short_name: &[u8]) -> Option<String> {
+        if self.fragments.is_empty()
+            || self.expected_sequence.is_some()
+            || self.checksum != Some(lfn_checksum(short_name))
+        {
+            self.clear();
+            return None;
         }
 
         let mut text = String::new();
@@ -91,7 +127,9 @@ impl PendingLongName {
             text.push_str(fragment);
         }
         self.fragments.clear();
-        if text.is_empty() { fallback } else { text }
+        self.checksum = None;
+        self.expected_sequence = None;
+        if text.is_empty() { None } else { Some(text) }
     }
 }
 
@@ -243,6 +281,24 @@ pub fn first_nested_file_path() -> Option<String> {
         .map(|node| node.path.clone())
 }
 
+pub fn first_long_name_root_file_path() -> Option<String> {
+    let state = unsafe { (&*FAT.get()).as_ref()? };
+    state
+        .nodes
+        .iter()
+        .find(|node| node.kind == FatNodeKind::File && node.used_long_name && fat_path_depth(&node.path) == 1)
+        .map(|node| node.path.clone())
+}
+
+pub fn first_long_name_nested_file_path() -> Option<String> {
+    let state = unsafe { (&*FAT.get()).as_ref()? };
+    state
+        .nodes
+        .iter()
+        .find(|node| node.kind == FatNodeKind::File && node.used_long_name && fat_path_depth(&node.path) >= 2)
+        .map(|node| node.path.clone())
+}
+
 fn try_mount_partition(partition: block::PartitionInfo) -> Option<FatState> {
     let mut bpb_sector = [0u8; block::SECTOR_BYTES];
     if block::read(partition.device_id, partition.start_lba, 1, &mut bpb_sector).is_err() {
@@ -260,6 +316,7 @@ fn try_mount_partition(partition: block::PartitionInfo) -> Option<FatState> {
         name: String::from("fat"),
         kind: FatNodeKind::Directory,
         size: 0,
+        used_long_name: false,
         content: Vec::new(),
         children: Vec::new(),
     }];
@@ -408,6 +465,7 @@ fn populate_directory_nodes(
                     name: entry.name.clone(),
                     kind: FatNodeKind::Directory,
                     size: 0,
+                    used_long_name: entry.used_long_name,
                     content: Vec::new(),
                     children: Vec::new(),
                 });
@@ -425,6 +483,7 @@ fn populate_directory_nodes(
                     name: entry.name,
                     kind: FatNodeKind::File,
                     size: entry.size,
+                    used_long_name: entry.used_long_name,
                     content,
                     children: Vec::new(),
                 });
@@ -619,9 +678,16 @@ fn parse_directory_entries(bytes: &[u8], fat_type: FatType) -> Vec<FatDirectoryE
 
         let attrs = entry[11];
         if attrs == LFN_ATTRIBUTE {
+            let sequence = entry[0] & 0x1f;
+            let checksum = entry[13];
+            let starts_chain = (entry[0] & 0x40) != 0;
             let fragment = decode_lfn_fragment(entry);
-            if let Some(fragment) = fragment {
-                pending_long_name.push_fragment(fragment, (entry[0] & 0x40) != 0);
+            if entry[12] != 0 || read_u16_le(entry, 26) != 0 {
+                pending_long_name.clear();
+            } else if let Some(fragment) = fragment {
+                if !pending_long_name.push_fragment(fragment, sequence, checksum, starts_chain) {
+                    pending_long_name.clear();
+                }
             } else {
                 pending_long_name.clear();
             }
@@ -639,7 +705,9 @@ fn parse_directory_entries(bytes: &[u8], fat_type: FatType) -> Vec<FatDirectoryE
             offset += DIRECTORY_ENTRY_BYTES;
             continue;
         };
-        let name = pending_long_name.take_or(short_name);
+        let long_name = pending_long_name.take_if_matches(&entry[..11]);
+        let used_long_name = long_name.is_some();
+        let name = long_name.unwrap_or(short_name);
         if name == "." || name == ".." {
             offset += DIRECTORY_ENTRY_BYTES;
             continue;
@@ -662,6 +730,7 @@ fn parse_directory_entries(bytes: &[u8], fat_type: FatType) -> Vec<FatDirectoryE
             kind,
             size,
             first_cluster: (cluster_high << 16) | cluster_low,
+            used_long_name,
         });
 
         offset += DIRECTORY_ENTRY_BYTES;
@@ -685,6 +754,16 @@ fn decode_lfn_fragment(entry: &[u8]) -> Option<String> {
         text.push(ch);
     }
     Some(text)
+}
+
+fn lfn_checksum(short_name: &[u8]) -> u8 {
+    let mut checksum = 0u8;
+    for byte in short_name {
+        checksum = ((checksum & 1) << 7)
+            .wrapping_add(checksum >> 1)
+            .wrapping_add(*byte);
+    }
+    checksum
 }
 
 fn parse_short_name(name: &[u8]) -> Option<String> {

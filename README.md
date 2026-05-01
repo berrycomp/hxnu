@@ -124,9 +124,11 @@ Expected FAT bring-up lines now also include:
 ```text
 HXNU: fat preview file path=/fat/HELLO.TXT data=Hello HXNU!
 HXNU: fat preview nested path=/fat/BIN/README.TXT data=Nested README
+HXNU: fat preview lfn-root path=/fat/HELLO-LONG-NAME.TXT data=Long root file
+HXNU: fat preview lfn-nested path=/fat/BIN/README-LONG-NAME.TXT data=Nested long README
 ```
 
-Those lines show that the FAT mount is no longer limited to root-directory listing: HXNU can now traverse into subdirectories and read file content back through the normal VFS preview path.
+Those lines show that the FAT mount is no longer limited to root-directory listing: HXNU can now traverse into subdirectories, read file content back through the normal VFS preview path, and assemble checksum-validated long filename chains from staged LFN directory entries.
 
 Current bring-up logs also include:
 

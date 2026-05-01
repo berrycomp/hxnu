@@ -1446,6 +1446,26 @@ pub extern "C" fn _start() -> ! {
             );
         }
     }
+    if let Some(fat_long_root_path) = fat::first_long_name_root_file_path() {
+        if let Some(fat_long_root) = vfs::preview(&fat_long_root_path, 80) {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Muted,
+                "HXNU: fat preview lfn-root path={} data={}",
+                fat_long_root_path,
+                fat_long_root,
+            );
+        }
+    }
+    if let Some(fat_long_nested_path) = fat::first_long_name_nested_file_path() {
+        if let Some(fat_long_nested) = vfs::preview(&fat_long_nested_path, 80) {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Muted,
+                "HXNU: fat preview lfn-nested path={} data={}",
+                fat_long_nested_path,
+                fat_long_nested,
+            );
+        }
+    }
     if let Some(console) = vfs::preview("/dev/console", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
