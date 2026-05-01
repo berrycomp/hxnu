@@ -97,6 +97,7 @@ Current status:
 - FAT long filename (`LFN`) assembly now validates staged sequence/checksum chains and is acceptance-covered for both root and nested files via `scripts/smoke-fat.sh`
 - `/proc/block` now includes block driver and partition-table observability, and `/proc/fat` is online for FAT mount status
 - Writable `tmpfs` bootstrap is online at `/tmp` and `/run` with file create/truncate/append paths plus constrained rename/unlink smoke coverage (`open/openat` + `read/write/pread64/pwrite64/writev` + `rename/unlink` on regular files)
+- Tmpfs regular files now keep a stable file handle across rename/unlink while descriptors are open, with handle-scoped writeback/readback acceptance exercised by `hxnu-init` post-`exec` smoke
 - Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
 - `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
 - Ghost and HXNU-native parent-process identity calls are online (`getppid` / `process_parent`)

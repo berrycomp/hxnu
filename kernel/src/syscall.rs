@@ -910,6 +910,7 @@ struct OpenFile {
     path: String,
     offset: usize,
     content: Vec<u8>,
+    tmpfs_file_id: Option<u64>,
     pipe_endpoint: Option<PipeEndpoint>,
 }
 
@@ -5586,6 +5587,7 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
         content,
         status_flags,
         fd_flags,
+        None,
     ) {
         Ok(fd) => SyscallOutcome::success(fd),
         Err(error) => SyscallOutcome::errno(error),
@@ -5614,6 +5616,7 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
                     content,
                     status_flags,
                     fd_flags,
+                    None,
                 );
             }
             tmpfs::TmpfsNodeKind::File => {}
@@ -5635,6 +5638,7 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
         opened.content,
         status_flags,
         fd_flags,
+        Some(opened.file_id),
     )
 }
 
@@ -6314,10 +6318,27 @@ fn build_linux_stat(
     size: usize,
     path: &str,
 ) -> Result<LinuxStat, i64> {
+    build_linux_stat_with_identity(
+        mount,
+        kind,
+        executable,
+        size,
+        hash_path_to_ino(mount, path),
+        DEFAULT_LINK_COUNT,
+    )
+}
+
+fn build_linux_stat_with_identity(
+    mount: VfsMountKind,
+    kind: VfsNodeKind,
+    executable: bool,
+    size: usize,
+    inode: u64,
+    link_count: u64,
+) -> Result<LinuxStat, i64> {
     let size_i64 = i64::try_from(size).map_err(|_| ERANGE)?;
     let blocks = size.saturating_add(STAT_SECTOR_SIZE.saturating_sub(1)) / STAT_SECTOR_SIZE;
     let blocks_i64 = i64::try_from(blocks).map_err(|_| ERANGE)?;
-    let inode = hash_path_to_ino(mount, path);
     let device = mount_device_id(mount);
     let mode = mode_from_node(kind, executable);
     let uptime = time::uptime_nanoseconds();
@@ -6328,7 +6349,7 @@ fn build_linux_stat(
     Ok(LinuxStat {
         st_dev: device,
         st_ino: inode,
-        st_nlink: DEFAULT_LINK_COUNT,
+        st_nlink: link_count,
         st_mode: mode,
         st_uid: 0,
         st_gid: 0,
@@ -6543,6 +6564,44 @@ fn map_tmpfs_error(error: tmpfs::TmpfsError) -> i64 {
         tmpfs::TmpfsError::IsDirectory => EISDIR,
         tmpfs::TmpfsError::FileLimitReached => ENOSPC,
     }
+}
+
+fn release_open_file_resources(open: &OpenFile) {
+    if let Some(endpoint) = open.pipe_endpoint {
+        decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
+    }
+    if let Some(file_id) = open.tmpfs_file_id {
+        let _ = tmpfs::close_file_handle(file_id);
+    }
+}
+
+fn refresh_open_file_content(open: &mut OpenFile) -> Result<(), i64> {
+    if open.mount != VfsMountKind::Tmpfs {
+        return Ok(());
+    }
+
+    if open.kind == VfsNodeKind::Directory {
+        open.content = tmpfs::read(&open.path).ok_or(EIO)?.into_bytes();
+        return Ok(());
+    }
+
+    if let Some(file_id) = open.tmpfs_file_id {
+        open.content = tmpfs::read_bytes_by_id(file_id).ok_or(ENOENT)?;
+    }
+    Ok(())
+}
+
+fn flush_open_file_content(open: &OpenFile) -> Result<(), i64> {
+    if open.mount != VfsMountKind::Tmpfs || open.kind != VfsNodeKind::File {
+        return Ok(());
+    }
+
+    if let Some(file_id) = open.tmpfs_file_id {
+        tmpfs::write_file_by_id(file_id, &open.content).map_err(map_tmpfs_error)?;
+    } else {
+        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
+    }
+    Ok(())
 }
 
 fn retarget_open_files_for_path(source_path: &str, destination_path: &str) {
@@ -7076,6 +7135,7 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         path: pipe_path(pipe_id, end),
         offset: 0,
         content: Vec::new(),
+        tmpfs_file_id: None,
         pipe_endpoint: Some(PipeEndpoint { pipe_id, end }),
     });
     increment_pipe_endpoint(pipe_id, end);
@@ -7611,9 +7671,7 @@ fn duplicate_fd(
     }
     if let Some(index) = replaced_index {
         let replaced = table.files.remove(index);
-        if let Some(endpoint) = replaced.pipe_endpoint {
-            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
-        }
+        release_open_file_resources(&replaced);
     }
 
     let source = table
@@ -7648,6 +7706,9 @@ fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u
     if let Some(endpoint) = source.pipe_endpoint {
         increment_pipe_endpoint(endpoint.pipe_id, endpoint.end);
     }
+    if let Some(file_id) = source.tmpfs_file_id {
+        let _ = tmpfs::increment_open_count(file_id);
+    }
     OpenFile {
         fd: destination_fd,
         fd_flags,
@@ -7659,6 +7720,7 @@ fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u
         path: source.path.clone(),
         offset: source.offset,
         content: source.content.clone(),
+        tmpfs_file_id: source.tmpfs_file_id,
         pipe_endpoint: source.pipe_endpoint,
     }
 }
@@ -7765,9 +7827,7 @@ fn close_cloexec_open_files_for_process(process_id: u64) -> usize {
 
         let open = table.files.remove(index);
         closed = closed.saturating_add(1);
-        if let Some(endpoint) = open.pipe_endpoint {
-            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
-        }
+        release_open_file_resources(&open);
     }
     closed
 }
@@ -7780,6 +7840,7 @@ fn alloc_open_file(
     content: Vec<u8>,
     status_flags: u64,
     fd_flags: u32,
+    tmpfs_file_id: Option<u64>,
 ) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
@@ -7800,6 +7861,7 @@ fn alloc_open_file(
         path,
         offset: 0,
         content,
+        tmpfs_file_id,
         pipe_endpoint: None,
     });
     Ok(fd as i64)
@@ -7826,6 +7888,7 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
+    refresh_open_file_content(open)?;
     if count == 0 {
         return Ok(0);
     }
@@ -7842,9 +7905,7 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
     open.content[open.offset..write_end].copy_from_slice(&bytes);
     open.offset = write_end;
 
-    if open.mount == VfsMountKind::Tmpfs {
-        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
-    }
+    flush_open_file_content(open)?;
 
     i64::try_from(bytes.len()).map_err(|_| ERANGE)
 }
@@ -7869,7 +7930,7 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
-    let _ = &open.path;
+    refresh_open_file_content(open)?;
 
     if count == 0 {
         return Ok(0);
@@ -7901,14 +7962,20 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
+    let mut snapshot = open.content.clone();
+    if open.mount == VfsMountKind::Tmpfs {
+        if let Some(file_id) = open.tmpfs_file_id {
+            snapshot = tmpfs::read_bytes_by_id(file_id).ok_or(ENOENT)?;
+        }
+    }
     let start = usize::try_from(offset).map_err(|_| ERANGE)?;
-    if start >= open.content.len() {
+    if start >= snapshot.len() {
         return Ok(0);
     }
 
-    let available = open.content.len().saturating_sub(start);
+    let available = snapshot.len().saturating_sub(start);
     let read_len = min(count, available);
-    let bytes = &open.content[start..start + read_len];
+    let bytes = &snapshot[start..start + read_len];
     uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
 
     i64::try_from(read_len).map_err(|_| ERANGE)
@@ -7931,6 +7998,7 @@ fn write_open_file_at_offset(fd: i32, source_ptr: usize, count: usize, offset: i
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
+    refresh_open_file_content(open)?;
 
     let start = usize::try_from(offset).map_err(|_| ERANGE)?;
     if count == 0 {
@@ -7943,9 +8011,7 @@ fn write_open_file_at_offset(fd: i32, source_ptr: usize, count: usize, offset: i
     }
     open.content[start..write_end].copy_from_slice(&bytes);
 
-    if open.mount == VfsMountKind::Tmpfs {
-        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
-    }
+    flush_open_file_content(open)?;
 
     i64::try_from(bytes.len()).map_err(|_| ERANGE)
 }
@@ -7959,9 +8025,7 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
         .position(|file| file.fd == fd && file.owner_process_id == owner_process_id)
     {
         let open = table.files.remove(position);
-        if let Some(endpoint) = open.pipe_endpoint {
-            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
-        }
+        release_open_file_resources(&open);
         return Ok(0);
     }
     Err(EBADF)
@@ -7981,7 +8045,23 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
         return Ok(0);
     }
 
-    let stat = build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?;
+    let stat = if open.mount == VfsMountKind::Tmpfs {
+        if let Some(file_id) = open.tmpfs_file_id {
+            let status = tmpfs::file_status_by_id(file_id).ok_or(ENOENT)?;
+            build_linux_stat_with_identity(
+                open.mount,
+                open.kind,
+                open.executable,
+                status.size,
+                status.file_id,
+                status.link_count as u64,
+            )?
+        } else {
+            build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?
+        }
+    } else {
+        build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?
+    };
     copyout_struct(stat_ptr, &stat)?;
     Ok(0)
 }
@@ -7997,6 +8077,7 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
     if open.kind != VfsNodeKind::Directory {
         return Err(ENOTDIR);
     }
+    refresh_open_file_content(open)?;
 
     let entries = directory_entry_names(&open.content)?;
     if open.offset >= entries.len() {
@@ -8043,6 +8124,7 @@ fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
+    refresh_open_file_content(open)?;
 
     let end = if open.kind == VfsNodeKind::Directory {
         directory_entry_count(&open.content)?
@@ -8074,9 +8156,7 @@ fn purge_open_files_for_process(process_id: u64) {
             continue;
         }
         let open = table.files.remove(index);
-        if let Some(endpoint) = open.pipe_endpoint {
-            decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
-        }
+        release_open_file_resources(&open);
     }
 }
 

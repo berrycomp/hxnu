@@ -18,8 +18,10 @@ const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
 const HXNU_SYS_OPEN: u64 = 0x484e_0007;
 const HXNU_SYS_READ: u64 = 0x484e_0008;
 const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
+const HXNU_SYS_SEEK: u64 = 0x484e_000a;
 const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
 const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
+const HXNU_SYS_PWRITE64: u64 = 0x484e_0029;
 const HXNU_SYS_RT_SIGACTION: u64 = 0x484e_0026;
 const HXNU_SYS_WAIT4: u64 = 0x484e_002c;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
@@ -37,8 +39,10 @@ const FD_CLOEXEC: u64 = 1;
 const F_OK: u64 = 0;
 const O_RDONLY: u64 = 0;
 const O_WRONLY: u64 = 1;
+const O_RDWR: u64 = 2;
 const O_CREAT: u64 = 0x40;
 const O_TRUNC: u64 = 0x200;
+const SEEK_SET: u64 = 0;
 const INIT_PATH: &[u8] = b"/initrd/init\0";
 const INIT_ARG0: &[u8] = b"/initrd/init\0";
 const INIT_ARG1_REEXEC: &[u8] = b"--reexec\0";
@@ -254,7 +258,7 @@ fn run_tmpfs_smoke() {
     let source_fd = syscall2(
         HXNU_SYS_OPEN,
         TMPFS_SMOKE_SOURCE_PATH.as_ptr() as u64,
-        O_WRONLY | O_CREAT | O_TRUNC,
+        O_RDWR | O_CREAT | O_TRUNC,
     );
     if source_fd < 0 {
         let mut line = StackLine::<160>::new();
@@ -266,7 +270,15 @@ fn run_tmpfs_smoke() {
         log_bytes(line.as_bytes());
         return;
     }
-    let _ = syscall1(HXNU_SYS_CLOSE, source_fd as u64);
+
+    let initial_payload = b"tmpfs-initial";
+    let initial_write = syscall4(
+        HXNU_SYS_PWRITE64,
+        source_fd as u64,
+        initial_payload.as_ptr() as u64,
+        initial_payload.len() as u64,
+        0,
+    );
 
     let rename_result = syscall2(
         HXNU_SYS_RENAME,
@@ -289,16 +301,45 @@ fn run_tmpfs_smoke() {
         syscall2(HXNU_SYS_ACCESS, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64, F_OK);
     let unlink_result = syscall1(HXNU_SYS_UNLINK, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64);
     let removed_access = syscall2(HXNU_SYS_ACCESS, TMPFS_SMOKE_DESTINATION_PATH.as_ptr() as u64, F_OK);
+    let persisted_payload = b"+persist";
+    let persisted_write = syscall4(
+        HXNU_SYS_PWRITE64,
+        source_fd as u64,
+        persisted_payload.as_ptr() as u64,
+        persisted_payload.len() as u64,
+        initial_payload.len() as u64,
+    );
+    let seek_result = syscall3(HXNU_SYS_SEEK, source_fd as u64, 0, SEEK_SET);
+    let mut readback = [0u8; 32];
+    let readback_result = syscall3(
+        HXNU_SYS_READ,
+        source_fd as u64,
+        readback.as_mut_ptr() as u64,
+        readback.len() as u64,
+    );
+    let _ = syscall1(HXNU_SYS_CLOSE, source_fd as u64);
 
-    let mut line = StackLine::<192>::new();
+    let expected_payload = b"tmpfs-initial+persist";
+    let payload_ok = initial_write == initial_payload.len() as i64
+        && persisted_write == persisted_payload.len() as i64
+        && seek_result == 0
+        && readback_result == expected_payload.len() as i64
+        && bytes_eq(&readback[..expected_payload.len()], expected_payload);
+
+    let mut line = StackLine::<320>::new();
     let _ = write!(
         &mut line,
-        "HXNU-INIT: tmpfs smoke rename={} source-access={} dest-access={} unlink={} removed-access={}\n",
+        "HXNU-INIT: tmpfs smoke rename={} source-access={} dest-access={} unlink={} removed-access={} pwrite0={} pwrite-unlinked={} seek={} read={} payload-ok={}\n",
         rename_result,
         source_access,
         destination_access,
         unlink_result,
         removed_access,
+        initial_write,
+        persisted_write,
+        seek_result,
+        readback_result,
+        yes_no(payload_ok),
     );
     log_bytes(line.as_bytes());
 }
@@ -408,6 +449,21 @@ fn snapshot_contains(haystack: &[u8], needle: &[u8]) -> bool {
         offset += 1;
     }
     false
+}
+
+fn bytes_eq(lhs: &[u8], rhs: &[u8]) -> bool {
+    if lhs.len() != rhs.len() {
+        return false;
+    }
+
+    let mut index = 0usize;
+    while index < lhs.len() {
+        if lhs[index] != rhs[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 const fn yes_no(value: bool) -> &'static str {
