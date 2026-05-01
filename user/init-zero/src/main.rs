@@ -20,6 +20,8 @@ const HXNU_SYS_READ: u64 = 0x484e_0008;
 const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
 const HXNU_SYS_SEEK: u64 = 0x484e_000a;
 const HXNU_SYS_ACCESS: u64 = 0x484e_0010;
+const HXNU_SYS_DUP: u64 = 0x484e_0012;
+const HXNU_SYS_DUP3: u64 = 0x484e_0013;
 const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
 const HXNU_SYS_PWRITE64: u64 = 0x484e_0029;
 const HXNU_SYS_RT_SIGACTION: u64 = 0x484e_0026;
@@ -34,13 +36,18 @@ const TASK_COMM_LEN: usize = 16;
 const RT_SIGSET_SIZE: u64 = 8;
 const SIGCHLD: u64 = 17;
 const WNOHANG: u64 = 1;
+const F_GETFD: u64 = 1;
 const F_SETFD: u64 = 2;
+const F_GETFL: u64 = 3;
+const F_SETFL: u64 = 4;
 const FD_CLOEXEC: u64 = 1;
 const F_OK: u64 = 0;
 const O_RDONLY: u64 = 0;
 const O_WRONLY: u64 = 1;
 const O_RDWR: u64 = 2;
 const O_CREAT: u64 = 0x40;
+const O_APPEND: u64 = 0x400;
+const O_CLOEXEC: u64 = 0x80000;
 const O_TRUNC: u64 = 0x200;
 const SEEK_SET: u64 = 0;
 const INIT_PATH: &[u8] = b"/initrd/init\0";
@@ -50,6 +57,7 @@ const REEXEC_MARKER_PATH: &[u8] = b"/run/init-zero.reexec\0";
 const CLOEXEC_SMOKE_PATH: &[u8] = b"/run/init-zero.cloexec\0";
 const TMPFS_SMOKE_SOURCE_PATH: &[u8] = b"/run/init-zero-smoke.a\0";
 const TMPFS_SMOKE_DESTINATION_PATH: &[u8] = b"/run/init-zero-smoke.b\0";
+const DUP_SMOKE_PATH: &[u8] = b"/run/init-zero-dup\0";
 const SIGNALS_PROC_PATH: &[u8] = b"/proc/signals\0";
 
 #[panic_handler]
@@ -103,6 +111,7 @@ pub extern "C" fn _start() -> ! {
 
     if reexec_stage == "post-exec" {
         run_tmpfs_smoke();
+        run_dup_smoke();
         run_signal_smoke();
     }
 
@@ -340,6 +349,90 @@ fn run_tmpfs_smoke() {
         seek_result,
         readback_result,
         yes_no(payload_ok),
+    );
+    log_bytes(line.as_bytes());
+}
+
+fn run_dup_smoke() {
+    let source_fd = syscall2(HXNU_SYS_OPEN, DUP_SMOKE_PATH.as_ptr() as u64, O_RDWR | O_CREAT | O_TRUNC);
+    if source_fd < 0 {
+        let mut line = StackLine::<160>::new();
+        let _ = write!(
+            &mut line,
+            "HXNU-INIT: dup smoke open failed errno={}\n",
+            source_fd,
+        );
+        log_bytes(line.as_bytes());
+        return;
+    }
+
+    let payload = b"dup-shared";
+    let seed_write = syscall4(
+        HXNU_SYS_PWRITE64,
+        source_fd as u64,
+        payload.as_ptr() as u64,
+        payload.len() as u64,
+        0,
+    );
+    let rewind_result = syscall3(HXNU_SYS_SEEK, source_fd as u64, 0, SEEK_SET);
+    let dup_fd = syscall1(HXNU_SYS_DUP, source_fd as u64);
+
+    let mut head = [0u8; 4];
+    let head_read = syscall3(HXNU_SYS_READ, source_fd as u64, head.as_mut_ptr() as u64, head.len() as u64);
+    let mut tail = [0u8; 6];
+    let tail_read = if dup_fd >= 0 {
+        syscall3(HXNU_SYS_READ, dup_fd as u64, tail.as_mut_ptr() as u64, tail.len() as u64)
+    } else {
+        dup_fd
+    };
+
+    let setfl_result = if dup_fd >= 0 {
+        syscall3(HXNU_SYS_FCNTL, dup_fd as u64, F_SETFL, O_APPEND)
+    } else {
+        dup_fd
+    };
+    let source_getfl = syscall3(HXNU_SYS_FCNTL, source_fd as u64, F_GETFL, 0);
+    let source_getfd = syscall3(HXNU_SYS_FCNTL, source_fd as u64, F_GETFD, 0);
+    let dup3_fd = syscall3(HXNU_SYS_DUP3, source_fd as u64, 42, O_CLOEXEC);
+    let dup3_getfd = if dup3_fd >= 0 {
+        syscall3(HXNU_SYS_FCNTL, dup3_fd as u64, F_GETFD, 0)
+    } else {
+        dup3_fd
+    };
+
+    if dup3_fd >= 0 {
+        let _ = syscall1(HXNU_SYS_CLOSE, dup3_fd as u64);
+    }
+    if dup_fd >= 0 {
+        let _ = syscall1(HXNU_SYS_CLOSE, dup_fd as u64);
+    }
+    let _ = syscall1(HXNU_SYS_CLOSE, source_fd as u64);
+
+    let shared_offset = seed_write == payload.len() as i64
+        && rewind_result == 0
+        && head_read == head.len() as i64
+        && tail_read == tail.len() as i64
+        && bytes_eq(&head, b"dup-")
+        && bytes_eq(&tail, b"shared");
+    let shared_status = setfl_result == 0 && source_getfl >= 0 && (source_getfl as u64 & O_APPEND != 0);
+    let cloexec_split =
+        source_getfd == 0 && dup3_getfd == FD_CLOEXEC as i64;
+
+    let mut line = StackLine::<256>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: dup smoke dup={} dup3={} read1={} read2={} getfl={} setfl={} srcfd={} dup3fd={} shared-offset={} shared-status={} cloexec-split={}\n",
+        dup_fd,
+        dup3_fd,
+        head_read,
+        tail_read,
+        source_getfl,
+        setfl_result,
+        source_getfd,
+        dup3_getfd,
+        yes_no(shared_offset),
+        yes_no(shared_status),
+        yes_no(cloexec_split),
     );
     log_bytes(line.as_bytes());
 }

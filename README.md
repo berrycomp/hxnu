@@ -89,10 +89,11 @@ HXNU: exec replace old-path=/initrd/init ...
 HXNU: init exec-commit pid=1 comm=init cloexec-closed=1 ...
 HXNU-INIT: abi=0x10000 pid=1 tid=1 comm=init stage=post-exec ...
 HXNU-INIT: tmpfs smoke rename=0 source-access=-2 dest-access=0 unlink=0 removed-access=-2 pwrite0=13 pwrite-unlinked=8 seek=0 read=21 payload-ok=yes
+HXNU-INIT: dup smoke dup=3 dup3=42 read1=4 read2=6 getfl=1026 setfl=0 srcfd=0 dup3fd=1 shared-offset=yes shared-status=yes cloexec-split=yes
 HXNU-INIT: signal smoke sigaction=0 fork=10000 pending-before=yes handler=yes wait4=10000 status=0 pending-after=no
 ```
 
-Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, survived a payload-driven self-`exec` that replaced the previous lower-half image in place, preserved an open tmpfs handle across rename/unlink long enough to service post-unlink `pwrite64` and readback, and then exercised synthetic `fork/wait4` with observable `SIGCHLD` pending/clear behavior through `/proc/signals`.
+Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, survived a payload-driven self-`exec` that replaced the previous lower-half image in place, preserved an open tmpfs handle across rename/unlink long enough to service post-unlink `pwrite64` and readback, verified that duplicated descriptors share one open-file description for offset and `F_SETFL` state while keeping `FD_CLOEXEC` descriptor-local, and then exercised synthetic `fork/wait4` with observable `SIGCHLD` pending/clear behavior through `/proc/signals`.
 
 ## PT_INTERP Smoke Acceptance
 

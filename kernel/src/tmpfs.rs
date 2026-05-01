@@ -274,15 +274,6 @@ pub fn write_file_by_id(file_id: u64, content: &[u8]) -> Result<(), TmpfsError> 
     Ok(())
 }
 
-pub fn increment_open_count(file_id: u64) -> Result<(), TmpfsError> {
-    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
-    let Some(file) = state.files.iter_mut().find(|file| file.id == file_id) else {
-        return Err(TmpfsError::NotFound);
-    };
-    file.open_count = file.open_count.saturating_add(1);
-    Ok(())
-}
-
 pub fn close_file_handle(file_id: u64) -> Result<(), TmpfsError> {
     let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
     let Some(index) = state.files.iter().position(|file| file.id == file_id) else {

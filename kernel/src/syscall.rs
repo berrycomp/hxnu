@@ -902,8 +902,14 @@ impl LinuxUtsName {
 struct OpenFile {
     fd: i32,
     fd_flags: u32,
-    status_flags: u64,
     owner_process_id: u64,
+    description_id: u64,
+}
+
+struct OpenFileDescription {
+    id: u64,
+    ref_count: usize,
+    status_flags: u64,
     mount: VfsMountKind,
     kind: VfsNodeKind,
     executable: bool,
@@ -916,14 +922,18 @@ struct OpenFile {
 
 struct FdTable {
     next_fd: i32,
+    next_description_id: u64,
     files: Vec<OpenFile>,
+    descriptions: Vec<OpenFileDescription>,
 }
 
 impl FdTable {
     fn new() -> Self {
         Self {
             next_fd: 3,
+            next_description_id: 1,
             files: Vec::new(),
+            descriptions: Vec::new(),
         }
     }
 }
@@ -6508,11 +6518,8 @@ fn ioctl_get_winsize(fd: i32, arg_ptr: usize) -> Result<i64, i64> {
 
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description(table, description_id)?;
     if open.kind != VfsNodeKind::Device || !is_tty_device_path(&open.path) {
         return Err(ENOTTY);
     }
@@ -6548,11 +6555,11 @@ fn sanitize_for_console(bytes: &[u8]) -> String {
     text
 }
 
-fn open_allows_read(open: &OpenFile) -> bool {
+fn open_allows_read(open: &OpenFileDescription) -> bool {
     matches!(open.status_flags & O_ACCMODE, O_RDONLY | O_RDWR)
 }
 
-fn open_allows_write(open: &OpenFile) -> bool {
+fn open_allows_write(open: &OpenFileDescription) -> bool {
     matches!(open.status_flags & O_ACCMODE, O_WRONLY | O_RDWR)
 }
 
@@ -6566,7 +6573,7 @@ fn map_tmpfs_error(error: tmpfs::TmpfsError) -> i64 {
     }
 }
 
-fn release_open_file_resources(open: &OpenFile) {
+fn release_open_file_resources(open: &OpenFileDescription) {
     if let Some(endpoint) = open.pipe_endpoint {
         decrement_pipe_endpoint(endpoint.pipe_id, endpoint.end);
     }
@@ -6575,7 +6582,7 @@ fn release_open_file_resources(open: &OpenFile) {
     }
 }
 
-fn refresh_open_file_content(open: &mut OpenFile) -> Result<(), i64> {
+fn refresh_open_file_content(open: &mut OpenFileDescription) -> Result<(), i64> {
     if open.mount != VfsMountKind::Tmpfs {
         return Ok(());
     }
@@ -6591,7 +6598,7 @@ fn refresh_open_file_content(open: &mut OpenFile) -> Result<(), i64> {
     Ok(())
 }
 
-fn flush_open_file_content(open: &OpenFile) -> Result<(), i64> {
+fn flush_open_file_content(open: &OpenFileDescription) -> Result<(), i64> {
     if open.mount != VfsMountKind::Tmpfs || open.kind != VfsNodeKind::File {
         return Ok(());
     }
@@ -6606,11 +6613,63 @@ fn flush_open_file_content(open: &OpenFile) -> Result<(), i64> {
 
 fn retarget_open_files_for_path(source_path: &str, destination_path: &str) {
     let table = fd_table_mut();
-    for file in &mut table.files {
-        if file.mount == VfsMountKind::Tmpfs && file.path == source_path {
-            file.path = String::from(destination_path);
+    for description in &mut table.descriptions {
+        if description.mount == VfsMountKind::Tmpfs && description.path == source_path {
+            description.path = String::from(destination_path);
         }
     }
+}
+
+fn open_description_id_for_process(table: &FdTable, owner_process_id: u64, fd: i32) -> Result<u64, i64> {
+    table
+        .files
+        .iter()
+        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+        .map(|file| file.description_id)
+        .ok_or(EBADF)
+}
+
+fn open_description(table: &FdTable, description_id: u64) -> Result<&OpenFileDescription, i64> {
+    table
+        .descriptions
+        .iter()
+        .find(|description| description.id == description_id)
+        .ok_or(EBADF)
+}
+
+fn open_description_mut(
+    table: &mut FdTable,
+    description_id: u64,
+) -> Result<&mut OpenFileDescription, i64> {
+    table
+        .descriptions
+        .iter_mut()
+        .find(|description| description.id == description_id)
+        .ok_or(EBADF)
+}
+
+fn increment_open_description_ref(table: &mut FdTable, description_id: u64) -> Result<(), i64> {
+    let description = open_description_mut(table, description_id)?;
+    description.ref_count = description.ref_count.saturating_add(1);
+    Ok(())
+}
+
+fn release_open_file_descriptor(table: &mut FdTable, open: OpenFile) {
+    let Some(index) = table
+        .descriptions
+        .iter()
+        .position(|description| description.id == open.description_id)
+    else {
+        return;
+    };
+
+    if table.descriptions[index].ref_count > 1 {
+        table.descriptions[index].ref_count -= 1;
+        return;
+    }
+
+    let description = table.descriptions.remove(index);
+    release_open_file_resources(&description);
 }
 
 fn parse_fd(value: u64) -> Result<i32, i64> {
@@ -7124,11 +7183,12 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         PipeEnd::Read => O_RDONLY,
         PipeEnd::Write => O_WRONLY,
     } | status_flags;
-    table.files.push(OpenFile {
-        fd,
-        fd_flags,
+    let description_id = table.next_description_id;
+    table.next_description_id = table.next_description_id.checked_add(1).ok_or(ERANGE)?;
+    table.descriptions.push(OpenFileDescription {
+        id: description_id,
+        ref_count: 1,
         status_flags: endpoint_flags,
-        owner_process_id,
         mount: VfsMountKind::Root,
         kind: VfsNodeKind::Device,
         executable: false,
@@ -7137,6 +7197,12 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         content: Vec::new(),
         tmpfs_file_id: None,
         pipe_endpoint: Some(PipeEndpoint { pipe_id, end }),
+    });
+    table.files.push(OpenFile {
+        fd,
+        fd_flags,
+        owner_process_id,
+        description_id,
     });
     increment_pipe_endpoint(pipe_id, end);
     Ok(fd)
@@ -7303,11 +7369,11 @@ fn evaluate_poll_revents(fd: i32, requested: i16) -> i16 {
 
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let Some(open) = table
-        .files
-        .iter()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
+    let Ok(description_id) = open_description_id_for_process(table, owner_process_id, fd)
     else {
+        return POLLNVAL;
+    };
+    let Ok(open) = open_description(table, description_id) else {
         return POLLNVAL;
     };
 
@@ -7644,13 +7710,7 @@ fn duplicate_fd(
 ) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    if !table
-        .files
-        .iter()
-        .any(|file| file.owner_process_id == owner_process_id && file.fd == source_fd)
-    {
-        return Err(EBADF);
-    }
+    let source_description_id = open_description_id_for_process(table, owner_process_id, source_fd)?;
 
     let destination_fd = match target {
         DuplicateTarget::LowestAvailable => {
@@ -7671,15 +7731,16 @@ fn duplicate_fd(
     }
     if let Some(index) = replaced_index {
         let replaced = table.files.remove(index);
-        release_open_file_resources(&replaced);
+        release_open_file_descriptor(table, replaced);
     }
 
-    let source = table
-        .files
-        .iter()
-        .find(|file| file.owner_process_id == owner_process_id && file.fd == source_fd)
-        .ok_or(EBADF)?;
-    let duplicate = duplicate_file_descriptor(source, destination_fd, fd_flags & FD_CLOEXEC);
+    increment_open_description_ref(table, source_description_id)?;
+    let duplicate = duplicate_file_descriptor(
+        owner_process_id,
+        source_description_id,
+        destination_fd,
+        fd_flags & FD_CLOEXEC,
+    );
     table.files.push(duplicate);
 
     i64::try_from(destination_fd).map_err(|_| ERANGE)
@@ -7702,26 +7763,17 @@ fn find_available_fd_for_process(table: &FdTable, owner_process_id: u64, minimum
     }
 }
 
-fn duplicate_file_descriptor(source: &OpenFile, destination_fd: i32, fd_flags: u32) -> OpenFile {
-    if let Some(endpoint) = source.pipe_endpoint {
-        increment_pipe_endpoint(endpoint.pipe_id, endpoint.end);
-    }
-    if let Some(file_id) = source.tmpfs_file_id {
-        let _ = tmpfs::increment_open_count(file_id);
-    }
+fn duplicate_file_descriptor(
+    owner_process_id: u64,
+    description_id: u64,
+    destination_fd: i32,
+    fd_flags: u32,
+) -> OpenFile {
     OpenFile {
         fd: destination_fd,
         fd_flags,
-        status_flags: source.status_flags,
-        owner_process_id: source.owner_process_id,
-        mount: source.mount,
-        kind: source.kind,
-        executable: source.executable,
-        path: source.path.clone(),
-        offset: source.offset,
-        content: source.content.clone(),
-        tmpfs_file_id: source.tmpfs_file_id,
-        pipe_endpoint: source.pipe_endpoint,
+        owner_process_id,
+        description_id,
     }
 }
 
@@ -7766,11 +7818,8 @@ fn get_status_flags(fd: i32) -> Result<i64, i64> {
 
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter()
-        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description(table, description_id)?;
 
     i64::try_from(open.status_flags).map_err(|_| ERANGE)
 }
@@ -7782,11 +7831,8 @@ fn set_status_flags(fd: i32, flags: u64) -> Result<i64, i64> {
 
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
     let preserved_mode = open.status_flags & O_ACCMODE;
     let preserved_directory = open.status_flags & O_DIRECTORY;
     open.status_flags = preserved_mode | preserved_directory | (flags & (O_APPEND | O_NONBLOCK));
@@ -7796,11 +7842,8 @@ fn set_status_flags(fd: i32, flags: u64) -> Result<i64, i64> {
 fn open_file_path_and_kind_for_process(fd: i32) -> Result<(String, VfsNodeKind), i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter()
-        .find(|file| file.owner_process_id == owner_process_id && file.fd == fd)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description(table, description_id)?;
     Ok((open.path.clone(), open.kind))
 }
 
@@ -7827,7 +7870,7 @@ fn close_cloexec_open_files_for_process(process_id: u64) -> usize {
 
         let open = table.files.remove(index);
         closed = closed.saturating_add(1);
-        release_open_file_resources(&open);
+        release_open_file_descriptor(table, open);
     }
     closed
 }
@@ -7848,13 +7891,12 @@ fn alloc_open_file(
         return Err(EMFILE);
     }
 
-    let fd = table.next_fd;
-    table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
-    table.files.push(OpenFile {
-        fd,
-        fd_flags,
+    let description_id = table.next_description_id;
+    table.next_description_id = table.next_description_id.checked_add(1).ok_or(ERANGE)?;
+    table.descriptions.push(OpenFileDescription {
+        id: description_id,
+        ref_count: 1,
         status_flags,
-        owner_process_id,
         mount,
         kind,
         executable,
@@ -7864,17 +7906,23 @@ fn alloc_open_file(
         tmpfs_file_id,
         pipe_endpoint: None,
     });
+
+    let fd = table.next_fd;
+    table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
+    table.files.push(OpenFile {
+        fd,
+        fd_flags,
+        owner_process_id,
+        description_id,
+    });
     Ok(fd as i64)
 }
 
 fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
 
     if let Some(endpoint) = open.pipe_endpoint {
         return match endpoint.end {
@@ -7913,11 +7961,8 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
 fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
     if let Some(endpoint) = open.pipe_endpoint {
         return match endpoint.end {
             PipeEnd::Read => read_pipe(endpoint.pipe_id, destination_ptr, count),
@@ -7948,11 +7993,8 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
 fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offset: i64) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description(table, description_id)?;
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
@@ -7984,11 +8026,8 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
 fn write_open_file_at_offset(fd: i32, source_ptr: usize, count: usize, offset: i64) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
@@ -8025,7 +8064,7 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
         .position(|file| file.fd == fd && file.owner_process_id == owner_process_id)
     {
         let open = table.files.remove(position);
-        release_open_file_resources(&open);
+        release_open_file_descriptor(table, open);
         return Ok(0);
     }
     Err(EBADF)
@@ -8034,11 +8073,8 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
 fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description(table, description_id)?;
     if let Some(endpoint) = open.pipe_endpoint {
         let stat = build_linux_stat(VfsMountKind::Procfs, VfsNodeKind::Device, false, 0, &pipe_path(endpoint.pipe_id, endpoint.end))?;
         copyout_struct(stat_ptr, &stat)?;
@@ -8069,11 +8105,8 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
 fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
     if open.kind != VfsNodeKind::Directory {
         return Err(ENOTDIR);
     }
@@ -8116,11 +8149,8 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
 fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
+    let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
+    let open = open_description_mut(table, description_id)?;
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
@@ -8156,7 +8186,7 @@ fn purge_open_files_for_process(process_id: u64) {
             continue;
         }
         let open = table.files.remove(index);
-        release_open_file_resources(&open);
+        release_open_file_descriptor(table, open);
     }
 }
 
