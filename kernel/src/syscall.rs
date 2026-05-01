@@ -55,6 +55,7 @@ pub const LINUX_SYS_VFORK: u64 = 58;
 pub const LINUX_SYS_EXECVE: u64 = 59;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_WAIT4: u64 = 61;
+pub const LINUX_SYS_KILL: u64 = 62;
 pub const LINUX_SYS_UNAME: u64 = 63;
 pub const LINUX_SYS_FCNTL: u64 = 72;
 pub const LINUX_SYS_GETCWD: u64 = 79;
@@ -83,6 +84,7 @@ pub const LINUX_SYS_GETDENTS64: u64 = 217;
 pub const LINUX_SYS_SET_TID_ADDRESS: u64 = 218;
 pub const LINUX_SYS_CLOCK_GETTIME: u64 = 228;
 pub const LINUX_SYS_EXIT_GROUP: u64 = 231;
+pub const LINUX_SYS_RT_SIGPENDING: u64 = 127;
 pub const LINUX_SYS_OPENAT: u64 = 257;
 pub const LINUX_SYS_NEWFSTATAT: u64 = 262;
 pub const LINUX_SYS_READLINKAT: u64 = 267;
@@ -163,6 +165,8 @@ pub const GHOST_SYS_CLONE: u64 = 62;
 pub const GHOST_SYS_FORK: u64 = 63;
 pub const GHOST_SYS_VFORK: u64 = 64;
 pub const GHOST_SYS_EXEC: u64 = 65;
+pub const GHOST_SYS_KILL: u64 = 66;
+pub const GHOST_SYS_RT_SIGPENDING: u64 = 67;
 
 pub const HXNU_SYS_LOG_WRITE: u64 = 0x484e_0001;
 pub const HXNU_SYS_THREAD_SELF: u64 = 0x484e_0002;
@@ -231,6 +235,8 @@ pub const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 pub const HXNU_SYS_CPUCAPS: u64 = 0x484e_0041;
 pub const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
 pub const HXNU_SYS_RENAME: u64 = 0x484e_0043;
+pub const HXNU_SYS_KILL: u64 = 0x484e_0044;
+pub const HXNU_SYS_RT_SIGPENDING: u64 = 0x484e_0045;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -1469,6 +1475,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_BRK => process_brk(args),
         LINUX_SYS_RT_SIGACTION => process_rt_sigaction(args),
         LINUX_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        LINUX_SYS_RT_SIGPENDING => process_rt_sigpending(args),
         LINUX_SYS_PREAD64 => process_pread64(args),
         LINUX_SYS_PWRITE64 => process_pwrite64(args),
         LINUX_SYS_READV => process_readv(args),
@@ -1503,6 +1510,7 @@ pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         LINUX_SYS_EXECVE => process_execve(args),
         LINUX_SYS_EXECVEAT => process_execveat(args),
         LINUX_SYS_WAIT4 => process_wait4(args),
+        LINUX_SYS_KILL => process_kill(args),
         LINUX_SYS_GETPPID => process_parent_id(),
         LINUX_SYS_GETTID => thread_id(),
         LINUX_SYS_SETPGID => process_setpgid(args),
@@ -1543,6 +1551,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_BRK => process_brk(args),
         GHOST_SYS_RT_SIGACTION => process_rt_sigaction(args),
         GHOST_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        GHOST_SYS_RT_SIGPENDING => process_rt_sigpending(args),
         GHOST_SYS_PREAD64 => process_pread64(args),
         GHOST_SYS_PWRITE64 => process_pwrite64(args),
         GHOST_SYS_READV => process_readv(args),
@@ -1572,6 +1581,7 @@ pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         GHOST_SYS_VFORK => process_vfork(args),
         GHOST_SYS_EXEC => process_exec(args),
         GHOST_SYS_WAIT4 => process_wait4(args),
+        GHOST_SYS_KILL => process_kill(args),
         GHOST_SYS_GETPPID => process_parent_id(),
         GHOST_SYS_GETTID => thread_id(),
         GHOST_SYS_SETPGID => process_setpgid(args),
@@ -1612,6 +1622,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_BRK => process_brk(args),
         HXNU_SYS_RT_SIGACTION => process_rt_sigaction(args),
         HXNU_SYS_RT_SIGPROCMASK => process_rt_sigprocmask(args),
+        HXNU_SYS_RT_SIGPENDING => process_rt_sigpending(args),
         HXNU_SYS_PREAD64 => process_pread64(args),
         HXNU_SYS_PWRITE64 => process_pwrite64(args),
         HXNU_SYS_READV => process_readv(args),
@@ -1644,6 +1655,7 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_EXEC => process_exec(args),
         HXNU_SYS_CPUCAPS => process_cpucaps(args),
         HXNU_SYS_WAIT4 => process_wait4(args),
+        HXNU_SYS_KILL => process_kill(args),
         HXNU_SYS_PROCESS_PARENT => process_parent_id(),
         HXNU_SYS_SETPGID => process_setpgid(args),
         HXNU_SYS_GETPGID => process_getpgid(args),
@@ -4514,6 +4526,23 @@ fn process_rt_sigprocmask(args: [u64; 6]) -> SyscallOutcome {
     SyscallOutcome::success(0)
 }
 
+fn process_rt_sigpending(args: [u64; 6]) -> SyscallOutcome {
+    let set_ptr = args[0] as usize;
+    let sigset_size = match usize::try_from(args[1]) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+    if set_ptr == 0 || sigset_size != RT_SIGSET_SIZE {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let visible_pending = current_process_pending_signals() & current_process_signal_mask();
+    if let Err(error) = copyout_struct(set_ptr, &visible_pending) {
+        return SyscallOutcome::errno(error);
+    }
+    SyscallOutcome::success(0)
+}
+
 fn process_rt_sigaction(args: [u64; 6]) -> SyscallOutcome {
     let signum = args[0];
     if signum == 0 || signum > MAX_SIGNAL_NUMBER {
@@ -4547,6 +4576,31 @@ fn process_rt_sigaction(args: [u64; 6]) -> SyscallOutcome {
         Err(error) => return SyscallOutcome::errno(error),
     };
     set_signal_action(signum as u8, action);
+    SyscallOutcome::success(0)
+}
+
+fn process_kill(args: [u64; 6]) -> SyscallOutcome {
+    let pid = args[0] as i64;
+    let signum = args[1];
+    if signum > MAX_SIGNAL_NUMBER {
+        return SyscallOutcome::errno(EINVAL);
+    }
+
+    let current_process_id = current_process_id_value();
+    let current_pid = match i64::try_from(current_process_id) {
+        Ok(value) => value,
+        Err(_) => return SyscallOutcome::errno(ERANGE),
+    };
+
+    let target_process_id = match pid {
+        0 | -1 => current_process_id,
+        value if value == current_pid => current_process_id,
+        _ => return SyscallOutcome::errno(ESRCH),
+    };
+
+    if signum != 0 {
+        queue_process_signal(target_process_id, signum as u8);
+    }
     SyscallOutcome::success(0)
 }
 

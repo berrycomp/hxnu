@@ -25,17 +25,23 @@ const HXNU_SYS_DUP3: u64 = 0x484e_0013;
 const HXNU_SYS_FCNTL: u64 = 0x484e_0014;
 const HXNU_SYS_PWRITE64: u64 = 0x484e_0029;
 const HXNU_SYS_RT_SIGACTION: u64 = 0x484e_0026;
+const HXNU_SYS_RT_SIGPROCMASK: u64 = 0x484e_0027;
+const HXNU_SYS_RT_SIGPENDING: u64 = 0x484e_0045;
 const HXNU_SYS_WAIT4: u64 = 0x484e_002c;
 const HXNU_SYS_PRCTL: u64 = 0x484e_0034;
 const HXNU_SYS_FORK: u64 = 0x484e_003e;
 const HXNU_SYS_EXEC: u64 = 0x484e_0040;
 const HXNU_SYS_UNLINK: u64 = 0x484e_0042;
 const HXNU_SYS_RENAME: u64 = 0x484e_0043;
+const HXNU_SYS_KILL: u64 = 0x484e_0044;
 const PR_GET_NAME: u64 = 16;
 const TASK_COMM_LEN: usize = 16;
 const RT_SIGSET_SIZE: u64 = 8;
 const SIGCHLD: u64 = 17;
+const SIGUSR1: u64 = 10;
 const WNOHANG: u64 = 1;
+const SIG_BLOCK: u64 = 0;
+const SIG_SETMASK: u64 = 2;
 const F_GETFD: u64 = 1;
 const F_SETFD: u64 = 2;
 const F_GETFL: u64 = 3;
@@ -112,6 +118,7 @@ pub extern "C" fn _start() -> ! {
     if reexec_stage == "post-exec" {
         run_tmpfs_smoke();
         run_dup_smoke();
+        run_signal_queue_smoke();
         run_signal_smoke();
     }
 
@@ -437,6 +444,72 @@ fn run_dup_smoke() {
     log_bytes(line.as_bytes());
 }
 
+fn run_signal_queue_smoke() {
+    let action = LinuxKernelSigAction {
+        handler: 0x53_49_47_51_55_45_55,
+        flags: 0,
+        restorer: 0,
+        mask: 0,
+    };
+    let sigaction_result = syscall4(
+        HXNU_SYS_RT_SIGACTION,
+        SIGUSR1,
+        (&action as *const LinuxKernelSigAction) as u64,
+        0,
+        RT_SIGSET_SIZE,
+    );
+    let signal_mask = signal_bit(SIGUSR1);
+    let mut previous_mask = 0u64;
+    let block_result = syscall4(
+        HXNU_SYS_RT_SIGPROCMASK,
+        SIG_BLOCK,
+        (&signal_mask as *const u64) as u64,
+        (&mut previous_mask as *mut u64) as u64,
+        RT_SIGSET_SIZE,
+    );
+    let process_id = syscall0(HXNU_SYS_PROCESS_SELF);
+    let kill_result = syscall2(HXNU_SYS_KILL, process_id as u64, SIGUSR1);
+    let mut pending_mask = 0u64;
+    let sigpending_result = syscall2(
+        HXNU_SYS_RT_SIGPENDING,
+        (&mut pending_mask as *mut u64) as u64,
+        RT_SIGSET_SIZE,
+    );
+    let restore_result = syscall4(
+        HXNU_SYS_RT_SIGPROCMASK,
+        SIG_SETMASK,
+        (&previous_mask as *const u64) as u64,
+        0,
+        RT_SIGSET_SIZE,
+    );
+    let mut visible_after_restore = 0u64;
+    let sigpending_after_result = syscall2(
+        HXNU_SYS_RT_SIGPENDING,
+        (&mut visible_after_restore as *mut u64) as u64,
+        RT_SIGSET_SIZE,
+    );
+
+    let visible_while_blocked =
+        sigpending_result == 0 && pending_mask & signal_mask != 0;
+    let visible_after_unblock =
+        sigpending_after_result == 0 && visible_after_restore & signal_mask != 0;
+
+    let mut line = StackLine::<256>::new();
+    let _ = write!(
+        &mut line,
+        "HXNU-INIT: signal queue smoke sigaction={} block={} kill={} sigpending={} restore={} sigpending-after={} visible-while-blocked={} visible-after-unblock={}\n",
+        sigaction_result,
+        block_result,
+        kill_result,
+        sigpending_result,
+        restore_result,
+        sigpending_after_result,
+        yes_no(visible_while_blocked),
+        yes_no(visible_after_unblock),
+    );
+    log_bytes(line.as_bytes());
+}
+
 fn run_signal_smoke() {
     let action = LinuxKernelSigAction {
         handler: 0x51_47_43_48_4c_44,
@@ -508,6 +581,13 @@ fn run_signal_smoke() {
         yes_no(after_pending),
     );
     log_bytes(line.as_bytes());
+}
+
+fn signal_bit(signum: u64) -> u64 {
+    if signum == 0 || signum > 64 {
+        return 0;
+    }
+    1u64 << (signum - 1)
 }
 
 fn read_proc_snapshot(path: &[u8], buffer: &mut [u8]) -> i64 {
