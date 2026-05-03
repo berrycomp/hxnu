@@ -67,6 +67,10 @@ pub fn timestamp() -> BootTimestamp {
     }
 }
 
+pub fn is_initialized() -> bool {
+    CLOCK_INITIALIZED.load(Ordering::Acquire)
+}
+
 pub fn uptime_nanoseconds() -> u64 {
     let timestamp = timestamp();
     timestamp
