@@ -920,6 +920,7 @@ struct OpenFileDescription {
     kind: VfsNodeKind,
     executable: bool,
     path: String,
+    inode_number: u64,
     offset: usize,
     content: Vec<u8>,
     tmpfs_file_id: Option<u64>,
@@ -5652,6 +5653,7 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
         status_flags,
         fd_flags,
         None,
+        node.inode_number,
     ) {
         Ok(fd) => SyscallOutcome::success(fd),
         Err(error) => SyscallOutcome::errno(error),
@@ -5681,6 +5683,7 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
                     status_flags,
                     fd_flags,
                     None,
+                    node.inode_number,
                 );
             }
             tmpfs::TmpfsNodeKind::File => {}
@@ -5694,6 +5697,10 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
     let opened = tmpfs::open_file(path, mode.create, mode.truncate).map_err(map_tmpfs_error)?;
     let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
     let status_flags = status_flags_from_open_mode(mode, VfsNodeKind::File);
+    let inode_number = vfs::lookup(path).map_or_else(
+        || hash_path_to_ino(VfsMountKind::Tmpfs, path),
+        |node| node.inode_number,
+    );
     alloc_open_file(
         opened.path,
         VfsMountKind::Tmpfs,
@@ -5703,6 +5710,7 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
         status_flags,
         fd_flags,
         Some(opened.file_id),
+        inode_number,
     )
 }
 
@@ -5817,7 +5825,7 @@ fn stat_path_at(dirfd: i64, path_ptr: usize, stat_ptr: u64, flags: u64) -> Sysca
         Err(error) => return SyscallOutcome::errno(error),
     };
 
-    let stat = match build_linux_stat(node.mount, node.kind, node.executable, node.size, &node.path) {
+    let stat = match build_linux_stat(node.mount, node.kind, node.executable, node.size, node.inode_number) {
         Ok(stat) => stat,
         Err(error) => return SyscallOutcome::errno(error),
     };
@@ -6380,16 +6388,9 @@ fn build_linux_stat(
     kind: VfsNodeKind,
     executable: bool,
     size: usize,
-    path: &str,
+    inode: u64,
 ) -> Result<LinuxStat, i64> {
-    build_linux_stat_with_identity(
-        mount,
-        kind,
-        executable,
-        size,
-        hash_path_to_ino(mount, path),
-        DEFAULT_LINK_COUNT,
-    )
+    build_linux_stat_with_identity(mount, kind, executable, size, inode, DEFAULT_LINK_COUNT)
 }
 
 fn build_linux_stat_with_identity(
@@ -7247,6 +7248,7 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         kind: VfsNodeKind::Device,
         executable: false,
         path: pipe_path(pipe_id, end),
+        inode_number: description_id,
         offset: 0,
         content: Vec::new(),
         tmpfs_file_id: None,
@@ -7938,6 +7940,7 @@ fn alloc_open_file(
     status_flags: u64,
     fd_flags: u32,
     tmpfs_file_id: Option<u64>,
+    inode_number: u64,
 ) -> Result<i64, i64> {
     let owner_process_id = current_process_id_value();
     let table = fd_table_mut();
@@ -7955,6 +7958,7 @@ fn alloc_open_file(
         kind,
         executable,
         path,
+        inode_number,
         offset: 0,
         content,
         tmpfs_file_id,
@@ -8130,7 +8134,8 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
     let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
     let open = open_description(table, description_id)?;
     if let Some(endpoint) = open.pipe_endpoint {
-        let stat = build_linux_stat(VfsMountKind::Procfs, VfsNodeKind::Device, false, 0, &pipe_path(endpoint.pipe_id, endpoint.end))?;
+        let pipe_path_str = pipe_path(endpoint.pipe_id, endpoint.end);
+        let stat = build_linux_stat(VfsMountKind::Procfs, VfsNodeKind::Device, false, 0, hash_path_to_ino(VfsMountKind::Procfs, &pipe_path_str))?;
         copyout_struct(stat_ptr, &stat)?;
         return Ok(0);
     }
@@ -8147,10 +8152,10 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
                 status.link_count as u64,
             )?
         } else {
-            build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?
+            build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), open.inode_number)?
         }
     } else {
-        build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), &open.path)?
+        build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), open.inode_number)?
     };
     copyout_struct(stat_ptr, &stat)?;
     Ok(0)
