@@ -40,9 +40,21 @@ impl GlobalVfs {
 
 static VFS: GlobalVfs = GlobalVfs::new();
 
-#[derive(Copy, Clone)]
+pub trait FileSystemOps {
+    fn lookup(&self, path: &str) -> Option<VfsNode>;
+    fn read(&self, node: &VfsNode) -> Option<String>;
+    fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]>;
+}
+
+struct VfsMount {
+    kind: VfsMountKind,
+    path: &'static str,
+    fs: &'static dyn FileSystemOps,
+}
+
 struct VfsState {
     initialized: bool,
+    mounts: Vec<VfsMount>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -259,13 +271,63 @@ pub fn initialize() -> Result<VfsSummary, VfsError> {
         return Err(VfsError::AlreadyInitialized);
     }
 
-    *slot = Some(VfsState { initialized: true });
+    let mut mounts = Vec::new();
+    mounts.push(VfsMount {
+        kind: VfsMountKind::Root,
+        path: ROOT_PATH,
+        fs: &ROOT_FS,
+    });
+    mounts.push(VfsMount {
+        kind: VfsMountKind::Devfs,
+        path: DEV_ROOT_PATH,
+        fs: &DEVFS_FS,
+    });
+    mounts.push(VfsMount {
+        kind: VfsMountKind::Procfs,
+        path: PROC_ROOT_PATH,
+        fs: &PROCFS_FS,
+    });
+    if initrd::is_initialized() {
+        mounts.push(VfsMount {
+            kind: VfsMountKind::Initrd,
+            path: INITRD_ROOT_PATH,
+            fs: &INITRD_FS,
+        });
+    }
+    if fat::is_initialized() {
+        mounts.push(VfsMount {
+            kind: VfsMountKind::Fat,
+            path: FAT_ROOT_PATH,
+            fs: &FAT_FS,
+        });
+    }
+    if tmpfs::is_initialized() {
+        mounts.push(VfsMount {
+            kind: VfsMountKind::Tmpfs,
+            path: TMP_ROOT_PATH,
+            fs: &TMPFS_FS,
+        });
+        mounts.push(VfsMount {
+            kind: VfsMountKind::Tmpfs,
+            path: RUN_ROOT_PATH,
+            fs: &TMPFS_FS,
+        });
+    }
+
+    *slot = Some(VfsState { initialized: true, mounts });
     Ok(summary())
 }
 
 pub fn summary() -> VfsSummary {
-    let initialized = unsafe { (&*VFS.get()).as_ref().is_some_and(|state| state.initialized) };
-    if !initialized {
+    let state = unsafe { (&*VFS.get()).as_ref() };
+    let Some(state) = state else {
+        return VfsSummary {
+            mount_count: 0,
+            root_entry_count: 0,
+            directory_count: 0,
+        };
+    };
+    if !state.initialized {
         return VfsSummary {
             mount_count: 0,
             root_entry_count: 0,
@@ -276,8 +338,8 @@ pub fn summary() -> VfsSummary {
     let initrd_online = initrd::is_initialized();
     let fat_online = fat::is_initialized();
     let tmpfs_online = tmpfs::is_initialized();
-    let mount_count = 2 + usize::from(initrd_online) + usize::from(fat_online);
-    let root_entry_count = mount_count + usize::from(tmpfs_online) * 2;
+    let mount_count = state.mounts.len();
+    let root_entry_count = mount_count.saturating_sub(1);
     let directory_count = 3
         + if initrd_online {
             initrd::summary().directory_count
@@ -308,22 +370,20 @@ pub fn lookup(path: &str) -> Option<VfsNode> {
     resolve_node(&normalized)
 }
 
+fn find_mount_ops(kind: VfsMountKind) -> Option<&'static dyn FileSystemOps> {
+    let state = unsafe { (&*VFS.get()).as_ref()? };
+    for mount in &state.mounts {
+        if mount.kind == kind {
+            return Some(mount.fs);
+        }
+    }
+    None
+}
+
 pub fn read(path: &str) -> Option<String> {
     let node = lookup(path)?;
-    match node.mount {
-        VfsMountKind::Root => {
-            if node.path == ROOT_PATH {
-                Some(render_root())
-            } else {
-                None
-            }
-        }
-        VfsMountKind::Devfs => devfs::read(&node.path),
-        VfsMountKind::Initrd => initrd::read(&node.path),
-        VfsMountKind::Procfs => procfs::read(&node.path),
-        VfsMountKind::Fat => fat::read(&node.path),
-        VfsMountKind::Tmpfs => tmpfs::read(&node.path),
-    }
+    let ops = find_mount_ops(node.mount)?;
+    ops.read(&node)
 }
 
 pub fn preview(path: &str, max_len: usize) -> Option<String> {
@@ -856,11 +916,10 @@ fn executable_format_from_kind(kind: exec::ImageKind) -> ExecutableFormat {
     }
 }
 
-fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
-    match mount {
-        VfsMountKind::Initrd => initrd::read_bytes(path),
-        _ => None,
-    }
+fn read_executable_bytes(_mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
+    let node = lookup(path)?;
+    let ops = find_mount_ops(node.mount)?;
+    ops.read_bytes(&node)
 }
 
 pub fn format_u16_hex(value: Option<u16>) -> String {
@@ -917,6 +976,104 @@ fn hex_u64(value: u64) -> String {
     }
     text
 }
+
+struct RootFs;
+impl FileSystemOps for RootFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        if path == ROOT_PATH {
+            Some(VfsNode {
+                path: String::from(ROOT_PATH),
+                mount: VfsMountKind::Root,
+                kind: VfsNodeKind::Directory,
+                size: render_root().len(),
+                executable: false,
+            })
+        } else {
+            None
+        }
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        if node.path == ROOT_PATH {
+            Some(render_root())
+        } else {
+            None
+        }
+    }
+    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
+        None
+    }
+}
+static ROOT_FS: RootFs = RootFs;
+
+struct DevfsFs;
+impl FileSystemOps for DevfsFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        resolve_devfs_node(path)
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        devfs::read(&node.path)
+    }
+    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
+        None
+    }
+}
+static DEVFS_FS: DevfsFs = DevfsFs;
+
+struct ProcfsFs;
+impl FileSystemOps for ProcfsFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        resolve_procfs_node(path)
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        procfs::read(&node.path)
+    }
+    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
+        None
+    }
+}
+static PROCFS_FS: ProcfsFs = ProcfsFs;
+
+struct InitrdFs;
+impl FileSystemOps for InitrdFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        resolve_initrd_node(path)
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        initrd::read(&node.path)
+    }
+    fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]> {
+        initrd::read_bytes(&node.path)
+    }
+}
+static INITRD_FS: InitrdFs = InitrdFs;
+
+struct FatFs;
+impl FileSystemOps for FatFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        resolve_fat_node(path)
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        fat::read(&node.path)
+    }
+    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
+        None
+    }
+}
+static FAT_FS: FatFs = FatFs;
+
+struct TmpfsFs;
+impl FileSystemOps for TmpfsFs {
+    fn lookup(&self, path: &str) -> Option<VfsNode> {
+        resolve_tmpfs_node(path)
+    }
+    fn read(&self, node: &VfsNode) -> Option<String> {
+        tmpfs::read(&node.path)
+    }
+    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
+        None
+    }
+}
+static TMPFS_FS: TmpfsFs = TmpfsFs;
 
 fn normalize_path(path: &str) -> Option<String> {
     if !path.starts_with('/') {
