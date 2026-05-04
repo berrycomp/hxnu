@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -55,6 +56,7 @@ struct VfsMount {
 struct VfsState {
     initialized: bool,
     mounts: Vec<VfsMount>,
+    dentry_cache: BTreeMap<String, VfsNode>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -87,6 +89,7 @@ pub enum VfsNodeKind {
     Device,
 }
 
+#[derive(Clone)]
 pub struct VfsNode {
     pub path: String,
     pub mount: VfsMountKind,
@@ -315,7 +318,11 @@ pub fn initialize() -> Result<VfsSummary, VfsError> {
         });
     }
 
-    *slot = Some(VfsState { initialized: true, mounts });
+    *slot = Some(VfsState {
+        initialized: true,
+        mounts,
+        dentry_cache: BTreeMap::new(),
+    });
     Ok(summary())
 }
 
@@ -366,9 +373,56 @@ pub fn summary() -> VfsSummary {
 }
 
 pub fn lookup(path: &str) -> Option<VfsNode> {
-    let _state = unsafe { (&*VFS.get()).as_ref()? };
     let normalized = normalize_path(path)?;
-    resolve_node(&normalized)
+    let state = unsafe { &mut *VFS.get() };
+    let state = state.as_mut()?;
+    if let Some(node) = state.dentry_cache.get(&normalized) {
+        return Some(node.clone());
+    }
+    let node = resolve_node(&normalized)?;
+    state.dentry_cache.insert(normalized, node.clone());
+    Some(node)
+}
+
+pub fn reverse_lookup(inode: u64) -> Option<String> {
+    let state = unsafe { &mut *VFS.get() };
+    let state = state.as_mut()?;
+    for (path, node) in &state.dentry_cache {
+        if node.inode_number == inode {
+            return Some(path.clone());
+        }
+    }
+    None
+}
+
+pub fn invalidate_dentry(path: &str) {
+    let normalized = match normalize_path(path) {
+        Some(p) => p,
+        None => return,
+    };
+    let state = unsafe { &mut *VFS.get() };
+    if let Some(state) = state.as_mut() {
+        state.dentry_cache.remove(&normalized);
+    }
+}
+
+pub fn retarget_dentry(source_path: &str, destination_path: &str) {
+    let source = match normalize_path(source_path) {
+        Some(p) => p,
+        None => return,
+    };
+    let destination = match normalize_path(destination_path) {
+        Some(p) => p,
+        None => return,
+    };
+    let state = unsafe { &mut *VFS.get() };
+    if let Some(state) = state.as_mut() {
+        if let Some(node) = state.dentry_cache.remove(&source) {
+            let mut new_node = node;
+            new_node.path = destination.clone();
+            state.dentry_cache.insert(destination, new_node);
+        }
+    }
 }
 
 fn find_mount_ops(kind: VfsMountKind) -> Option<&'static dyn FileSystemOps> {
@@ -782,7 +836,7 @@ fn mount_device_id(mount: VfsMountKind) -> u64 {
     }
 }
 
-fn hash_path_to_ino(mount: VfsMountKind, path: &str) -> u64 {
+pub fn hash_path_to_ino(mount: VfsMountKind, path: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in mount_device_id(mount).to_le_bytes().into_iter().chain(path.bytes()) {
         hash ^= u64::from(byte);
