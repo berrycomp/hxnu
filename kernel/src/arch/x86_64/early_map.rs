@@ -8,6 +8,7 @@ pub const FLAG_CACHE_DISABLE: u64 = 1 << 4;
 
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_WRITABLE: u64 = 1 << 1;
+pub const PAGE_USER: u64 = 1 << 2;
 const PAGE_HUGE: u64 = 1 << 7;
 const PAGE_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 const PAGE_SIZE: u64 = 4096;

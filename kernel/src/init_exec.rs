@@ -595,7 +595,7 @@ fn map_image_bytes(
 
     loop {
         let frame = mm::frame::allocate_frame().ok_or(InitExecLaunchError::FrameAllocationFailed)?;
-        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), 0)
+        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), arch::x86_64::PAGE_USER)
             .map_err(InitExecLaunchError::Map)?;
         tracked_pages.push(TrackedPage {
             virtual_address: page_address,
@@ -644,7 +644,7 @@ fn map_zero_pages(
     let page_end = align_down_to_page(end);
     while page_address < page_end {
         let frame = mm::frame::allocate_frame().ok_or(InitExecLaunchError::FrameAllocationFailed)?;
-        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), 0)
+        arch::x86_64::map_virtual_page(hhdm_offset, page_address, frame.start_address(), arch::x86_64::PAGE_USER)
             .map_err(InitExecLaunchError::Map)?;
         tracked_pages.push(TrackedPage {
             virtual_address: page_address,
@@ -705,7 +705,7 @@ fn restore_launch(launch: &ActiveLaunch, hhdm_offset: u64) -> Result<(), InitExe
             hhdm_offset,
             page.virtual_address,
             page.physical_address,
-            0,
+            arch::x86_64::PAGE_USER,
         )
         .map_err(InitExecLaunchError::Map)?;
     }
