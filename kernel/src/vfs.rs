@@ -93,6 +93,7 @@ pub struct VfsNode {
     pub kind: VfsNodeKind,
     pub size: usize,
     pub executable: bool,
+    pub inode_number: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -770,6 +771,26 @@ fn program_header_virtual_address(
     None
 }
 
+fn mount_device_id(mount: VfsMountKind) -> u64 {
+    match mount {
+        VfsMountKind::Root => 1,
+        VfsMountKind::Devfs => 2,
+        VfsMountKind::Initrd => 3,
+        VfsMountKind::Procfs => 4,
+        VfsMountKind::Fat => 5,
+        VfsMountKind::Tmpfs => 6,
+    }
+}
+
+fn hash_path_to_ino(mount: VfsMountKind, path: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in mount_device_id(mount).to_le_bytes().into_iter().chain(path.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
 fn resolve_node(path: &str) -> Option<VfsNode> {
     match path {
         ROOT_PATH => Some(VfsNode {
@@ -778,6 +799,7 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             kind: VfsNodeKind::Directory,
             size: render_root().len(),
             executable: false,
+            inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
         }),
         _ if path == TMP_ROOT_PATH
             || path.starts_with("/tmp/")
@@ -808,6 +830,7 @@ fn resolve_devfs_node(path: &str) -> Option<VfsNode> {
         kind,
         size,
         executable: false,
+        inode_number: hash_path_to_ino(VfsMountKind::Devfs, path),
     })
 }
 
@@ -825,6 +848,7 @@ fn resolve_procfs_node(path: &str) -> Option<VfsNode> {
         kind,
         size,
         executable: false,
+        inode_number: hash_path_to_ino(VfsMountKind::Procfs, path),
     })
 }
 
@@ -841,6 +865,7 @@ fn resolve_initrd_node(path: &str) -> Option<VfsNode> {
         kind,
         size: info.size,
         executable: info.executable,
+        inode_number: hash_path_to_ino(VfsMountKind::Initrd, path),
     })
 }
 
@@ -857,6 +882,7 @@ fn resolve_fat_node(path: &str) -> Option<VfsNode> {
         kind,
         size: info.size,
         executable: false,
+        inode_number: hash_path_to_ino(VfsMountKind::Fat, path),
     })
 }
 
@@ -873,6 +899,7 @@ fn resolve_tmpfs_node(path: &str) -> Option<VfsNode> {
         kind,
         size: info.size,
         executable: false,
+        inode_number: hash_path_to_ino(VfsMountKind::Tmpfs, path),
     })
 }
 
@@ -987,6 +1014,7 @@ impl FileSystemOps for RootFs {
                 kind: VfsNodeKind::Directory,
                 size: render_root().len(),
                 executable: false,
+                inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
             })
         } else {
             None

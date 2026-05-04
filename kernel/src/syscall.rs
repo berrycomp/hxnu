@@ -8178,7 +8178,7 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
         let name = entries[index];
         let child_path = child_path_for_entry(&open.path, name);
         let (ino, d_type) = match vfs::lookup(&child_path) {
-            Some(node) => (hash_path_to_ino(node.mount, &node.path), dirent_type_from_node(node.kind)),
+            Some(node) => (node.inode_number, dirent_type_from_node(node.kind)),
             None => (hash_path_to_ino(open.mount, &child_path), DT_UNKNOWN),
         };
         let next_offset = i64::try_from(index.saturating_add(1)).map_err(|_| ERANGE)?;
