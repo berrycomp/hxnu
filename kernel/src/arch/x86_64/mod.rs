@@ -36,7 +36,7 @@ pub struct SyscallSelfTest {
 pub use ap_boot::bringup_all_aps;
 pub use apic::{PeriodicTimer, TimerBringUp, TimerError};
 pub use context::TaskContext;
-pub use cpu::CpuInfo;
+pub use cpu::{CpuInfo, read_msr, write_msr};
 pub use early_map::{MapError, PAGE_USER};
 pub use gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 

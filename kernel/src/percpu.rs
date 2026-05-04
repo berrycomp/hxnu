@@ -155,6 +155,9 @@ pub fn initialize() -> Result<PerCpuSummary, PerCpuError> {
         current_apic_id,
         entries,
     };
+    let bsp_virtual_base = state.entries[current_cpu_index].virtual_base;
+    arch::x86_64::write_msr(0xC000_0101, bsp_virtual_base);
+    arch::x86_64::write_msr(0xC000_0102, bsp_virtual_base);
     let summary = state.summary();
     *slot = Some(state);
     Ok(summary)

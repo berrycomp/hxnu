@@ -40,6 +40,7 @@ global_asm!(
     .global hxnu_x86_64_syscall_entry
     .type hxnu_x86_64_syscall_entry,@function
 hxnu_x86_64_syscall_entry:
+    swapgs
     push r15
     push r14
     push r13
@@ -76,6 +77,7 @@ hxnu_x86_64_syscall_entry:
     pop r13
     pop r14
     pop r15
+    swapgs
     iretq
 "#
 );
