@@ -739,11 +739,18 @@ unsafe fn jump_to_loaded_image(entry_point: u64, stack_pointer: u64) -> ! {
     unsafe {
         asm!(
             "mov rsp, {stack}",
+            "push {user_data_selector}",
+            "push {stack}",
+            "push {rflags}",
+            "push {user_code_selector}",
+            "push {entry}",
             "xor rbp, rbp",
-            "sti",
-            "jmp {entry}",
+            "iretq",
             stack = in(reg) stack_pointer,
             entry = in(reg) entry_point,
+            user_code_selector = in(reg) arch::x86_64::USER_CODE_SELECTOR as u64,
+            user_data_selector = in(reg) arch::x86_64::USER_DATA_SELECTOR as u64,
+            rflags = in(reg) 0x202u64,
             options(noreturn),
         );
     }
