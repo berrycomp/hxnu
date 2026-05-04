@@ -166,6 +166,25 @@ fn next_table(table: *mut u64, index: usize, hhdm_offset: u64) -> Result<NextTab
         return Ok(NextTable::HugePage);
     }
 
+    // Clear NX and ensure U/S in intermediate table entries so child mappings
+    // are user-accessible and executable.
+    let mut new_entry = entry;
+    let mut changed = false;
+    if entry & (1u64 << 63) != 0 {
+        new_entry &= !(1u64 << 63);
+        changed = true;
+    }
+    if entry & PAGE_USER == 0 {
+        new_entry |= PAGE_USER;
+        changed = true;
+    }
+    if changed {
+        unsafe {
+            write_volatile(entry_ptr, new_entry);
+        }
+        flush_tlb();
+    }
+
     Ok(NextTable::Table(
         hhdm_offset
             .checked_add(entry & PAGE_ADDRESS_MASK)
@@ -205,6 +224,13 @@ fn read_cr3() -> u64 {
         asm!("mov {}, cr3", out(reg) value, options(nomem, nostack, preserves_flags));
     }
     value
+}
+
+fn flush_tlb() {
+    let cr3 = read_cr3();
+    unsafe {
+        asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack, preserves_flags));
+    }
 }
 
 fn invalidate_page(address: u64) {
