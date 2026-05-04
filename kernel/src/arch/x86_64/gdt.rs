@@ -1,19 +1,93 @@
 use core::arch::asm;
+use core::cell::UnsafeCell;
 use core::mem::size_of;
+use core::ptr;
 
 const KERNEL_CODE_SELECTOR: u16 = 0x28;
 const KERNEL_DATA_SELECTOR: u16 = 0x30;
 
-const GDT_ENTRIES: [u64; 7] = [
-    0x0000_0000_0000_0000,
-    0x0000_0000_0000_0000,
-    0x0000_0000_0000_0000,
-    0x0000_0000_0000_0000,
-    0x0000_0000_0000_0000,
-    // Pre-set the accessed bits so segment loads do not try to mutate read-only mappings.
-    0x00af_9b00_0000_ffff,
-    0x00cf_9300_0000_ffff,
-];
+pub const USER_CODE_SELECTOR: u16 = 0x3b;
+pub const USER_DATA_SELECTOR: u16 = 0x43;
+const TSS_SELECTOR: u16 = 0x48;
+
+const GDT_ENTRY_COUNT: usize = 11;
+
+struct GlobalGdt(UnsafeCell<[u64; GDT_ENTRY_COUNT]>);
+
+unsafe impl Sync for GlobalGdt {}
+
+impl GlobalGdt {
+    const fn new() -> Self {
+        Self(UnsafeCell::new([
+            0x0000_0000_0000_0000, // 0x00: null
+            0x0000_0000_0000_0000, // 0x08: null
+            0x0000_0000_0000_0000, // 0x10: null
+            0x0000_0000_0000_0000, // 0x18: null
+            0x0000_0000_0000_0000, // 0x20: null
+            // Pre-set the accessed bits so segment loads do not try to mutate read-only mappings.
+            0x00af_9b00_0000_ffff, // 0x28: 64-bit code, DPL=0
+            0x00cf_9300_0000_ffff, // 0x30: data, DPL=0
+            0x00af_fb00_0000_ffff, // 0x38: 64-bit code, DPL=3
+            0x00cf_f300_0000_ffff, // 0x40: data, DPL=3
+            0x0000_0000_0000_0000, // 0x48: TSS low (patched at runtime)
+            0x0000_0000_0000_0000, // 0x50: TSS high (patched at runtime)
+        ]))
+    }
+
+    fn get(&self) -> *mut [u64; GDT_ENTRY_COUNT] {
+        self.0.get()
+    }
+}
+
+static GDT: GlobalGdt = GlobalGdt::new();
+
+const INTERRUPT_STACK_PAGES: usize = 2;
+
+#[repr(C, align(4096))]
+struct InterruptStack {
+    _bytes: [u8; INTERRUPT_STACK_PAGES * 4096],
+}
+
+static mut INTERRUPT_STACK: InterruptStack = InterruptStack {
+    _bytes: [0; INTERRUPT_STACK_PAGES * 4096],
+};
+
+#[repr(C, packed)]
+struct TaskStateSegment {
+    reserved0: u32,
+    rsp0: u64,
+    rsp1: u64,
+    rsp2: u64,
+    reserved1: u64,
+    ist1: u64,
+    ist2: u64,
+    ist3: u64,
+    ist4: u64,
+    ist5: u64,
+    ist6: u64,
+    ist7: u64,
+    reserved2: u64,
+    reserved3: u16,
+    io_map_base: u16,
+}
+
+static mut TSS: TaskStateSegment = TaskStateSegment {
+    reserved0: 0,
+    rsp0: 0,
+    rsp1: 0,
+    rsp2: 0,
+    reserved1: 0,
+    ist1: 0,
+    ist2: 0,
+    ist3: 0,
+    ist4: 0,
+    ist5: 0,
+    ist6: 0,
+    ist7: 0,
+    reserved2: 0,
+    reserved3: 0,
+    io_map_base: 0,
+};
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -44,8 +118,8 @@ pub fn read_segment_selectors() -> SegmentSelectors {
 
 pub fn load_table_only() {
     let gdtr = DescriptorTablePointer {
-        limit: (size_of::<[u64; 7]>() - 1) as u16,
-        base: (&GDT_ENTRIES as *const [u64; 7]) as u64,
+        limit: (size_of::<[u64; GDT_ENTRY_COUNT]>() - 1) as u16,
+        base: GDT.get() as u64,
     };
 
     unsafe {
@@ -151,6 +225,37 @@ pub fn initialize() {
     load_table_only();
     reload_code_segment();
     reload_data_segments();
+}
+
+pub fn load_tss() {
+    unsafe {
+        let stack_base = ptr::addr_of!(INTERRUPT_STACK) as u64;
+        let stack_top = stack_base + size_of::<InterruptStack>() as u64;
+        TSS.rsp0 = stack_top;
+
+        let tss_base = ptr::addr_of!(TSS) as u64;
+        let limit = size_of::<TaskStateSegment>() - 1;
+
+        let lower = (limit as u64 & 0xffff)
+            | ((tss_base & 0xffff) << 16)
+            | (((tss_base >> 16) & 0xff) << 32)
+            | (0x89u64 << 40)
+            | (((tss_base >> 24) & 0xff) << 56);
+
+        let upper = tss_base >> 32;
+
+        let gdt = GDT.get();
+        (*gdt)[9] = lower;
+        (*gdt)[10] = upper;
+
+        load_table_only();
+
+        asm!(
+            "ltr {0:x}",
+            in(reg) TSS_SELECTOR,
+            options(nostack, preserves_flags),
+        );
+    }
 }
 
 fn read_cs() -> u16 {

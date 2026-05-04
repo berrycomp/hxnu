@@ -225,22 +225,27 @@ impl GlobalIdt {
 static IDT: GlobalIdt = GlobalIdt::new();
 
 pub fn initialize() {
-    let idt = unsafe { &mut *IDT.get() };
+    load_idt();
+}
+
+pub fn load_idt() {
+    let idt = unsafe { &*IDT.get() };
     let code_selector = read_code_segment();
-    idt.entries[3].set_handler_addr(breakpoint_handler as *const () as usize, code_selector);
-    idt.entries[6].set_handler_addr(invalid_opcode_handler as *const () as usize, code_selector);
-    idt.entries[8].set_handler_addr(double_fault_handler as *const () as usize, code_selector);
-    idt.entries[13].set_handler_addr(
+    let idt_mut = unsafe { &mut *IDT.get() };
+    idt_mut.entries[3].set_handler_addr(breakpoint_handler as *const () as usize, code_selector);
+    idt_mut.entries[6].set_handler_addr(invalid_opcode_handler as *const () as usize, code_selector);
+    idt_mut.entries[8].set_handler_addr(double_fault_handler as *const () as usize, code_selector);
+    idt_mut.entries[13].set_handler_addr(
         general_protection_fault_handler as *const () as usize,
         code_selector,
     );
-    idt.entries[14].set_handler_addr(page_fault_handler as *const () as usize, code_selector);
-    idt.entries[apic::TIMER_VECTOR].set_handler_addr(timer_handler as *const () as usize, code_selector);
-    idt.entries[apic::SPURIOUS_VECTOR].set_handler_addr(
+    idt_mut.entries[14].set_handler_addr(page_fault_handler as *const () as usize, code_selector);
+    idt_mut.entries[apic::TIMER_VECTOR].set_handler_addr(timer_handler as *const () as usize, code_selector);
+    idt_mut.entries[apic::SPURIOUS_VECTOR].set_handler_addr(
         spurious_interrupt_handler as *const () as usize,
         code_selector,
     );
-    idt.entries[SYSCALL_VECTOR].set_handler_addr_with_attributes(
+    idt_mut.entries[SYSCALL_VECTOR].set_handler_addr_with_attributes(
         hxnu_x86_64_syscall_entry as *const () as usize,
         code_selector,
         USER_INTERRUPT_GATE,

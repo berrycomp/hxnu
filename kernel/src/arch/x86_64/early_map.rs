@@ -12,7 +12,7 @@ const PAGE_HUGE: u64 = 1 << 7;
 const PAGE_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 const PAGE_SIZE: u64 = 4096;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum MapError {
     AddressOverflow,
     PageTableAllocationFailed,

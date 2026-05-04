@@ -1,3 +1,4 @@
+mod ap_boot;
 mod apic;
 mod context;
 mod cpuid;
@@ -32,14 +33,21 @@ pub struct SyscallSelfTest {
     pub hxnu_abi_version_result: i64,
 }
 
+pub use ap_boot::bringup_all_aps;
 pub use apic::{PeriodicTimer, TimerBringUp, TimerError};
 pub use context::TaskContext;
 pub use cpu::CpuInfo;
 pub use early_map::MapError;
+pub use gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 
 pub fn initialize() {
     gdt::initialize();
+    gdt::load_tss();
     interrupts::initialize();
+}
+
+pub fn load_idt() {
+    interrupts::load_idt();
 }
 
 pub fn segment_selectors() -> gdt::SegmentSelectors {

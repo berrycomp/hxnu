@@ -208,6 +208,11 @@ pub fn render_status() -> String {
     text
 }
 
+pub fn entry_virtual_base(index: usize) -> Option<u64> {
+    let state = state_ref()?;
+    state.entries.get(index).map(|e| e.virtual_base)
+}
+
 pub fn header_size() -> usize {
     size_of::<PerCpuAreaHeader>()
 }

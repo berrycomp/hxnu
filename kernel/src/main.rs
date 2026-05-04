@@ -18,6 +18,7 @@ mod init_exec;
 #[macro_use]
 mod log;
 mod limine;
+mod lock;
 mod mm;
 mod panic;
 mod percpu;
@@ -550,6 +551,16 @@ pub extern "C" fn _start() -> ! {
                             ),
                         }
                     }
+
+                    let ap_summary = arch::x86_64::bringup_all_aps(hhdm_offset);
+                    kprintln_style!(
+                        crate::tty::ConsoleStyle::Success,
+                        "HXNU: ap bringup attempted={} online={} failed={}",
+                        ap_summary.attempted,
+                        ap_summary.online,
+                        ap_summary.failed,
+                    );
+
                     if let Some(ref fadt) = discovery.fadt {
                         power::configure(hhdm_offset, fadt);
                         kprintln!(
