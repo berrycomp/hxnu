@@ -276,12 +276,20 @@ impl FramebufferConsole {
     fn scroll_up(&mut self) {
         let destination_y = self.log_origin_y;
         let end_y = self.log_origin_y + self.log_height - CHAR_HEIGHT;
-        let end_x = self.log_origin_x + self.log_width;
+        let bytes_per_line = self.log_width * self.bytes_per_pixel as u64;
 
         for y in destination_y..end_y {
-            for x in self.log_origin_x..end_x {
-                let color = self.read_pixel(x, y + CHAR_HEIGHT);
-                self.write_pixel(x, y, color);
+            let src_offset = ((y + CHAR_HEIGHT) * self.framebuffer.pitch
+                + self.log_origin_x * self.bytes_per_pixel as u64) as usize;
+            let dst_offset =
+                (y * self.framebuffer.pitch + self.log_origin_x * self.bytes_per_pixel as u64)
+                    as usize;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.framebuffer.address.add(src_offset),
+                    self.framebuffer.address.add(dst_offset),
+                    bytes_per_line as usize,
+                );
             }
         }
 
@@ -379,10 +387,27 @@ impl FramebufferConsole {
     fn fill_rect(&mut self, x: u64, y: u64, width: u64, height: u64, color: u32) {
         let max_x = x.saturating_add(width).min(self.framebuffer.width);
         let max_y = y.saturating_add(height).min(self.framebuffer.height);
+        let fill_width = max_x - x;
+        let fill_height = max_y - y;
+        if fill_width == 0 || fill_height == 0 {
+            return;
+        }
 
-        for current_y in y..max_y {
-            for current_x in x..max_x {
-                self.write_pixel(current_x, current_y, color);
+        if self.bytes_per_pixel == 4 {
+            for current_y in y..max_y {
+                let offset = (current_y * self.framebuffer.pitch + x * 4) as usize;
+                unsafe {
+                    let ptr = self.framebuffer.address.add(offset) as *mut u32;
+                    for i in 0..fill_width {
+                        write_volatile(ptr.add(i as usize), color);
+                    }
+                }
+            }
+        } else {
+            for current_y in y..max_y {
+                for current_x in x..max_x {
+                    self.write_pixel(current_x, current_y, color);
+                }
             }
         }
     }
