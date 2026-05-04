@@ -5,16 +5,7 @@ use crate::limine;
 
 const LIMINE_FRAMEBUFFER_RGB: u8 = 1;
 
-const HEADER_HEIGHT: u64 = 72;
-const HEADER_ACCENT_Y: u64 = 72;
-const HEADER_ACCENT_HEIGHT: u64 = 4;
-const BANNER_X: u64 = 32;
-const BANNER_Y: u64 = 112;
-const BANNER_WIDTH: u64 = 256;
-const BANNER_HEIGHT: u64 = 144;
-const LOG_ORIGIN_X: u64 = 32;
-const LOG_ORIGIN_Y: u64 = 288;
-const LOG_BOTTOM_MARGIN: u64 = 32;
+
 
 const FONT_SCALE: u64 = 2;
 const GLYPH_WIDTH: u64 = 5;
@@ -202,13 +193,10 @@ impl FramebufferConsole {
             error: 0,
             fatal: 0,
             muted: 0,
-            log_origin_x: LOG_ORIGIN_X,
-            log_origin_y: LOG_ORIGIN_Y,
-            log_width: framebuffer.width.saturating_sub(LOG_ORIGIN_X * 2),
-            log_height: framebuffer
-                .height
-                .saturating_sub(LOG_ORIGIN_Y)
-                .saturating_sub(LOG_BOTTOM_MARGIN),
+            log_origin_x: 0,
+            log_origin_y: 0,
+            log_width: framebuffer.width,
+            log_height: framebuffer.height,
             columns: 0,
             rows: 0,
             cursor_column: 0,
@@ -240,25 +228,6 @@ impl FramebufferConsole {
 
     fn paint_boot_surface(&mut self) {
         self.clear(self.background);
-        self.fill_rect(0, 0, self.framebuffer.width, HEADER_HEIGHT, self.header);
-        self.fill_rect(0, HEADER_ACCENT_Y, self.framebuffer.width, HEADER_ACCENT_HEIGHT, self.accent);
-        self.fill_rect(BANNER_X, BANNER_Y, BANNER_WIDTH, BANNER_HEIGHT, self.header);
-        self.fill_rect(BANNER_X + 16, BANNER_Y + 16, 32, 96, self.accent);
-        self.fill_rect(BANNER_X + 64, BANNER_Y + 16, 32, 96, self.accent_soft);
-        self.fill_rect(BANNER_X + 112, BANNER_Y + 16, 32, 96, self.accent);
-        self.fill_rect(BANNER_X + 160, BANNER_Y + 16, 32, 96, self.accent_soft);
-        self.fill_rect(BANNER_X + 208, BANNER_Y + 16, 32, 96, self.accent);
-        self.draw_text(BANNER_X, 20, "HXNU 2605", self.text, 3);
-        self.draw_text(320, 32, "FB READY", self.text, 2);
-
-        let mut mode_line = [0u8; 32];
-        let mode_len = format_mode_line(
-            &mut mode_line,
-            self.framebuffer.width,
-            self.framebuffer.height,
-            self.framebuffer.bpp,
-        );
-        self.draw_text_bytes(320, 72, &mode_line[..mode_len], self.accent, 2);
         self.clear_log_region();
     }
 
@@ -418,18 +387,6 @@ impl FramebufferConsole {
         }
     }
 
-    fn draw_text(&mut self, x: u64, y: u64, text: &str, color: u32, scale: u64) {
-        self.draw_text_bytes(x, y, text.as_bytes(), color, scale);
-    }
-
-    fn draw_text_bytes(&mut self, x: u64, y: u64, text: &[u8], color: u32, scale: u64) {
-        let mut cursor_x = x;
-        for byte in text {
-            self.draw_glyph(cursor_x, y, normalize_glyph_byte(*byte), color, scale);
-            cursor_x = cursor_x.saturating_add(GLYPH_ADVANCE_X * scale);
-        }
-    }
-
     fn draw_glyph(&mut self, x: u64, y: u64, byte: u8, color: u32, scale: u64) {
         let glyph = glyph(byte);
         for (row_index, row_bits) in glyph.iter().enumerate() {
@@ -513,44 +470,6 @@ fn pack_channel(value: u8, size: u8, shift: u8) -> u32 {
     let max = (1u32 << size) - 1;
     let scaled = ((value as u32) * max + 127) / 255;
     scaled << shift
-}
-
-fn format_mode_line(buffer: &mut [u8; 32], width: u64, height: u64, bpp: u16) -> usize {
-    let mut length = 0;
-    length += append_decimal(buffer, length, width);
-    length += append_byte(buffer, length, b'X');
-    length += append_decimal(buffer, length, height);
-    length += append_byte(buffer, length, b'X');
-    length += append_decimal(buffer, length, bpp as u64);
-    length
-}
-
-fn append_decimal(buffer: &mut [u8; 32], offset: usize, value: u64) -> usize {
-    let mut digits = [0u8; 20];
-    let mut value = value;
-    let mut count = 0;
-
-    if value == 0 {
-        digits[0] = b'0';
-        count = 1;
-    } else {
-        while value != 0 {
-            digits[count] = b'0' + (value % 10) as u8;
-            value /= 10;
-            count += 1;
-        }
-    }
-
-    for index in 0..count {
-        buffer[offset + index] = digits[count - 1 - index];
-    }
-
-    count
-}
-
-fn append_byte(buffer: &mut [u8; 32], offset: usize, byte: u8) -> usize {
-    buffer[offset] = byte;
-    1
 }
 
 fn glyph(byte: u8) -> [u8; 7] {
