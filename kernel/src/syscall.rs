@@ -919,7 +919,6 @@ struct OpenFileDescription {
     mount: VfsMountKind,
     kind: VfsNodeKind,
     executable: bool,
-    path: String,
     inode_number: u64,
     offset: usize,
     content: Vec<u8>,
@@ -5645,7 +5644,6 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
     let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
     let status_flags = status_flags_from_open_mode(mode, node.kind);
     match alloc_open_file(
-        node.path,
         node.mount,
         node.kind,
         node.executable,
@@ -5675,7 +5673,6 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
                 let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
                 let status_flags = status_flags_from_open_mode(mode, VfsNodeKind::Directory);
                 return alloc_open_file(
-                    node.path,
                     VfsMountKind::Tmpfs,
                     VfsNodeKind::Directory,
                     false,
@@ -5702,7 +5699,6 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
         |node| node.inode_number,
     );
     alloc_open_file(
-        opened.path,
         VfsMountKind::Tmpfs,
         VfsNodeKind::File,
         false,
@@ -5807,10 +5803,7 @@ fn rename_path_at(
     }
 
     match tmpfs::rename_file(&source_path, &destination_path) {
-        Ok(()) => {
-            retarget_open_files_for_path(&source_path, &destination_path);
-            SyscallOutcome::success(0)
-        }
+        Ok(()) => SyscallOutcome::success(0),
         Err(error) => SyscallOutcome::errno(map_tmpfs_error(error)),
     }
 }
@@ -6575,7 +6568,7 @@ fn ioctl_get_winsize(fd: i32, arg_ptr: usize) -> Result<i64, i64> {
     let table = fd_table_mut();
     let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
     let open = open_description(table, description_id)?;
-    if open.kind != VfsNodeKind::Device || !is_tty_device_path(&open.path) {
+    if open.kind != VfsNodeKind::Device || !is_tty_device_inode(open.inode_number) {
         return Err(ENOTTY);
     }
 
@@ -6595,8 +6588,13 @@ fn tty_winsize() -> Result<LinuxWinsize, i64> {
     })
 }
 
-fn is_tty_device_path(path: &str) -> bool {
-    path == "/dev/console" || path.starts_with("/dev/tty")
+fn is_tty_device_inode(inode: u64) -> bool {
+    let devfs = vfs::VfsMountKind::Devfs;
+    inode == vfs::hash_path_to_ino(devfs, "/dev/console")
+        || inode == vfs::hash_path_to_ino(devfs, "/dev/tty0")
+        || inode == vfs::hash_path_to_ino(devfs, "/dev/tty1")
+        || inode == vfs::hash_path_to_ino(devfs, "/dev/tty2")
+        || inode == vfs::hash_path_to_ino(devfs, "/dev/tty3")
 }
 
 fn sanitize_for_console(bytes: &[u8]) -> String {
@@ -6643,7 +6641,8 @@ fn refresh_open_file_content(open: &mut OpenFileDescription) -> Result<(), i64> 
     }
 
     if open.kind == VfsNodeKind::Directory {
-        open.content = tmpfs::read(&open.path).ok_or(EIO)?.into_bytes();
+        let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+        open.content = tmpfs::read(&path).ok_or(EIO)?.into_bytes();
         return Ok(());
     }
 
@@ -6661,18 +6660,9 @@ fn flush_open_file_content(open: &OpenFileDescription) -> Result<(), i64> {
     if let Some(file_id) = open.tmpfs_file_id {
         tmpfs::write_file_by_id(file_id, &open.content).map_err(map_tmpfs_error)?;
     } else {
-        tmpfs::write_file(&open.path, &open.content).map_err(map_tmpfs_error)?;
+        return Err(EIO);
     }
     Ok(())
-}
-
-fn retarget_open_files_for_path(source_path: &str, destination_path: &str) {
-    let table = fd_table_mut();
-    for description in &mut table.descriptions {
-        if description.mount == VfsMountKind::Tmpfs && description.path == source_path {
-            description.path = String::from(destination_path);
-        }
-    }
 }
 
 fn open_description_id_for_process(table: &FdTable, owner_process_id: u64, fd: i32) -> Result<u64, i64> {
@@ -7247,7 +7237,6 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         mount: VfsMountKind::Root,
         kind: VfsNodeKind::Device,
         executable: false,
-        path: pipe_path(pipe_id, end),
         inode_number: description_id,
         offset: 0,
         content: Vec::new(),
@@ -7900,7 +7889,8 @@ fn open_file_path_and_kind_for_process(fd: i32) -> Result<(String, VfsNodeKind),
     let table = fd_table_mut();
     let description_id = open_description_id_for_process(table, owner_process_id, fd)?;
     let open = open_description(table, description_id)?;
-    Ok((open.path.clone(), open.kind))
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(ENOENT)?;
+    Ok((path, open.kind))
 }
 
 fn cloexec_descriptor_count_for_process(process_id: u64) -> usize {
@@ -7932,7 +7922,6 @@ fn close_cloexec_open_files_for_process(process_id: u64) -> usize {
 }
 
 fn alloc_open_file(
-    path: String,
     mount: VfsMountKind,
     kind: VfsNodeKind,
     executable: bool,
@@ -7957,7 +7946,6 @@ fn alloc_open_file(
         mount,
         kind,
         executable,
-        path,
         inode_number,
         offset: 0,
         content,
@@ -8169,6 +8157,7 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
     if open.kind != VfsNodeKind::Directory {
         return Err(ENOTDIR);
     }
+    let parent_path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
     refresh_open_file_content(open)?;
 
     let entries = directory_entry_names(&open.content)?;
@@ -8181,7 +8170,7 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
     let mut index = open.offset;
     while index < entries.len() {
         let name = entries[index];
-        let child_path = child_path_for_entry(&open.path, name);
+        let child_path = child_path_for_entry(&parent_path, name);
         let (ino, d_type) = match vfs::lookup(&child_path) {
             Some(node) => (node.inode_number, dirent_type_from_node(node.kind)),
             None => (hash_path_to_ino(open.mount, &child_path), DT_UNKNOWN),
