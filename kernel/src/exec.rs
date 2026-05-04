@@ -6,7 +6,6 @@ const ELF64_EHDR_SIZE: usize = 64;
 const ELF64_PHDR_SIZE: usize = 56;
 const ELF_CLASS_64: u8 = 2;
 const ELF_DATA_LITTLE: u8 = 1;
-const ELF_DATA_BIG: u8 = 2;
 const ELF_VERSION_CURRENT: u8 = 1;
 const MAX_PROGRAM_HEADERS: usize = 256;
 const PAGE_SIZE: u64 = 4096;
@@ -118,30 +117,9 @@ pub struct LoadSegmentPlan {
 pub struct ElfImage {
     pub image_type: u16,
     pub machine: u16,
-    #[allow(dead_code)]
-    pub endianness: ElfEndianness,
     pub entry_point: u64,
-    pub program_header_offset: u64,
-    pub program_header_entry_size: usize,
     pub interpreter: Option<String>,
     pub program_headers: Vec<ProgramHeader>,
-}
-
-#[allow(dead_code)]
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub enum ElfEndianness {
-    Little,
-    Big,
-}
-
-impl ElfEndianness {
-    #[allow(dead_code)]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Little => "little",
-            Self::Big => "big",
-        }
-    }
 }
 
 pub struct ShebangImage {
@@ -222,27 +200,29 @@ fn parse_elf64(image: &[u8]) -> Result<ElfImage, ParseError> {
     if image[4] != ELF_CLASS_64 {
         return Err(ParseError::UnsupportedClass);
     }
-    let endianness = parse_elf_endianness(image[5])?;
+    if image[5] != ELF_DATA_LITTLE {
+        return Err(ParseError::UnsupportedEndianness);
+    }
     if image[6] != ELF_VERSION_CURRENT {
         return Err(ParseError::UnsupportedVersion);
     }
 
-    let header_size = read_u16(image, 52, endianness)?;
+    let header_size = read_u16_le(image, 52)?;
     if header_size as usize != ELF64_EHDR_SIZE {
         return Err(ParseError::InvalidHeader);
     }
 
-    let image_type = read_u16(image, 16, endianness)?;
-    let machine = read_u16(image, 18, endianness)?;
-    let version = read_u32(image, 20, endianness)?;
+    let image_type = read_u16_le(image, 16)?;
+    let machine = read_u16_le(image, 18)?;
+    let version = read_u32_le(image, 20)?;
     if version != ELF_VERSION_CURRENT as u32 {
         return Err(ParseError::UnsupportedVersion);
     }
 
-    let entry_point = read_u64(image, 24, endianness)?;
-    let program_header_offset = read_u64(image, 32, endianness)? as usize;
-    let program_header_entry_size = read_u16(image, 54, endianness)? as usize;
-    let program_header_count = read_u16(image, 56, endianness)? as usize;
+    let entry_point = read_u64_le(image, 24)?;
+    let program_header_offset = read_u64_le(image, 32)? as usize;
+    let program_header_entry_size = read_u16_le(image, 54)? as usize;
+    let program_header_count = read_u16_le(image, 56)? as usize;
 
     if program_header_count > MAX_PROGRAM_HEADERS {
         return Err(ParseError::TooManyProgramHeaders);
@@ -279,13 +259,13 @@ fn parse_elf64(image: &[u8]) -> Result<ElfImage, ParseError> {
             return Err(ParseError::ProgramHeaderOutOfBounds);
         }
 
-        let segment_type = ProgramHeaderType::from_raw(read_u32(image, entry_offset, endianness)?);
-        let flags = read_u32(image, entry_offset + 4, endianness)?;
-        let offset = read_u64(image, entry_offset + 8, endianness)?;
-        let virtual_address = read_u64(image, entry_offset + 16, endianness)?;
-        let file_size = read_u64(image, entry_offset + 32, endianness)?;
-        let memory_size = read_u64(image, entry_offset + 40, endianness)?;
-        let alignment = read_u64(image, entry_offset + 48, endianness)?;
+        let segment_type = ProgramHeaderType::from_raw(read_u32_le(image, entry_offset)?);
+        let flags = read_u32_le(image, entry_offset + 4)?;
+        let offset = read_u64_le(image, entry_offset + 8)?;
+        let virtual_address = read_u64_le(image, entry_offset + 16)?;
+        let file_size = read_u64_le(image, entry_offset + 32)?;
+        let memory_size = read_u64_le(image, entry_offset + 40)?;
+        let alignment = read_u64_le(image, entry_offset + 48)?;
         if file_size > memory_size {
             return Err(ParseError::InvalidSegmentSize);
         }
@@ -335,10 +315,7 @@ fn parse_elf64(image: &[u8]) -> Result<ElfImage, ParseError> {
     Ok(ElfImage {
         image_type,
         machine,
-        endianness,
         entry_point,
-        program_header_offset: program_header_offset as u64,
-        program_header_entry_size,
         interpreter,
         program_headers,
     })
@@ -386,44 +363,6 @@ pub fn build_load_plan(image: &ElfImage) -> Result<Vec<LoadSegmentPlan>, ParseEr
     Ok(plan)
 }
 
-pub fn materialize_load_segments(image: &[u8], plan: &[LoadSegmentPlan]) -> Result<Vec<Vec<u8>>, ParseError> {
-    let mut segments = Vec::with_capacity(plan.len());
-    for segment in plan {
-        let mapped_len_u64 = segment
-            .map_end
-            .checked_sub(segment.map_start)
-            .ok_or(ParseError::SegmentAddressOverflow)?;
-        let mapped_len = usize::try_from(mapped_len_u64).map_err(|_| ParseError::SegmentAddressOverflow)?;
-        let mut mapped = Vec::new();
-        mapped.resize(mapped_len, 0);
-
-        if segment.file_bytes > 0 {
-            let file_start = usize::try_from(segment.file_offset).map_err(|_| ParseError::SegmentOutOfBounds)?;
-            let file_len = usize::try_from(segment.file_bytes).map_err(|_| ParseError::SegmentOutOfBounds)?;
-            let file_end = file_start
-                .checked_add(file_len)
-                .ok_or(ParseError::SegmentOutOfBounds)?;
-            if file_end > image.len() {
-                return Err(ParseError::SegmentOutOfBounds);
-            }
-
-            let dst_start = usize::try_from(segment.page_offset).map_err(|_| ParseError::SegmentAddressOverflow)?;
-            let dst_end = dst_start
-                .checked_add(file_len)
-                .ok_or(ParseError::SegmentAddressOverflow)?;
-            if dst_end > mapped.len() {
-                return Err(ParseError::SegmentAddressOverflow);
-            }
-
-            mapped[dst_start..dst_end].copy_from_slice(&image[file_start..file_end]);
-        }
-
-        segments.push(mapped);
-    }
-
-    Ok(segments)
-}
-
 fn parse_shebang(image: &[u8]) -> Option<ShebangImage> {
     if !image.starts_with(b"#!") {
         return None;
@@ -462,43 +401,24 @@ fn looks_like_text(image: &[u8]) -> bool {
     })
 }
 
-fn parse_elf_endianness(data_encoding: u8) -> Result<ElfEndianness, ParseError> {
-    match data_encoding {
-        ELF_DATA_LITTLE => Ok(ElfEndianness::Little),
-        ELF_DATA_BIG => Ok(ElfEndianness::Big),
-        _ => Err(ParseError::UnsupportedEndianness),
-    }
-}
-
-fn read_u16(bytes: &[u8], offset: usize, endianness: ElfEndianness) -> Result<u16, ParseError> {
+fn read_u16_le(bytes: &[u8], offset: usize) -> Result<u16, ParseError> {
     let end = offset.checked_add(2).ok_or(ParseError::Truncated)?;
     let slice = bytes.get(offset..end).ok_or(ParseError::Truncated)?;
-    Ok(match endianness {
-        ElfEndianness::Little => u16::from_le_bytes([slice[0], slice[1]]),
-        ElfEndianness::Big => u16::from_be_bytes([slice[0], slice[1]]),
-    })
+    Ok(u16::from_le_bytes([slice[0], slice[1]]))
 }
 
-fn read_u32(bytes: &[u8], offset: usize, endianness: ElfEndianness) -> Result<u32, ParseError> {
+fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     let end = offset.checked_add(4).ok_or(ParseError::Truncated)?;
     let slice = bytes.get(offset..end).ok_or(ParseError::Truncated)?;
-    Ok(match endianness {
-        ElfEndianness::Little => u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]),
-        ElfEndianness::Big => u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]),
-    })
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
-fn read_u64(bytes: &[u8], offset: usize, endianness: ElfEndianness) -> Result<u64, ParseError> {
+fn read_u64_le(bytes: &[u8], offset: usize) -> Result<u64, ParseError> {
     let end = offset.checked_add(8).ok_or(ParseError::Truncated)?;
     let slice = bytes.get(offset..end).ok_or(ParseError::Truncated)?;
-    Ok(match endianness {
-        ElfEndianness::Little => u64::from_le_bytes([
-            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-        ]),
-        ElfEndianness::Big => u64::from_be_bytes([
-            slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
-        ]),
-    })
+    Ok(u64::from_le_bytes([
+        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+    ]))
 }
 
 const fn align_down(value: u64, alignment: u64) -> u64 {

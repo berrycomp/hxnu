@@ -608,6 +608,5 @@ fn map_error(error: arch::x86_64::MapError) -> AcpiError {
     match error {
         arch::x86_64::MapError::AddressOverflow => AcpiError::AddressOverflow,
         arch::x86_64::MapError::PageTableAllocationFailed => AcpiError::MappingFailed,
-        arch::x86_64::MapError::MappingConflict => AcpiError::MappingFailed,
     }
 }

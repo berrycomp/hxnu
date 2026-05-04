@@ -3,17 +3,5 @@
 version = 4
 
 [[package]]
-name = "hxnu-init"
-version = "0.1.0"
-
-[[package]]
-name = "hxnu-interp-zero"
-version = "0.1.0"
-
-[[package]]
 name = "hxnu-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "sxrc-profile-gen"
 version = "0.1.0"

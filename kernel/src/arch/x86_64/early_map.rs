@@ -8,16 +8,14 @@ pub const FLAG_CACHE_DISABLE: u64 = 1 << 4;
 
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_WRITABLE: u64 = 1 << 1;
-pub const PAGE_USER: u64 = 1 << 2;
 const PAGE_HUGE: u64 = 1 << 7;
 const PAGE_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 const PAGE_SIZE: u64 = 4096;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub enum MapError {
     AddressOverflow,
     PageTableAllocationFailed,
-    MappingConflict,
 }
 
 pub fn ensure_region_mapped(
@@ -38,7 +36,7 @@ pub fn ensure_region_mapped(
 
     let mut page = start_page;
     loop {
-        ensure_page_mapping(hhdm_offset, virtual_address_for_hhdm(hhdm_offset, page)?, page, extra_flags)?;
+        ensure_page_mapping(hhdm_offset, page, extra_flags)?;
         if page == end_page {
             break;
         }
@@ -48,59 +46,14 @@ pub fn ensure_region_mapped(
     Ok(virtual_address)
 }
 
-pub fn map_virtual_page(
-    hhdm_offset: u64,
-    virtual_address: u64,
-    physical_address: u64,
-    extra_flags: u64,
-) -> Result<(), MapError> {
-    ensure_page_mapping(
-        hhdm_offset,
-        virtual_address & !0xfff,
-        physical_address & !0xfff,
-        extra_flags,
-    )
-}
-
-pub fn unmap_virtual_page(hhdm_offset: u64, virtual_address: u64) -> Result<Option<u64>, MapError> {
-    let page_address = virtual_address & !0xfff;
-    let pml4 = hhdm_offset
-        .checked_add(read_cr3() & PAGE_ADDRESS_MASK)
-        .ok_or(MapError::AddressOverflow)? as *mut u64;
-    let pml4_index = page_table_index(page_address, 39);
-    let pdpt_index = page_table_index(page_address, 30);
-    let pd_index = page_table_index(page_address, 21);
-    let pt_index = page_table_index(page_address, 12);
-
-    let Some(pdpt) = existing_next_table(pml4, pml4_index, hhdm_offset)? else {
-        return Ok(None);
-    };
-    let Some(pd) = existing_next_table(pdpt, pdpt_index, hhdm_offset)? else {
-        return Ok(None);
-    };
-    let Some(pt) = existing_next_table(pd, pd_index, hhdm_offset)? else {
-        return Ok(None);
-    };
-
-    let pte = unsafe { pt.add(pt_index) };
-    let entry = unsafe { read_volatile(pte) };
-    if entry & PAGE_PRESENT == 0 {
-        return Ok(None);
-    }
-
-    unsafe {
-        write_volatile(pte, 0);
-    }
-    invalidate_page(page_address);
-    Ok(Some(entry & PAGE_ADDRESS_MASK))
-}
-
 fn ensure_page_mapping(
     hhdm_offset: u64,
-    virtual_address: u64,
     physical_address: u64,
     extra_flags: u64,
 ) -> Result<(), MapError> {
+    let virtual_address = hhdm_offset
+        .checked_add(physical_address)
+        .ok_or(MapError::AddressOverflow)?;
     let pml4 = hhdm_offset
         .checked_add(read_cr3() & PAGE_ADDRESS_MASK)
         .ok_or(MapError::AddressOverflow)? as *mut u64;
@@ -135,17 +88,9 @@ fn ensure_page_mapping(
             );
         }
         invalidate_page(virtual_address);
-    } else if entry & PAGE_ADDRESS_MASK != physical_address & PAGE_ADDRESS_MASK {
-        return Err(MapError::MappingConflict);
     }
 
     Ok(())
-}
-
-fn virtual_address_for_hhdm(hhdm_offset: u64, physical_address: u64) -> Result<u64, MapError> {
-    hhdm_offset
-        .checked_add(physical_address)
-        .ok_or(MapError::AddressOverflow)
 }
 
 fn next_table(table: *mut u64, index: usize, hhdm_offset: u64) -> Result<NextTable, MapError> {
@@ -166,44 +111,7 @@ fn next_table(table: *mut u64, index: usize, hhdm_offset: u64) -> Result<NextTab
         return Ok(NextTable::HugePage);
     }
 
-    // Clear NX and ensure U/S in intermediate table entries so child mappings
-    // are user-accessible and executable.
-    let mut new_entry = entry;
-    let mut changed = false;
-    if entry & (1u64 << 63) != 0 {
-        new_entry &= !(1u64 << 63);
-        changed = true;
-    }
-    if entry & PAGE_USER == 0 {
-        new_entry |= PAGE_USER;
-        changed = true;
-    }
-    if changed {
-        unsafe {
-            write_volatile(entry_ptr, new_entry);
-        }
-        flush_tlb();
-    }
-
     Ok(NextTable::Table(
-        hhdm_offset
-            .checked_add(entry & PAGE_ADDRESS_MASK)
-            .ok_or(MapError::AddressOverflow)? as *mut u64,
-    ))
-}
-
-fn existing_next_table(
-    table: *mut u64,
-    index: usize,
-    hhdm_offset: u64,
-) -> Result<Option<*mut u64>, MapError> {
-    let entry_ptr = unsafe { table.add(index) };
-    let entry = unsafe { read_volatile(entry_ptr) };
-    if entry & PAGE_PRESENT == 0 || entry & PAGE_HUGE != 0 {
-        return Ok(None);
-    }
-
-    Ok(Some(
         hhdm_offset
             .checked_add(entry & PAGE_ADDRESS_MASK)
             .ok_or(MapError::AddressOverflow)? as *mut u64,
@@ -224,13 +132,6 @@ fn read_cr3() -> u64 {
         asm!("mov {}, cr3", out(reg) value, options(nomem, nostack, preserves_flags));
     }
     value
-}
-
-fn flush_tlb() {
-    let cr3 = read_cr3();
-    unsafe {
-        asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack, preserves_flags));
-    }
 }
 
 fn invalidate_page(address: u64) {

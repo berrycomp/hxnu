@@ -1,13 +1,20 @@
 use core::cell::UnsafeCell;
-use core::ptr::{copy, read_unaligned, write_bytes, write_unaligned};
+use core::ptr::{read_volatile, write_volatile};
 
 use crate::limine;
 
 const LIMINE_FRAMEBUFFER_RGB: u8 = 1;
 
-const LOG_ORIGIN_X: u64 = 16;
-const LOG_ORIGIN_Y: u64 = 16;
-const LOG_BOTTOM_MARGIN: u64 = 16;
+const HEADER_HEIGHT: u64 = 72;
+const HEADER_ACCENT_Y: u64 = 72;
+const HEADER_ACCENT_HEIGHT: u64 = 4;
+const BANNER_X: u64 = 32;
+const BANNER_Y: u64 = 112;
+const BANNER_WIDTH: u64 = 256;
+const BANNER_HEIGHT: u64 = 144;
+const LOG_ORIGIN_X: u64 = 32;
+const LOG_ORIGIN_Y: u64 = 288;
+const LOG_BOTTOM_MARGIN: u64 = 32;
 
 const FONT_SCALE: u64 = 2;
 const GLYPH_WIDTH: u64 = 5;
@@ -102,8 +109,8 @@ pub fn initialize(framebuffer: limine::Framebuffer) -> Result<FramebufferSummary
 
     let mut console = FramebufferConsole::new(framebuffer, bytes_per_pixel)?;
     console.paint_boot_surface();
-    let sample_background = console.background;
-    let sample_accent = console.text;
+    let sample_background = console.read_pixel(8, 8);
+    let sample_accent = console.read_pixel(56, 136);
 
     unsafe {
         *FRAMEBUFFER_CONSOLE.get() = Some(console);
@@ -161,7 +168,9 @@ struct FramebufferConsole {
     framebuffer: limine::Framebuffer,
     bytes_per_pixel: usize,
     background: u32,
+    header: u32,
     accent: u32,
+    accent_soft: u32,
     text: u32,
     success: u32,
     warning: u32,
@@ -184,7 +193,9 @@ impl FramebufferConsole {
             framebuffer,
             bytes_per_pixel,
             background: 0,
+            header: 0,
             accent: 0,
+            accent_soft: 0,
             text: 0,
             success: 0,
             warning: 0,
@@ -213,20 +224,41 @@ impl FramebufferConsole {
         console.log_width = console.columns * CHAR_WIDTH;
         console.log_height = console.rows * CHAR_HEIGHT;
 
-        console.background = console.pack_rgb(0x00, 0x00, 0x00);
-        console.text = console.pack_rgb(0xd8, 0xd8, 0xd8);
-        console.accent = console.text;
-        console.success = console.text;
-        console.warning = console.text;
-        console.error = console.text;
-        console.fatal = console.pack_rgb(0xff, 0xff, 0xff);
-        console.muted = console.pack_rgb(0x88, 0x88, 0x88);
+        console.background = console.pack_rgb(0x09, 0x11, 0x1b);
+        console.header = console.pack_rgb(0x11, 0x2b, 0x44);
+        console.accent = console.pack_rgb(0x2d, 0xd4, 0xbf);
+        console.accent_soft = console.pack_rgb(0x79, 0xe2, 0xd0);
+        console.text = console.pack_rgb(0xf5, 0xf7, 0xfa);
+        console.success = console.pack_rgb(0x8b, 0xe9, 0x7d);
+        console.warning = console.pack_rgb(0xff, 0xc8, 0x57);
+        console.error = console.pack_rgb(0xff, 0x6b, 0x6b);
+        console.fatal = console.pack_rgb(0xff, 0x4d, 0x6d);
+        console.muted = console.pack_rgb(0x94, 0xa3, 0xb8);
 
         Ok(console)
     }
 
     fn paint_boot_surface(&mut self) {
         self.clear(self.background);
+        self.fill_rect(0, 0, self.framebuffer.width, HEADER_HEIGHT, self.header);
+        self.fill_rect(0, HEADER_ACCENT_Y, self.framebuffer.width, HEADER_ACCENT_HEIGHT, self.accent);
+        self.fill_rect(BANNER_X, BANNER_Y, BANNER_WIDTH, BANNER_HEIGHT, self.header);
+        self.fill_rect(BANNER_X + 16, BANNER_Y + 16, 32, 96, self.accent);
+        self.fill_rect(BANNER_X + 64, BANNER_Y + 16, 32, 96, self.accent_soft);
+        self.fill_rect(BANNER_X + 112, BANNER_Y + 16, 32, 96, self.accent);
+        self.fill_rect(BANNER_X + 160, BANNER_Y + 16, 32, 96, self.accent_soft);
+        self.fill_rect(BANNER_X + 208, BANNER_Y + 16, 32, 96, self.accent);
+        self.draw_text(BANNER_X, 20, "HXNU 2605", self.text, 3);
+        self.draw_text(320, 32, "FB READY", self.text, 2);
+
+        let mut mode_line = [0u8; 32];
+        let mode_len = format_mode_line(
+            &mut mode_line,
+            self.framebuffer.width,
+            self.framebuffer.height,
+            self.framebuffer.bpp,
+        );
+        self.draw_text_bytes(320, 72, &mode_line[..mode_len], self.accent, 2);
         self.clear_log_region();
     }
 
@@ -273,24 +305,14 @@ impl FramebufferConsole {
     }
 
     fn scroll_up(&mut self) {
-        let visible_height = self.log_height.saturating_sub(CHAR_HEIGHT);
-        let row_bytes = (self.log_width as usize).saturating_mul(self.bytes_per_pixel);
-        let row_count = visible_height as usize;
+        let destination_y = self.log_origin_y;
+        let end_y = self.log_origin_y + self.log_height - CHAR_HEIGHT;
+        let end_x = self.log_origin_x + self.log_width;
 
-        // Respect the framebuffer pitch when scrolling. The log region is narrower than the
-        // full scanline, so copying it as one packed block will drift into per-row padding.
-        for row in 0..row_count {
-            let destination_offset =
-                self.pixel_offset(self.log_origin_x, self.log_origin_y + row as u64);
-            let source_offset =
-                self.pixel_offset(self.log_origin_x, self.log_origin_y + CHAR_HEIGHT + row as u64);
-
-            unsafe {
-                copy(
-                    self.framebuffer.address.add(source_offset),
-                    self.framebuffer.address.add(destination_offset),
-                    row_bytes,
-                );
+        for y in destination_y..end_y {
+            for x in self.log_origin_x..end_x {
+                let color = self.read_pixel(x, y + CHAR_HEIGHT);
+                self.write_pixel(x, y, color);
             }
         }
 
@@ -388,16 +410,23 @@ impl FramebufferConsole {
     fn fill_rect(&mut self, x: u64, y: u64, width: u64, height: u64, color: u32) {
         let max_x = x.saturating_add(width).min(self.framebuffer.width);
         let max_y = y.saturating_add(height).min(self.framebuffer.height);
-        let span_width = max_x.saturating_sub(x) as usize;
-
-        if span_width == 0 || max_y <= y {
-            return;
-        }
 
         for current_y in y..max_y {
-            let offset = self.pixel_offset(x, current_y);
-            let row = unsafe { self.framebuffer.address.add(offset) };
-            self.fill_span(row, span_width, color);
+            for current_x in x..max_x {
+                self.write_pixel(current_x, current_y, color);
+            }
+        }
+    }
+
+    fn draw_text(&mut self, x: u64, y: u64, text: &str, color: u32, scale: u64) {
+        self.draw_text_bytes(x, y, text.as_bytes(), color, scale);
+    }
+
+    fn draw_text_bytes(&mut self, x: u64, y: u64, text: &[u8], color: u32, scale: u64) {
+        let mut cursor_x = x;
+        for byte in text {
+            self.draw_glyph(cursor_x, y, normalize_glyph_byte(*byte), color, scale);
+            cursor_x = cursor_x.saturating_add(GLYPH_ADVANCE_X * scale);
         }
     }
 
@@ -415,16 +444,43 @@ impl FramebufferConsole {
         }
     }
 
+    fn write_pixel(&mut self, x: u64, y: u64, color: u32) {
+        if x >= self.framebuffer.width || y >= self.framebuffer.height {
+            return;
+        }
+
+        let offset = y
+            .saturating_mul(self.framebuffer.pitch)
+            .saturating_add(x.saturating_mul(self.bytes_per_pixel as u64)) as usize;
+
+        unsafe {
+            let base = self.framebuffer.address.add(offset);
+            for byte_index in 0..self.bytes_per_pixel {
+                let byte = ((color >> (byte_index * 8)) & 0xff) as u8;
+                write_volatile(base.add(byte_index), byte);
+            }
+        }
+    }
+
     fn read_pixel(&self, x: u64, y: u64) -> u32 {
         if x >= self.framebuffer.width || y >= self.framebuffer.height {
             return 0;
         }
 
-        let offset = self.pixel_offset(x, y);
+        let offset = y
+            .saturating_mul(self.framebuffer.pitch)
+            .saturating_add(x.saturating_mul(self.bytes_per_pixel as u64)) as usize;
+        let mut color = 0u32;
+
         unsafe {
             let base = self.framebuffer.address.add(offset);
-            self.read_color(base)
+            for byte_index in 0..self.bytes_per_pixel {
+                let byte = read_volatile(base.add(byte_index)) as u32;
+                color |= byte << (byte_index * 8);
+            }
         }
+
+        color
     }
 
     fn pack_rgb(&self, red: u8, green: u8, blue: u8) -> u32 {
@@ -439,65 +495,6 @@ impl FramebufferConsole {
                 self.framebuffer.blue_mask_size,
                 self.framebuffer.blue_mask_shift,
             )
-    }
-
-    fn pixel_offset(&self, x: u64, y: u64) -> usize {
-        y.saturating_mul(self.framebuffer.pitch)
-            .saturating_add(x.saturating_mul(self.bytes_per_pixel as u64)) as usize
-    }
-
-    fn fill_span(&self, row: *mut u8, pixels: usize, color: u32) {
-        if color == 0 {
-            unsafe {
-                write_bytes(row, 0, pixels.saturating_mul(self.bytes_per_pixel));
-            }
-            return;
-        }
-
-        match self.bytes_per_pixel {
-            4 => {
-                for index in 0..pixels {
-                    let pixel = unsafe { row.add(index * 4) };
-                    self.write_color(pixel, color);
-                }
-            }
-            3 => {
-                for index in 0..pixels {
-                    let pixel = unsafe { row.add(index * 3) };
-                    self.write_color(pixel, color);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn write_color(&self, pixel: *mut u8, color: u32) {
-        match self.bytes_per_pixel {
-            4 => unsafe {
-                write_unaligned(pixel.cast::<u32>(), color);
-            },
-            3 => {
-                let bytes = color.to_le_bytes();
-                unsafe {
-                    *pixel = bytes[0];
-                    *pixel.add(1) = bytes[1];
-                    *pixel.add(2) = bytes[2];
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn read_color(&self, pixel: *const u8) -> u32 {
-        match self.bytes_per_pixel {
-            4 => unsafe { read_unaligned(pixel.cast::<u32>()) },
-            3 => unsafe {
-                (*pixel as u32)
-                    | ((*pixel.add(1) as u32) << 8)
-                    | ((*pixel.add(2) as u32) << 16)
-            },
-            _ => 0,
-        }
     }
 }
 
@@ -516,6 +513,44 @@ fn pack_channel(value: u8, size: u8, shift: u8) -> u32 {
     let max = (1u32 << size) - 1;
     let scaled = ((value as u32) * max + 127) / 255;
     scaled << shift
+}
+
+fn format_mode_line(buffer: &mut [u8; 32], width: u64, height: u64, bpp: u16) -> usize {
+    let mut length = 0;
+    length += append_decimal(buffer, length, width);
+    length += append_byte(buffer, length, b'X');
+    length += append_decimal(buffer, length, height);
+    length += append_byte(buffer, length, b'X');
+    length += append_decimal(buffer, length, bpp as u64);
+    length
+}
+
+fn append_decimal(buffer: &mut [u8; 32], offset: usize, value: u64) -> usize {
+    let mut digits = [0u8; 20];
+    let mut value = value;
+    let mut count = 0;
+
+    if value == 0 {
+        digits[0] = b'0';
+        count = 1;
+    } else {
+        while value != 0 {
+            digits[count] = b'0' + (value % 10) as u8;
+            value /= 10;
+            count += 1;
+        }
+    }
+
+    for index in 0..count {
+        buffer[offset + index] = digits[count - 1 - index];
+    }
+
+    count
+}
+
+fn append_byte(buffer: &mut [u8; 32], offset: usize, byte: u8) -> usize {
+    buffer[offset] = byte;
+    1
 }
 
 fn glyph(byte: u8) -> [u8; 7] {

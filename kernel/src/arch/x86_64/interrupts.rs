@@ -3,9 +3,8 @@ use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::ptr;
 
-use crate::init_exec;
 use crate::kprintln;
-use crate::panic::write_fatal_line;
+
 use crate::syscall::{self, SyscallAbi, SyscallAction};
 
 use super::apic;
@@ -13,34 +12,16 @@ use super::apic;
 const SYSCALL_VECTOR: usize = 0x80;
 const INTERRUPT_GATE: u8 = 0x8e;
 const USER_INTERRUPT_GATE: u8 = 0xee;
-const EXEC_LAUNCH_STACK_BYTES: usize = 64 * 1024;
 
 unsafe extern "C" {
     fn hxnu_x86_64_syscall_entry();
-    fn hxnu_x86_64_exec_stack_call(
-        process_id: u64,
-        path_ptr: *const u8,
-        path_len: usize,
-        stack_ptr: *const u8,
-    ) -> i64;
 }
-
-#[repr(align(16))]
-struct ExecLaunchStack {
-    _bytes: [u8; EXEC_LAUNCH_STACK_BYTES],
-}
-
-static mut EXEC_LAUNCH_STACK: ExecLaunchStack = ExecLaunchStack {
-    _bytes: [0; EXEC_LAUNCH_STACK_BYTES],
-};
-static mut EXEC_LAUNCH_PREVIOUS_RSP: u64 = 0;
 
 global_asm!(
     r#"
     .global hxnu_x86_64_syscall_entry
     .type hxnu_x86_64_syscall_entry,@function
 hxnu_x86_64_syscall_entry:
-    swapgs
     push r15
     push r14
     push r13
@@ -77,28 +58,8 @@ hxnu_x86_64_syscall_entry:
     pop r13
     pop r14
     pop r15
-    swapgs
     iretq
 "#
-);
-
-global_asm!(
-    r#"
-    .global hxnu_x86_64_exec_stack_call
-    .type hxnu_x86_64_exec_stack_call,@function
-hxnu_x86_64_exec_stack_call:
-    mov [rip + {saved_rsp}], rsp
-    lea rsp, [rip + {stack}]
-    add rsp, {stack_bytes}
-    and rsp, -16
-    call {impl}
-    mov rsp, [rip + {saved_rsp}]
-    ret
-"#,
-    saved_rsp = sym EXEC_LAUNCH_PREVIOUS_RSP,
-    stack = sym EXEC_LAUNCH_STACK,
-    stack_bytes = const EXEC_LAUNCH_STACK_BYTES,
-    impl = sym hxnu_x86_64_exec_stack_call_impl,
 );
 
 #[repr(C)]
@@ -227,27 +188,22 @@ impl GlobalIdt {
 static IDT: GlobalIdt = GlobalIdt::new();
 
 pub fn initialize() {
-    load_idt();
-}
-
-pub fn load_idt() {
-    let idt = unsafe { &*IDT.get() };
+    let idt = unsafe { &mut *IDT.get() };
     let code_selector = read_code_segment();
-    let idt_mut = unsafe { &mut *IDT.get() };
-    idt_mut.entries[3].set_handler_addr(breakpoint_handler as *const () as usize, code_selector);
-    idt_mut.entries[6].set_handler_addr(invalid_opcode_handler as *const () as usize, code_selector);
-    idt_mut.entries[8].set_handler_addr(double_fault_handler as *const () as usize, code_selector);
-    idt_mut.entries[13].set_handler_addr(
+    idt.entries[3].set_handler_addr(breakpoint_handler as *const () as usize, code_selector);
+    idt.entries[6].set_handler_addr(invalid_opcode_handler as *const () as usize, code_selector);
+    idt.entries[8].set_handler_addr(double_fault_handler as *const () as usize, code_selector);
+    idt.entries[13].set_handler_addr(
         general_protection_fault_handler as *const () as usize,
         code_selector,
     );
-    idt_mut.entries[14].set_handler_addr(page_fault_handler as *const () as usize, code_selector);
-    idt_mut.entries[apic::TIMER_VECTOR].set_handler_addr(timer_handler as *const () as usize, code_selector);
-    idt_mut.entries[apic::SPURIOUS_VECTOR].set_handler_addr(
+    idt.entries[14].set_handler_addr(page_fault_handler as *const () as usize, code_selector);
+    idt.entries[apic::TIMER_VECTOR].set_handler_addr(timer_handler as *const () as usize, code_selector);
+    idt.entries[apic::SPURIOUS_VECTOR].set_handler_addr(
         spurious_interrupt_handler as *const () as usize,
         code_selector,
     );
-    idt_mut.entries[SYSCALL_VECTOR].set_handler_addr_with_attributes(
+    idt.entries[SYSCALL_VECTOR].set_handler_addr_with_attributes(
         hxnu_x86_64_syscall_entry as *const () as usize,
         code_selector,
         USER_INTERRUPT_GATE,
@@ -260,17 +216,6 @@ pub fn load_idt() {
 
     unsafe {
         asm!("lidt [{idtr}]", idtr = in(reg) &idtr, options(readonly, nostack, preserves_flags));
-    }
-}
-
-pub fn launch_exec_on_syscall_stack(
-    process_id: u64,
-    path_ptr: *const u8,
-    path_len: usize,
-    stack: &syscall::BootstrapExecStackImage,
-) -> i64 {
-    unsafe {
-        hxnu_x86_64_exec_stack_call(process_id, path_ptr, path_len, stack as *const _ as *const u8)
     }
 }
 
@@ -339,22 +284,6 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
             }
             outcome.value as u64
         }
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn hxnu_x86_64_exec_stack_call_impl(
-    process_id: u64,
-    path_ptr: *const u8,
-    path_len: usize,
-    stack_ptr: *const u8,
-) -> i64 {
-    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-    let exec_path = unsafe { core::str::from_utf8_unchecked(path_bytes) };
-    let stack = unsafe { &*(stack_ptr as *const syscall::BootstrapExecStackImage) };
-    match init_exec::launch_exec_path(process_id, exec_path, stack) {
-        Ok(()) => unreachable!("exec launch path does not return on success"),
-        Err(error) => syscall::map_init_exec_launch_errno(error),
     }
 }
 
@@ -568,22 +497,22 @@ fn report_fatal_exception(
     error_code: Option<u64>,
     fault_address: Option<u64>,
 ) {
-    write_fatal_line(format_args!(
-        "================= FATAL EXCEPTION =================="
+    crate::serial::write_fmt(format_args!(
+        "================= FATAL EXCEPTION ==================\n"
     ));
-    write_fatal_line(format_args!("kind      {}", kind));
-    write_fatal_line(format_args!("rip       {:#018x}", stack_frame.instruction_pointer));
-    write_fatal_line(format_args!("cs        {:#06x}", stack_frame.code_segment));
-    write_fatal_line(format_args!("rflags    {:#018x}", stack_frame.cpu_flags));
-    write_fatal_line(format_args!("rsp       {:#018x}", stack_frame.stack_pointer));
-    write_fatal_line(format_args!("ss        {:#06x}", stack_frame.stack_segment));
+    crate::serial::write_fmt(format_args!("kind      {}\n", kind));
+    crate::serial::write_fmt(format_args!("rip       {:#018x}\n", stack_frame.instruction_pointer));
+    crate::serial::write_fmt(format_args!("cs        {:#06x}\n", stack_frame.code_segment));
+    crate::serial::write_fmt(format_args!("rflags    {:#018x}\n", stack_frame.cpu_flags));
+    crate::serial::write_fmt(format_args!("rsp       {:#018x}\n", stack_frame.stack_pointer));
+    crate::serial::write_fmt(format_args!("ss        {:#06x}\n", stack_frame.stack_segment));
     if let Some(error_code) = error_code {
-        write_fatal_line(format_args!("error     {:#x}", error_code));
+        crate::serial::write_fmt(format_args!("error     {:#x}\n", error_code));
     }
     if let Some(fault_address) = fault_address {
-        write_fatal_line(format_args!("cr2       {:#018x}", fault_address));
-        write_fatal_line(format_args!(
-            "decode    present={} write={} user={} reserved={} instruction={}",
+        crate::serial::write_fmt(format_args!("cr2       {:#018x}\n", fault_address));
+        crate::serial::write_fmt(format_args!(
+            "decode    present={} write={} user={} reserved={} instruction={}\n",
             yes_no(error_code.unwrap_or(0) & (1 << 0) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 1) != 0),
             yes_no(error_code.unwrap_or(0) & (1 << 2) != 0),
@@ -591,8 +520,8 @@ fn report_fatal_exception(
             yes_no(error_code.unwrap_or(0) & (1 << 4) != 0),
         ));
     }
-    write_fatal_line(format_args!("action    cpu halted"));
-    write_fatal_line(format_args!("===================================================="));
+    crate::serial::write_fmt(format_args!("action    cpu halted\n"));
+    crate::serial::write_fmt(format_args!("====================================================\n"));
 }
 
 fn halt_forever() -> ! {

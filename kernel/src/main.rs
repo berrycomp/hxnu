@@ -5,35 +5,26 @@
 
 extern crate alloc;
 
-mod accel;
 mod acpi;
 mod arch;
-mod block;
 mod devfs;
 mod exec;
-mod fat;
 mod fb;
 mod initrd;
-mod init_exec;
 #[macro_use]
 mod log;
 mod limine;
-mod lock;
 mod mm;
 mod panic;
-mod percpu;
 mod power;
 mod procfs;
-mod runtime;
 mod sched;
 mod serial;
 mod smp;
 mod syscall;
 mod time;
-mod tmpfs;
 mod tty;
 mod uaccess;
-mod vector;
 mod vfs;
 
 use alloc::boxed::Box;
@@ -223,113 +214,6 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    match mm::compress::initialize() {
-        Ok(summary) => {
-            kprintln!(
-                "HXNU: mm compress online backend={} profile={} v{} page={} unit={} little-endian={} dynamic-patterns={} dict={} patterns={} header-bytes={} max-encoded={}",
-                summary.backend,
-                summary.profile,
-                summary.profile_version,
-                summary.page_bytes,
-                summary.compression_unit_bytes,
-                yes_no(summary.little_endian),
-                yes_no(summary.dynamic_patterns),
-                summary.static_dictionary_entries,
-                summary.static_pattern_entries,
-                summary.encoded_header_bytes,
-                summary.max_encoded_page_bytes,
-            );
-            let stats = mm::compress::stats();
-            kprintln!(
-                "HXNU: mm compress counters encoded={} decoded={} zero={} same={} sxrc={} raw={} raw-fallback={}",
-                stats.encoded_pages,
-                stats.decoded_pages,
-                stats.zero_pages,
-                stats.same_pages,
-                stats.sxrc_pages,
-                stats.raw_pages,
-                stats.fallback_raw_pages,
-            );
-
-            match mm::compress::store::initialize() {
-                Ok(store) => {
-                    kprintln!(
-                        "HXNU: mm compress store online capacity-pages={} capacity-bytes={} page={} max-encoded={}",
-                        store.capacity_pages,
-                        store.capacity_bytes,
-                        store.page_bytes,
-                        store.max_encoded_page_bytes,
-                    );
-                    let store_stats = mm::compress::store::stats();
-                    kprintln!(
-                        "HXNU: mm compress store counters stored={} zero={} same={} sxrc={} raw={} encoded-bytes={} store-ok={}/{} load-ok={}/{} evictions={} replacements={} misses={}",
-                        store_stats.stored_pages,
-                        store_stats.stored_zero_pages,
-                        store_stats.stored_same_pages,
-                        store_stats.stored_sxrc_pages,
-                        store_stats.stored_raw_pages,
-                        store_stats.current_encoded_bytes,
-                        store_stats.store_successes,
-                        store_stats.store_requests,
-                        store_stats.load_successes,
-                        store_stats.load_requests,
-                        store_stats.evictions,
-                        store_stats.replacements,
-                        store_stats.load_misses,
-                    );
-                }
-                Err(error) => {
-                    kprintln!("HXNU: mm compress store init failed: {}", error.as_str());
-                    halt();
-                }
-            }
-
-            match mm::pager::initialize() {
-                Ok(pager) => {
-                    kprintln!(
-                        "HXNU: mm pager online page={} store-capacity-pages={}",
-                        pager.page_bytes,
-                        pager.store_capacity_pages,
-                    );
-                    match mm::pager::run_bootstrap_smoke() {
-                        Ok(smoke) => {
-                            let pager_stats = mm::pager::stats();
-                            kprintln!(
-                                "HXNU: mm pager smoke verified={}/{} reclaim-ok={}/{} restore-ok={}/{} class-reclaimed(z/s/x/r)={}/{}/{}/{} class-restored(z/s/x/r)={}/{}/{}/{}",
-                                smoke.verified_pages,
-                                smoke.tested_pages,
-                                pager_stats.reclaim_successes,
-                                pager_stats.reclaim_requests,
-                                pager_stats.restore_successes,
-                                pager_stats.restore_requests,
-                                pager_stats.reclaimed_zero_pages,
-                                pager_stats.reclaimed_same_pages,
-                                pager_stats.reclaimed_sxrc_pages,
-                                pager_stats.reclaimed_raw_pages,
-                                pager_stats.restored_zero_pages,
-                                pager_stats.restored_same_pages,
-                                pager_stats.restored_sxrc_pages,
-                                pager_stats.restored_raw_pages,
-                            );
-                        }
-                        Err(error) => {
-                            kprintln!("HXNU: mm pager smoke failed: {}", error.as_str());
-                            halt();
-                        }
-                    }
-                }
-                Err(error) => {
-                    kprintln!("HXNU: mm pager init failed: {}", error.as_str());
-                    halt();
-                }
-            }
-        }
-        Err(error) => {
-            kprintln!("HXNU: mm compress init failed: {}", error.as_str());
-            halt();
-        }
-    }
-
     arch::x86_64::initialize();
     let selectors = arch::x86_64::segment_selectors();
     kprintln!(
@@ -367,16 +251,6 @@ pub extern "C" fn _start() -> ! {
             brand,
         );
     }
-    let vector_caps = vector::initialize();
-    kprintln_style!(
-        crate::tty::ConsoleStyle::Muted,
-        "HXNU: vector policy={} mode={} base={:#018x} ext={:#018x} xsave-mask={:#018x}",
-        vector_caps.policy.as_str(),
-        vector_caps.context_mode.as_str(),
-        vector_caps.base_bits,
-        vector_caps.ext_bits,
-        vector_caps.xsave_mask,
-    );
     if let Some(topology) = cpu_info.topology {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
@@ -525,24 +399,6 @@ pub extern "C" fn _start() -> ! {
                                         );
                                     }
                                 }
-                                match percpu::initialize() {
-                                    Ok(summary) => kprintln_style!(
-                                        crate::tty::ConsoleStyle::Success,
-                                        "HXNU: percpu online cpus={} online={} current={} apic={} area={} total={} header={}",
-                                        summary.cpu_count,
-                                        summary.online_cpus,
-                                        summary.current_cpu_index,
-                                        summary.current_apic_id,
-                                        summary.area_bytes,
-                                        summary.total_bytes,
-                                        percpu::header_size(),
-                                    ),
-                                    Err(error) => kprintln_style!(
-                                        crate::tty::ConsoleStyle::Error,
-                                        "HXNU: percpu offline reason={}",
-                                        error.as_str()
-                                    ),
-                                }
                             }
                             Err(error) => kprintln_style!(
                                 crate::tty::ConsoleStyle::Error,
@@ -551,16 +407,6 @@ pub extern "C" fn _start() -> ! {
                             ),
                         }
                     }
-
-                    let ap_summary = arch::x86_64::bringup_all_aps(hhdm_offset);
-                    kprintln_style!(
-                        crate::tty::ConsoleStyle::Success,
-                        "HXNU: ap bringup attempted={} online={} failed={}",
-                        ap_summary.attempted,
-                        ap_summary.online,
-                        ap_summary.failed,
-                    );
-
                     if let Some(ref fadt) = discovery.fadt {
                         power::configure(hhdm_offset, fadt);
                         kprintln!(
@@ -621,22 +467,6 @@ pub extern "C" fn _start() -> ! {
             halt();
         }
     }
-    match accel::initialize() {
-        Ok(summary) => kprintln_style!(
-            crate::tty::ConsoleStyle::Success,
-            "HXNU: accel online drivers={} pending={} submitted={} completed={} canceled={}",
-            summary.driver_count,
-            summary.pending_jobs,
-            summary.submitted_jobs,
-            summary.completed_jobs,
-            summary.canceled_jobs,
-        ),
-        Err(error) => kprintln_style!(
-            crate::tty::ConsoleStyle::Warning,
-            "HXNU: accel offline reason={}",
-            error.as_str(),
-        ),
-    }
     match devfs::initialize() {
         Ok(summary) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
@@ -671,62 +501,6 @@ pub extern "C" fn _start() -> ! {
             "HXNU: initrd offline reason={}",
             error.as_str()
         ),
-    }
-    match block::initialize() {
-        Ok(summary) => kprintln_style!(
-            crate::tty::ConsoleStyle::Success,
-            "HXNU: block online drivers={} devices={} partitions={} total-bytes={} mbr-devices={} gpt-devices={}",
-            summary.driver_count,
-            summary.device_count,
-            summary.partition_count,
-            summary.total_bytes,
-            summary.mbr_device_count,
-            summary.gpt_device_count,
-        ),
-        Err(error) => {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Error,
-                "HXNU: block offline reason={}",
-                error.as_str()
-            );
-            halt();
-        }
-    }
-    match fat::initialize() {
-        Ok(summary) => kprintln_style!(
-            crate::tty::ConsoleStyle::Success,
-            "HXNU: fat online table={} partition={:?} device={:?} type={} root-entries={} directories={} files={}",
-            summary.partition_table.map_or("<none>", |kind| kind.as_str()),
-            summary.partition_id,
-            summary.device_id,
-            summary.fat_type.map_or("<none>", |kind| kind.as_str()),
-            summary.root_entry_count,
-            summary.directory_count,
-            summary.file_count,
-        ),
-        Err(error) => kprintln_style!(
-            crate::tty::ConsoleStyle::Warning,
-            "HXNU: fat offline reason={}",
-            error.as_str()
-        ),
-    }
-    match tmpfs::initialize() {
-        Ok(summary) => kprintln_style!(
-            crate::tty::ConsoleStyle::Success,
-            "HXNU: tmpfs online directories={} files={} entries={} bytes={}",
-            summary.directory_count,
-            summary.file_count,
-            summary.entry_count,
-            summary.total_bytes,
-        ),
-        Err(error) => {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Error,
-                "HXNU: tmpfs offline reason={}",
-                error.as_str()
-            );
-            halt();
-        }
     }
     match vfs::initialize() {
         Ok(summary) => kprintln_style!(
@@ -765,7 +539,7 @@ pub extern "C" fn _start() -> ! {
     match &init_load_prep {
         Ok(prep) => kprintln_style!(
             crate::tty::ConsoleStyle::Accent,
-            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} ph-ent={} ph-vaddr={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-src={} interp-ok={} interp-arg={}",
+            "HXNU: init load-prep path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} load={} load-base={} load-offset={} load-file={} load-mem={} load-w={} load-x={} align={} vm-map={} vm-bytes={} vm-zero={} vm-start={} vm-end={} interp={} interp-src={} interp-ok={} interp-arg={}",
             prep.path,
             prep.mount.as_str(),
             prep.format.as_str(),
@@ -775,8 +549,6 @@ pub extern "C" fn _start() -> ! {
             vfs::format_u16_hex(prep.machine),
             vfs::format_u16_hex(prep.image_type),
             prep.program_header_count,
-            prep.program_header_entry_size,
-            vfs::format_u64_hex(prep.program_header_virtual_address),
             prep.load_segment_count,
             vfs::format_u64_hex(prep.load_base),
             vfs::format_u64_hex(prep.load_offset),
@@ -801,60 +573,6 @@ pub extern "C" fn _start() -> ! {
             error.as_str()
         ),
     }
-    let init_load_image = vfs::materialize_init_image();
-    match &init_load_image {
-        Ok(image) => kprintln_style!(
-            crate::tty::ConsoleStyle::Accent,
-            "HXNU: init load-image path={} mount={} format={} size={} executable={} entry={} machine={} type={} ph={} ph-ent={} ph-vaddr={} vm-map={} vm-bytes={} vm-zero={} interp={} interp-src={} interp-ok={} interp-arg={}",
-            image.path,
-            image.mount.as_str(),
-            image.format.as_str(),
-            image.size,
-            yes_no(image.executable),
-            vfs::format_u64_hex(image.entry_point),
-            vfs::format_u16_hex(image.machine),
-            vfs::format_u16_hex(image.image_type),
-            image.program_header_count,
-            image.program_header_entry_size,
-            vfs::format_u64_hex(image.program_header_virtual_address),
-            image.vm_map_images.len(),
-            image.vm_map_total_bytes,
-            image.vm_map_zero_fill_bytes,
-            image.interpreter.as_deref().unwrap_or("<none>"),
-            image.interpreter_source.as_deref().unwrap_or("<none>"),
-            yes_no(image.interpreter_resolved),
-            image.interpreter_argument.as_deref().unwrap_or("<none>"),
-        ),
-        Err(error) => kprintln_style!(
-            crate::tty::ConsoleStyle::Warning,
-            "HXNU: init load-image offline reason={}",
-            error.as_str()
-        ),
-    }
-    let init_handoff = init_exec::activate_init_handoff();
-    match &init_handoff {
-        Ok(summary) => kprintln_style!(
-            crate::tty::ConsoleStyle::Success,
-            "HXNU: init handoff armed={} format={} entry={} machine={} type={} vm={}..{} segments={} bytes={} zero={} entry-seg={} entry-off={}",
-            yes_no(summary.armed),
-            summary.format.as_str(),
-            vfs::format_u64_hex(Some(summary.entry_point)),
-            vfs::format_u16_hex(Some(summary.machine)),
-            vfs::format_u16_hex(Some(summary.image_type)),
-            vfs::format_u64_hex(Some(summary.vm_start)),
-            vfs::format_u64_hex(Some(summary.vm_end)),
-            summary.segment_count,
-            summary.total_bytes,
-            summary.zero_fill_bytes,
-            summary.entry_segment_index,
-            summary.entry_segment_map_offset,
-        ),
-        Err(error) => kprintln_style!(
-            crate::tty::ConsoleStyle::Warning,
-            "HXNU: init handoff offline reason={}",
-            error.as_str()
-        ),
-    }
     if let Ok(prep) = &init_load_prep {
         if let Some(segment) = prep.vm_map_entries.first() {
             kprintln_style!(
@@ -870,27 +588,6 @@ pub extern "C" fn _start() -> ! {
                 segment.file_bytes,
                 segment.memory_bytes,
                 segment.zero_fill_bytes,
-                segment.alignment,
-                vfs::format_rwx(segment.readable, segment.writable, segment.executable),
-            );
-        }
-    }
-    if let Ok(image) = &init_load_image {
-        if let Some(segment) = image.vm_map_images.first() {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Muted,
-                "HXNU: init load-image[0] idx={} off={} vaddr={}..{} map={}..{} page-off={} file={} mem={} zero={} bytes={} align={} perms={}",
-                segment.index,
-                vfs::format_u64_hex(Some(segment.file_offset)),
-                vfs::format_u64_hex(Some(segment.virtual_start)),
-                vfs::format_u64_hex(Some(segment.virtual_end)),
-                vfs::format_u64_hex(Some(segment.map_start)),
-                vfs::format_u64_hex(Some(segment.map_end)),
-                segment.page_offset,
-                segment.file_bytes,
-                segment.memory_bytes,
-                segment.zero_fill_bytes,
-                segment.bytes.len(),
                 segment.alignment,
                 vfs::format_rwx(segment.readable, segment.writable, segment.executable),
             );
@@ -1032,85 +729,15 @@ pub extern "C" fn _start() -> ! {
     let linux_probe = syscall::run_linux_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} openat={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} newfstatat={} faccessat={} faccessat2={} readlinkat={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents64={} lseek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} openat={} read={} close={} getpid={} getppid={} gettid={} sched_yield={} clock_gettime={} monotonic={}.{:09} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::LinuxBootstrap.as_str(),
         linux_probe.write_result,
         linux_probe.openat_result,
-        linux_probe.mmap_result,
-        linux_probe.mprotect_result,
-        linux_probe.munmap_result,
-        linux_probe.brk_result,
-        linux_probe.brk_set_result,
-        linux_probe.brk_restore_result,
-        linux_probe.nanosleep_result,
-        linux_probe.gettimeofday_result,
-        linux_probe.gettimeofday_seconds,
-        linux_probe.gettimeofday_microseconds,
-        linux_probe.getrandom_result,
-        linux_probe.getrandom_sample,
-        linux_probe.rt_sigaction_result,
-        linux_probe.rt_sigprocmask_result,
-        linux_probe.rt_sigmask_snapshot,
-        linux_probe.rt_sigold_handler,
-        linux_probe.pread64_result,
-        linux_probe.pwrite64_result,
-        linux_probe.readv_result,
-        linux_probe.writev_result,
-        linux_probe.wait4_result,
-        linux_probe.setpgid_result,
-        linux_probe.getpgid_result,
-        linux_probe.setsid_result,
-        linux_probe.getsid_result,
-        linux_probe.getrlimit_result,
-        linux_probe.setrlimit_result,
-        linux_probe.prlimit64_result,
-        linux_probe.prctl_set_name_result,
-        linux_probe.prctl_get_name_result,
-        linux_probe.prctl_set_dumpable_result,
-        linux_probe.prctl_get_dumpable_result,
-        linux_probe.set_robust_list_result,
-        linux_probe.get_robust_list_result,
-        linux_probe.rseq_register_result,
-        linux_probe.rseq_unregister_result,
-        linux_probe.arch_prctl_set_fs_result,
-        linux_probe.arch_prctl_get_fs_result,
-        linux_probe.arch_prctl_set_gs_result,
-        linux_probe.arch_prctl_get_gs_result,
-        linux_probe.futex_wait_result,
-        linux_probe.futex_wake_result,
-        linux_probe.pipe2_result,
-        linux_probe.poll_result,
-        linux_probe.ppoll_result,
-        linux_probe.ioctl_result,
-        linux_probe.access_result,
-        linux_probe.newfstatat_result,
-        linux_probe.faccessat_result,
-        linux_probe.faccessat2_result,
-        linux_probe.readlinkat_result,
-        linux_probe.dup_result,
-        linux_probe.dup2_result,
-        linux_probe.dup3_result,
-        linux_probe.fcntl_getfd_result,
-        linux_probe.fcntl_getfl_result,
-        linux_probe.getcwd_result,
-        linux_probe.chdir_result,
-        linux_probe.fchdir_result,
         linux_probe.read_result,
-        linux_probe.fstat_result,
-        linux_probe.getdents64_result,
-        linux_probe.lseek_result,
         linux_probe.close_result,
         linux_probe.getpid_result,
         linux_probe.getppid_result,
         linux_probe.gettid_result,
-        linux_probe.umask_result,
-        linux_probe.umask_restore_result,
-        linux_probe.getuid_result,
-        linux_probe.getgid_result,
-        linux_probe.geteuid_result,
-        linux_probe.getegid_result,
-        linux_probe.set_tid_address_result,
-        linux_probe.clear_tid_snapshot,
         linux_probe.sched_yield_result,
         linux_probe.clock_gettime_result,
         linux_probe.clock_seconds,
@@ -1123,83 +750,14 @@ pub extern "C" fn _start() -> ! {
     let ghost_probe = syscall::run_ghost_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} getpid={} getppid={} gettid={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} write={} open={} read={} close={} getpid={} gettid={} yield={} uptime-ns={} uname={} machine={} exit-captured={} exit-status={}",
         syscall::SyscallAbi::GhostBootstrap.as_str(),
         ghost_probe.write_result,
         ghost_probe.open_result,
-        ghost_probe.mmap_result,
-        ghost_probe.mprotect_result,
-        ghost_probe.munmap_result,
-        ghost_probe.brk_result,
-        ghost_probe.brk_set_result,
-        ghost_probe.brk_restore_result,
-        ghost_probe.nanosleep_result,
-        ghost_probe.gettimeofday_result,
-        ghost_probe.gettimeofday_seconds,
-        ghost_probe.gettimeofday_microseconds,
-        ghost_probe.getrandom_result,
-        ghost_probe.getrandom_sample,
-        ghost_probe.rt_sigaction_result,
-        ghost_probe.rt_sigprocmask_result,
-        ghost_probe.rt_sigmask_snapshot,
-        ghost_probe.rt_sigold_handler,
-        ghost_probe.pread64_result,
-        ghost_probe.pwrite64_result,
-        ghost_probe.readv_result,
-        ghost_probe.writev_result,
-        ghost_probe.wait4_result,
-        ghost_probe.setpgid_result,
-        ghost_probe.getpgid_result,
-        ghost_probe.setsid_result,
-        ghost_probe.getsid_result,
-        ghost_probe.getrlimit_result,
-        ghost_probe.setrlimit_result,
-        ghost_probe.prlimit64_result,
-        ghost_probe.prctl_set_name_result,
-        ghost_probe.prctl_get_name_result,
-        ghost_probe.prctl_set_dumpable_result,
-        ghost_probe.prctl_get_dumpable_result,
-        ghost_probe.set_robust_list_result,
-        ghost_probe.get_robust_list_result,
-        ghost_probe.rseq_register_result,
-        ghost_probe.rseq_unregister_result,
-        ghost_probe.arch_prctl_set_fs_result,
-        ghost_probe.arch_prctl_get_fs_result,
-        ghost_probe.arch_prctl_set_gs_result,
-        ghost_probe.arch_prctl_get_gs_result,
-        ghost_probe.futex_wait_result,
-        ghost_probe.futex_wake_result,
-        ghost_probe.pipe2_result,
-        ghost_probe.poll_result,
-        ghost_probe.ppoll_result,
-        ghost_probe.ioctl_result,
-        ghost_probe.access_result,
-        ghost_probe.stat_result,
-        ghost_probe.readlink_result,
-        ghost_probe.dup_result,
-        ghost_probe.dup2_result,
-        ghost_probe.dup3_result,
-        ghost_probe.fcntl_getfd_result,
-        ghost_probe.fcntl_getfl_result,
-        ghost_probe.getcwd_result,
-        ghost_probe.chdir_result,
-        ghost_probe.fchdir_result,
         ghost_probe.read_result,
-        ghost_probe.fstat_result,
-        ghost_probe.getdents_result,
-        ghost_probe.seek_result,
         ghost_probe.close_result,
         ghost_probe.getpid_result,
-        ghost_probe.getppid_result,
         ghost_probe.gettid_result,
-        ghost_probe.umask_result,
-        ghost_probe.umask_restore_result,
-        ghost_probe.getuid_result,
-        ghost_probe.getgid_result,
-        ghost_probe.geteuid_result,
-        ghost_probe.getegid_result,
-        ghost_probe.set_tid_address_result,
-        ghost_probe.clear_tid_snapshot,
         ghost_probe.yield_result,
         ghost_probe.uptime_result,
         ghost_probe.uname_result,
@@ -1210,83 +768,14 @@ pub extern "C" fn _start() -> ! {
     let hxnu_probe = syscall::run_hxnu_bootstrap_probe();
     kprintln_style!(
         crate::tty::ConsoleStyle::Success,
-        "HXNU: syscall bootstrap abi={} log_write={} open={} mmap={} mprotect={} munmap={} brk={} brk_set={} brk_restore={} nanosleep={} gettimeofday={} wall={}.{:06} getrandom={} random={:#x} rt_sigaction={} rt_sigprocmask={} sigmask={:#x} old_handler={:#x} pread64={} pwrite64={} readv={} writev={} wait4={} setpgid={} getpgid={} setsid={} getsid={} getrlimit={} setrlimit={} prlimit64={} prctl_set_name={} prctl_get_name={} prctl_set_dumpable={} prctl_get_dumpable={} set_robust_list={} get_robust_list={} rseq_register={} rseq_unregister={} arch_prctl_set_fs={} arch_prctl_get_fs={} arch_prctl_set_gs={} arch_prctl_get_gs={} futex_wait={} futex_wake={} pipe2={} poll={} ppoll={} ioctl={} access={} stat={} readlink={} dup={} dup2={} dup3={} fcntl_getfd={} fcntl_getfl={} getcwd={} chdir={} fchdir={} read={} fstat={} getdents={} seek={} close={} process_self={} process_parent={} thread_self={} umask={} umask_restore={} getuid={} getgid={} geteuid={} getegid={} set_tid_address={} clear_tid={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
+        "HXNU: syscall bootstrap abi={} log_write={} open={} read={} close={} process_self={} thread_self={} sched_yield={} uptime-ns={} abi-version={:#x} exit-captured={} exit-status={}",
         syscall::SyscallAbi::HxnuNativeBootstrap.as_str(),
         hxnu_probe.write_result,
         hxnu_probe.open_result,
-        hxnu_probe.mmap_result,
-        hxnu_probe.mprotect_result,
-        hxnu_probe.munmap_result,
-        hxnu_probe.brk_result,
-        hxnu_probe.brk_set_result,
-        hxnu_probe.brk_restore_result,
-        hxnu_probe.nanosleep_result,
-        hxnu_probe.gettimeofday_result,
-        hxnu_probe.gettimeofday_seconds,
-        hxnu_probe.gettimeofday_microseconds,
-        hxnu_probe.getrandom_result,
-        hxnu_probe.getrandom_sample,
-        hxnu_probe.rt_sigaction_result,
-        hxnu_probe.rt_sigprocmask_result,
-        hxnu_probe.rt_sigmask_snapshot,
-        hxnu_probe.rt_sigold_handler,
-        hxnu_probe.pread64_result,
-        hxnu_probe.pwrite64_result,
-        hxnu_probe.readv_result,
-        hxnu_probe.writev_result,
-        hxnu_probe.wait4_result,
-        hxnu_probe.setpgid_result,
-        hxnu_probe.getpgid_result,
-        hxnu_probe.setsid_result,
-        hxnu_probe.getsid_result,
-        hxnu_probe.getrlimit_result,
-        hxnu_probe.setrlimit_result,
-        hxnu_probe.prlimit64_result,
-        hxnu_probe.prctl_set_name_result,
-        hxnu_probe.prctl_get_name_result,
-        hxnu_probe.prctl_set_dumpable_result,
-        hxnu_probe.prctl_get_dumpable_result,
-        hxnu_probe.set_robust_list_result,
-        hxnu_probe.get_robust_list_result,
-        hxnu_probe.rseq_register_result,
-        hxnu_probe.rseq_unregister_result,
-        hxnu_probe.arch_prctl_set_fs_result,
-        hxnu_probe.arch_prctl_get_fs_result,
-        hxnu_probe.arch_prctl_set_gs_result,
-        hxnu_probe.arch_prctl_get_gs_result,
-        hxnu_probe.futex_wait_result,
-        hxnu_probe.futex_wake_result,
-        hxnu_probe.pipe2_result,
-        hxnu_probe.poll_result,
-        hxnu_probe.ppoll_result,
-        hxnu_probe.ioctl_result,
-        hxnu_probe.access_result,
-        hxnu_probe.stat_result,
-        hxnu_probe.readlink_result,
-        hxnu_probe.dup_result,
-        hxnu_probe.dup2_result,
-        hxnu_probe.dup3_result,
-        hxnu_probe.fcntl_getfd_result,
-        hxnu_probe.fcntl_getfl_result,
-        hxnu_probe.getcwd_result,
-        hxnu_probe.chdir_result,
-        hxnu_probe.fchdir_result,
         hxnu_probe.read_result,
-        hxnu_probe.fstat_result,
-        hxnu_probe.getdents_result,
-        hxnu_probe.seek_result,
         hxnu_probe.close_result,
         hxnu_probe.process_self_result,
-        hxnu_probe.process_parent_result,
         hxnu_probe.thread_self_result,
-        hxnu_probe.umask_result,
-        hxnu_probe.umask_restore_result,
-        hxnu_probe.getuid_result,
-        hxnu_probe.getgid_result,
-        hxnu_probe.geteuid_result,
-        hxnu_probe.getegid_result,
-        hxnu_probe.set_tid_address_result,
-        hxnu_probe.clear_tid_snapshot,
         hxnu_probe.sched_yield_result,
         hxnu_probe.uptime_result,
         hxnu_probe.abi_version_result,
@@ -1339,88 +828,11 @@ pub extern "C" fn _start() -> ! {
             schedstat,
         );
     }
-    if let Some(exec_status) = vfs::preview("/proc/exec", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: procfs preview exec={}",
-            exec_status,
-        );
-    }
-    if let Some(signal_status) = vfs::preview("/proc/signals", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: procfs preview signals={}",
-            signal_status,
-        );
-    }
-    if let Some(vector_status) = vfs::preview("/proc/vector", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: procfs preview vector={}",
-            vector_status,
-        );
-    }
-    if let Some(accel_status) = vfs::preview("/proc/accel", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: procfs preview accel={}",
-            accel_status,
-        );
-    }
-    if let Some(percpu_status) = vfs::preview("/proc/percpu", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: procfs preview percpu={}",
-            percpu_status,
-        );
-    }
     if let Some(devlist) = vfs::preview("/dev", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
             "HXNU: devfs preview root={}",
             devlist,
-        );
-    }
-    if let Some(sda) = vfs::preview("/dev/sda", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview sda={}",
-            sda,
-        );
-    }
-    if let Some(sda1) = vfs::preview("/dev/sda1", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview sda1={}",
-            sda1,
-        );
-    }
-    if let Some(nvme0n1) = vfs::preview("/dev/nvme0n1", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview nvme0n1={}",
-            nvme0n1,
-        );
-    }
-    if let Some(nvme0n1p1) = vfs::preview("/dev/nvme0n1p1", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview nvme0n1p1={}",
-            nvme0n1p1,
-        );
-    }
-    if let Some(nvm0n) = vfs::preview("/dev/nvm0n", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview nvm0n={}",
-            nvm0n,
-        );
-    }
-    if let Some(nvm0np1) = vfs::preview("/dev/nvm0np1", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: devfs preview nvm0np1={}",
-            nvm0np1,
         );
     }
     if let Some(initrd_root) = vfs::preview("/initrd", 80) {
@@ -1430,52 +842,12 @@ pub extern "C" fn _start() -> ! {
             initrd_root,
         );
     }
-    if let Some(fat_root) = vfs::preview("/fat", 80) {
+    if let Some(init) = vfs::preview("/initrd/init", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
-            "HXNU: fat preview root={}",
-            fat_root,
+            "HXNU: initrd preview init={}",
+            init,
         );
-    }
-    if let Some(fat_file_path) = fat::first_root_file_path() {
-        if let Some(fat_file) = vfs::preview(&fat_file_path, 80) {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Muted,
-                "HXNU: fat preview file path={} data={}",
-                fat_file_path,
-                fat_file,
-            );
-        }
-    }
-    if let Some(fat_nested_path) = fat::first_nested_file_path() {
-        if let Some(fat_nested) = vfs::preview(&fat_nested_path, 80) {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Muted,
-                "HXNU: fat preview nested path={} data={}",
-                fat_nested_path,
-                fat_nested,
-            );
-        }
-    }
-    if let Some(fat_long_root_path) = fat::first_long_name_root_file_path() {
-        if let Some(fat_long_root) = vfs::preview(&fat_long_root_path, 80) {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Muted,
-                "HXNU: fat preview lfn-root path={} data={}",
-                fat_long_root_path,
-                fat_long_root,
-            );
-        }
-    }
-    if let Some(fat_long_nested_path) = fat::first_long_name_nested_file_path() {
-        if let Some(fat_long_nested) = vfs::preview(&fat_long_nested_path, 80) {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Muted,
-                "HXNU: fat preview lfn-nested path={} data={}",
-                fat_long_nested_path,
-                fat_long_nested,
-            );
-        }
     }
     if let Some(console) = vfs::preview("/dev/console", 80) {
         kprintln_style!(
@@ -1483,35 +855,6 @@ pub extern "C" fn _start() -> ! {
             "HXNU: devfs preview console={}",
             console,
         );
-    }
-
-    if init_handoff.is_ok() {
-        drop(init_load_image);
-        drop(init_load_prep);
-        init_exec::discard_staged_activation();
-        let init_path = b"/initrd/init\0";
-        let init_argv = [init_path.as_ptr() as u64, 0];
-        let init_envp = [0u64];
-        let exec_outcome = syscall::dispatch(
-            syscall::SyscallAbi::HxnuNativeBootstrap,
-            syscall::HXNU_SYS_EXEC,
-            [
-                init_path.as_ptr() as u64,
-                init_argv.as_ptr() as u64,
-                init_envp.as_ptr() as u64,
-                0,
-                0,
-                0,
-            ],
-        );
-        if let syscall::SyscallAction::Continue = exec_outcome.action {
-            let errno = exec_outcome.value.saturating_neg();
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Warning,
-                "HXNU: init exec syscall deferred errno={}",
-                errno,
-            );
-        }
     }
 
     kprintln!("HXNU: Rust kernel skeleton online");

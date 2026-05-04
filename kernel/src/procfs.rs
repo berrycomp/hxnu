@@ -2,36 +2,20 @@ use alloc::string::String;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
-use crate::accel;
 use crate::arch;
-use crate::block;
-use crate::fat;
-use crate::init_exec;
 use crate::mm;
-use crate::percpu;
 use crate::sched;
 use crate::smp;
-use crate::syscall;
 use crate::time;
-use crate::vector;
 
 const PROCFS_DIRECTORIES: [&str; 2] = ["/", "/proc"];
-const PROCFS_FILES: [&str; 15] = [
+const PROCFS_FILES: [&str; 6] = [
     "/proc/version",
     "/proc/uptime",
     "/proc/meminfo",
     "/proc/cpuinfo",
-    "/proc/percpu",
-    "/proc/signals",
-    "/proc/vector",
-    "/proc/accel",
     "/proc/schedstat",
     "/proc/topology",
-    "/proc/initexec",
-    "/proc/exec",
-    "/proc/compress",
-    "/proc/block",
-    "/proc/fat",
 ];
 
 struct GlobalProcfs(UnsafeCell<Option<ProcfsState>>);
@@ -118,17 +102,8 @@ pub fn read(path: &str) -> Option<String> {
         "/proc/uptime" => Some(render_uptime()),
         "/proc/meminfo" => Some(render_meminfo()),
         "/proc/cpuinfo" => Some(render_cpuinfo(state)),
-        "/proc/percpu" => Some(percpu::render_status()),
-        "/proc/signals" => Some(syscall::render_signal_status()),
-        "/proc/vector" => Some(render_vector()),
-        "/proc/accel" => Some(render_accel()),
         "/proc/schedstat" => Some(render_schedstat()),
         "/proc/topology" => Some(render_topology(state)),
-        "/proc/initexec" => Some(init_exec::render_status()),
-        "/proc/exec" => Some(syscall::render_exec_status()),
-        "/proc/compress" => Some(render_compress()),
-        "/proc/block" => Some(render_block()),
-        "/proc/fat" => Some(render_fat()),
         _ => None,
     }
 }
@@ -207,41 +182,6 @@ fn render_cpuinfo(state: &ProcfsState) -> String {
     text
 }
 
-fn render_vector() -> String {
-    vector::render_proc_status()
-}
-
-fn render_accel() -> String {
-    let mut text = String::new();
-    let summary = accel::summary();
-    let _ = writeln!(text, "initialized {}", yes_no(accel::is_initialized()));
-    let _ = writeln!(text, "driver_count {}", summary.driver_count);
-    let _ = writeln!(text, "pending_jobs {}", summary.pending_jobs);
-    let _ = writeln!(text, "submitted_jobs {}", summary.submitted_jobs);
-    let _ = writeln!(text, "completed_jobs {}", summary.completed_jobs);
-    let _ = writeln!(text, "canceled_jobs {}", summary.canceled_jobs);
-
-    let mut index = 0usize;
-    while index < accel::driver_count() {
-        if let Some(driver) = accel::driver(index) {
-            let caps = (driver.caps)();
-            let _ = writeln!(
-                text,
-                "driver{} name={} kind={} probe={} queue={} mailbox={} dma={}",
-                index,
-                driver.driver_name,
-                driver.kind.as_str(),
-                yes_no((driver.probe)()),
-                caps.queue_depth,
-                yes_no(caps.mailbox),
-                yes_no(caps.dma),
-            );
-        }
-        index += 1;
-    }
-    text
-}
-
 fn render_schedstat() -> String {
     let mut text = String::new();
     let stats = sched::stats();
@@ -299,196 +239,6 @@ fn render_topology(state: &ProcfsState) -> String {
     text
 }
 
-fn render_compress() -> String {
-    let mut text = String::new();
-    let runtime = mm::compress::summary();
-    let codec = mm::compress::stats();
-    let store = mm::compress::store::stats();
-    let pager = mm::pager::stats();
-
-    let _ = writeln!(text, "runtime_initialized {}", yes_no(mm::compress::is_initialized()));
-    let _ = writeln!(text, "runtime_backend {}", runtime.backend);
-    let _ = writeln!(text, "runtime_profile {}", runtime.profile);
-    let _ = writeln!(text, "runtime_profile_version {}", runtime.profile_version);
-    let _ = writeln!(text, "runtime_page_bytes {}", runtime.page_bytes);
-    let _ = writeln!(text, "runtime_header_bytes {}", runtime.encoded_header_bytes);
-    let _ = writeln!(text, "runtime_max_encoded_page_bytes {}", runtime.max_encoded_page_bytes);
-    let _ = writeln!(text, "runtime_dictionary_entries {}", runtime.static_dictionary_entries);
-    let _ = writeln!(text, "runtime_pattern_entries {}", runtime.static_pattern_entries);
-
-    let _ = writeln!(text, "codec_encoded_pages {}", codec.encoded_pages);
-    let _ = writeln!(text, "codec_decoded_pages {}", codec.decoded_pages);
-    let _ = writeln!(text, "codec_zero_pages {}", codec.zero_pages);
-    let _ = writeln!(text, "codec_same_pages {}", codec.same_pages);
-    let _ = writeln!(text, "codec_sxrc_pages {}", codec.sxrc_pages);
-    let _ = writeln!(text, "codec_raw_pages {}", codec.raw_pages);
-    let _ = writeln!(text, "codec_raw_fallback_pages {}", codec.fallback_raw_pages);
-    let _ = writeln!(text, "codec_encode_failures {}", codec.encode_failures);
-    let _ = writeln!(text, "codec_decode_failures {}", codec.decode_failures);
-
-    let _ = writeln!(text, "store_initialized {}", yes_no(mm::compress::store::is_initialized()));
-    let _ = writeln!(text, "store_capacity_pages {}", store.capacity_pages);
-    let _ = writeln!(text, "store_capacity_bytes {}", store.capacity_bytes);
-    let _ = writeln!(text, "store_stored_pages {}", store.stored_pages);
-    let _ = writeln!(text, "store_stored_zero_pages {}", store.stored_zero_pages);
-    let _ = writeln!(text, "store_stored_same_pages {}", store.stored_same_pages);
-    let _ = writeln!(text, "store_stored_sxrc_pages {}", store.stored_sxrc_pages);
-    let _ = writeln!(text, "store_stored_raw_pages {}", store.stored_raw_pages);
-    let _ = writeln!(text, "store_current_encoded_bytes {}", store.current_encoded_bytes);
-    let _ = writeln!(text, "store_total_input_bytes {}", store.total_input_bytes);
-    let _ = writeln!(text, "store_total_encoded_bytes {}", store.total_encoded_bytes);
-    let _ = writeln!(text, "store_requests {}", store.store_requests);
-    let _ = writeln!(text, "store_successes {}", store.store_successes);
-    let _ = writeln!(text, "store_load_requests {}", store.load_requests);
-    let _ = writeln!(text, "store_load_successes {}", store.load_successes);
-    let _ = writeln!(text, "store_load_misses {}", store.load_misses);
-    let _ = writeln!(text, "store_replacements {}", store.replacements);
-    let _ = writeln!(text, "store_evictions {}", store.evictions);
-    let _ = writeln!(text, "store_encode_failures {}", store.encode_failures);
-    let _ = writeln!(text, "store_decode_failures {}", store.decode_failures);
-
-    let _ = writeln!(text, "pager_initialized {}", yes_no(mm::pager::is_initialized()));
-    let _ = writeln!(text, "pager_reclaim_requests {}", pager.reclaim_requests);
-    let _ = writeln!(text, "pager_reclaim_successes {}", pager.reclaim_successes);
-    let _ = writeln!(text, "pager_reclaim_failures {}", pager.reclaim_failures);
-    let _ = writeln!(text, "pager_restore_requests {}", pager.restore_requests);
-    let _ = writeln!(text, "pager_restore_successes {}", pager.restore_successes);
-    let _ = writeln!(text, "pager_restore_failures {}", pager.restore_failures);
-    let _ = writeln!(text, "pager_restore_misses {}", pager.restore_misses);
-    let _ = writeln!(text, "pager_verify_failures {}", pager.verify_failures);
-    let _ = writeln!(text, "pager_reclaimed_zero_pages {}", pager.reclaimed_zero_pages);
-    let _ = writeln!(text, "pager_reclaimed_same_pages {}", pager.reclaimed_same_pages);
-    let _ = writeln!(text, "pager_reclaimed_sxrc_pages {}", pager.reclaimed_sxrc_pages);
-    let _ = writeln!(text, "pager_reclaimed_raw_pages {}", pager.reclaimed_raw_pages);
-    let _ = writeln!(text, "pager_restored_zero_pages {}", pager.restored_zero_pages);
-    let _ = writeln!(text, "pager_restored_same_pages {}", pager.restored_same_pages);
-    let _ = writeln!(text, "pager_restored_sxrc_pages {}", pager.restored_sxrc_pages);
-    let _ = writeln!(text, "pager_restored_raw_pages {}", pager.restored_raw_pages);
-    let _ = writeln!(text, "pager_smoke_runs {}", pager.smoke_runs);
-    let _ = writeln!(text, "pager_smoke_successes {}", pager.smoke_successes);
-    text
-}
-
-fn render_block() -> String {
-    let mut text = String::new();
-    let summary = block::summary();
-    let stats = block::stats();
-
-    let _ = writeln!(text, "initialized {}", yes_no(block::is_initialized()));
-    let _ = writeln!(text, "driver_count {}", summary.driver_count);
-    let _ = writeln!(text, "device_count {}", summary.device_count);
-    let _ = writeln!(text, "partition_count {}", summary.partition_count);
-    let _ = writeln!(text, "total_bytes {}", summary.total_bytes);
-    let _ = writeln!(text, "mbr_devices {}", summary.mbr_device_count);
-    let _ = writeln!(text, "gpt_devices {}", summary.gpt_device_count);
-    let _ = writeln!(text, "read_requests {}", stats.read_requests);
-    let _ = writeln!(text, "read_sectors {}", stats.read_sectors);
-    let _ = writeln!(text, "read_bytes {}", stats.read_bytes);
-    let _ = writeln!(text, "read_failures {}", stats.read_failures);
-
-    let mut index = 0usize;
-    while index < block::device_count() {
-        if let Some(device) = block::device(index) {
-            let _ = writeln!(
-                text,
-                "device{} id={} name={} kind={} ro={} sectors={} sector-bytes={} size={}",
-                index,
-                device.id,
-                device.name,
-                device.kind.as_str(),
-                yes_no(device.read_only),
-                device.sector_count,
-                device.sector_size,
-                device.size_bytes,
-            );
-            let _ = writeln!(text, "device{} driver={}", index, device.driver_name);
-        }
-        index += 1;
-    }
-
-    let mut part_index = 0usize;
-    while part_index < block::partition_count() {
-        if let Some(partition) = block::partition(part_index) {
-            match partition.table_kind {
-                block::PartitionTableKind::Mbr => {
-                    let _ = writeln!(
-                        text,
-                        "partition{} id={} dev={} table={} mbr-index={} type={:#04x} bootable={} lba={} sectors={}",
-                        part_index,
-                        partition.id,
-                        partition.device_id,
-                        partition.table_kind.as_str(),
-                        partition.mbr_index,
-                        partition.partition_type,
-                        yes_no(partition.bootable),
-                        partition.start_lba,
-                        partition.sector_count,
-                    );
-                }
-                block::PartitionTableKind::Gpt => {
-                    let _ = writeln!(
-                        text,
-                        "partition{} id={} dev={} table={} gpt-index={} type-guid={} part-guid={} lba={} sectors={}",
-                        part_index,
-                        partition.id,
-                        partition.device_id,
-                        partition.table_kind.as_str(),
-                        partition.gpt_index,
-                        format_guid(&partition.gpt_type_guid),
-                        format_guid(&partition.gpt_partition_guid),
-                        partition.start_lba,
-                        partition.sector_count,
-                    );
-                }
-            }
-        }
-        part_index += 1;
-    }
-
-    text
-}
-
-fn render_fat() -> String {
-    let mut text = String::new();
-    let summary = fat::summary();
-
-    let _ = writeln!(text, "initialized {}", yes_no(fat::is_initialized()));
-    let _ = writeln!(text, "mounted {}", yes_no(summary.mounted));
-    let _ = writeln!(text, "partition_id {:?}", summary.partition_id);
-    let _ = writeln!(text, "device_id {:?}", summary.device_id);
-    let _ = writeln!(
-        text,
-        "partition_table {}",
-        summary.partition_table.map_or("<none>", |kind| kind.as_str())
-    );
-    let _ = writeln!(
-        text,
-        "fat_type {}",
-        summary.fat_type.map_or("<none>", |kind| kind.as_str())
-    );
-    let _ = writeln!(text, "root_entry_count {}", summary.root_entry_count);
-    let _ = writeln!(text, "directory_count {}", summary.directory_count);
-    let _ = writeln!(text, "file_count {}", summary.file_count);
-    text
-}
-
-fn format_guid(guid: &[u8; 16]) -> String {
-    let mut text = String::new();
-    for (index, byte) in guid.iter().copied().enumerate() {
-        if index == 4 || index == 6 || index == 8 || index == 10 {
-            text.push('-');
-        }
-        append_hex_byte(&mut text, byte);
-    }
-    text
-}
-
-fn append_hex_byte(text: &mut String, byte: u8) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    text.push(HEX[(byte >> 4) as usize] as char);
-    text.push(HEX[(byte & 0x0f) as usize] as char);
-}
-
 fn cpu_flags(cpu: &arch::x86_64::CpuInfo) -> String {
     let mut text = String::new();
     append_flag(&mut text, "apic");
@@ -507,7 +257,6 @@ fn cpu_flags(cpu: &arch::x86_64::CpuInfo) -> String {
     if cpu.hypervisor_present {
         append_flag(&mut text, "hypervisor");
     }
-    vector::append_cpuinfo_flags(&mut text);
     text
 }
 

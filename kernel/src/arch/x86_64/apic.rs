@@ -14,11 +14,9 @@ pub const SPURIOUS_VECTOR: usize = 0xff;
 const PIC_MASTER_DATA: u16 = 0x21;
 const PIC_SLAVE_DATA: u16 = 0xa1;
 
-const APIC_TPR: u32 = 0x080;
+const APIC_TPR: u32 = 0x80;
 const APIC_EOI: u32 = 0x0b0;
 const APIC_SVR: u32 = 0x0f0;
-const APIC_ICR_LOW: u32 = 0x300;
-const APIC_ICR_HIGH: u32 = 0x310;
 const APIC_LVT_TIMER: u32 = 0x320;
 const APIC_TIMER_INITIAL_COUNT: u32 = 0x380;
 const APIC_TIMER_DIVIDE: u32 = 0x3e0;
@@ -31,12 +29,6 @@ const APIC_TIMER_DIVIDE_VALUE: u32 = 16;
 const APIC_TIMER_INITIAL_TICKS: u32 = 1_000_000;
 const APIC_PERIODIC_INITIAL_TICKS: u32 = 250_000;
 const APIC_TIMER_TIMEOUT_NS: u64 = 500_000_000;
-
-const ICR_DELIVERY_STATUS: u32 = 1 << 12;
-const ICR_LEVEL_ASSERT: u32 = 1 << 14;
-const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
-const ICR_DELIVERY_INIT: u32 = 5 << 8;
-const ICR_DELIVERY_STARTUP: u32 = 6 << 8;
 
 static APIC_BASE_VIRTUAL: AtomicU64 = AtomicU64::new(0);
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -58,7 +50,7 @@ pub struct PeriodicTimer {
     pub initial_count: u32,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub enum TimerError {
     Unsupported,
     X2ApicModeUnsupported,
@@ -86,7 +78,6 @@ impl From<early_map::MapError> for TimerError {
         match value {
             early_map::MapError::AddressOverflow => Self::MissingBaseAddress,
             early_map::MapError::PageTableAllocationFailed => Self::PageTableAllocationFailed,
-            early_map::MapError::MappingConflict => Self::MissingBaseAddress,
         }
     }
 }
@@ -190,8 +181,18 @@ fn ensure_timer_ready(hhdm_offset: u64, cpu_info: &CpuInfo) -> Result<(), TimerE
         return Err(TimerError::MissingBaseAddress);
     }
 
-    ensure_apic_mapped(hhdm_offset, cpu_info.apic_base)?;
-    enable_svr();
+    let apic_base_virtual = early_map::ensure_region_mapped(
+        hhdm_offset,
+        cpu_info.apic_base,
+        4096,
+        early_map::FLAG_WRITE_THROUGH | early_map::FLAG_CACHE_DISABLE,
+    )?;
+    APIC_BASE_VIRTUAL.store(apic_base_virtual, Ordering::Release);
+
+    mask_legacy_pic();
+    write_register(APIC_TPR, 0);
+    let spurious_value = (read_register(APIC_SVR) & !0xff) | APIC_SVR_ENABLE | (SPURIOUS_VECTOR as u32);
+    write_register(APIC_SVR, spurious_value);
     Ok(())
 }
 
@@ -221,60 +222,6 @@ fn enable_interrupts() {
 fn disable_interrupts() {
     unsafe {
         asm!("cli", options(nomem, nostack, preserves_flags));
-    }
-}
-
-pub fn ensure_apic_mapped(hhdm_offset: u64, apic_base: u64) -> Result<u64, TimerError> {
-    let apic_base_virtual = early_map::ensure_region_mapped(
-        hhdm_offset,
-        apic_base,
-        4096,
-        early_map::FLAG_WRITE_THROUGH | early_map::FLAG_CACHE_DISABLE,
-    )?;
-    APIC_BASE_VIRTUAL.store(apic_base_virtual, Ordering::Release);
-    Ok(apic_base_virtual)
-}
-
-pub fn enable_svr() {
-    mask_legacy_pic();
-    write_register(APIC_TPR, 0);
-    let spurious_value =
-        (read_register(APIC_SVR) & !0xff) | APIC_SVR_ENABLE | (SPURIOUS_VECTOR as u32);
-    write_register(APIC_SVR, spurious_value);
-}
-
-pub fn send_init_ipi(apic_id: u32) {
-    wait_for_icr_idle();
-    write_register(APIC_ICR_HIGH, apic_id << 24);
-    write_register(
-        APIC_ICR_LOW,
-        ICR_DELIVERY_INIT | ICR_LEVEL_ASSERT | ICR_TRIGGER_LEVEL,
-    );
-}
-
-pub fn send_init_ipi_deassert(apic_id: u32) {
-    wait_for_icr_idle();
-    write_register(APIC_ICR_HIGH, apic_id << 24);
-    write_register(
-        APIC_ICR_LOW,
-        ICR_DELIVERY_INIT | ICR_TRIGGER_LEVEL,
-    );
-}
-
-pub fn send_startup_ipi(apic_id: u32, vector: u8) {
-    wait_for_icr_idle();
-    let icr_low = ICR_DELIVERY_STARTUP | (vector as u32);
-    crate::serial::write_str("HXNU: apic sipi enter\n");
-    write_register(APIC_ICR_HIGH, apic_id << 24);
-    write_register(APIC_ICR_LOW, icr_low);
-    crate::serial::write_str("HXNU: apic sipi sent\n");
-}
-
-fn wait_for_icr_idle() {
-    while read_register(APIC_ICR_LOW) & ICR_DELIVERY_STATUS != 0 {
-        unsafe {
-            asm!("pause", options(nomem, nostack, preserves_flags));
-        }
     }
 }
 

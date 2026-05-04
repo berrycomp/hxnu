@@ -1,4 +1,5 @@
 use core::arch::asm;
+use core::fmt::Write;
 
 const COM1_PORT: u16 = 0x3F8;
 const DATA_REGISTER: u16 = COM1_PORT;
@@ -36,6 +37,21 @@ fn write_byte(byte: u8) {
         outb(DATA_REGISTER, byte);
     }
 }
+
+struct SerialWriter;
+
+impl Write for SerialWriter {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        write_str(text);
+        Ok(())
+    }
+}
+
+pub fn write_fmt(args: core::fmt::Arguments<'_>) {
+    let mut writer = SerialWriter;
+    let _ = writer.write_fmt(args);
+}
+
 
 unsafe fn outb(port: u16, value: u8) {
     unsafe {

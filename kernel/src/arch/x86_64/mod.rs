@@ -1,4 +1,3 @@
-mod ap_boot;
 mod apic;
 mod context;
 mod cpuid;
@@ -33,21 +32,14 @@ pub struct SyscallSelfTest {
     pub hxnu_abi_version_result: i64,
 }
 
-pub use ap_boot::bringup_all_aps;
 pub use apic::{PeriodicTimer, TimerBringUp, TimerError};
 pub use context::TaskContext;
-pub use cpu::{CpuInfo, read_msr, write_msr};
-pub use early_map::{MapError, PAGE_USER};
-pub use gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
+pub use cpu::CpuInfo;
+pub use early_map::MapError;
 
 pub fn initialize() {
     gdt::initialize();
-    gdt::load_tss();
     interrupts::initialize();
-}
-
-pub fn load_idt() {
-    interrupts::load_idt();
 }
 
 pub fn segment_selectors() -> gdt::SegmentSelectors {
@@ -56,10 +48,6 @@ pub fn segment_selectors() -> gdt::SegmentSelectors {
 
 pub fn probe_cpu() -> cpu::CpuInfo {
     cpu::probe()
-}
-
-pub fn current_initial_apic_id() -> u32 {
-    cpu::current_initial_apic_id()
 }
 
 pub fn cpuid(leaf: u32) -> CpuidResult {
@@ -95,19 +83,6 @@ pub fn ensure_physical_region_mapped(
     extra_flags: u64,
 ) -> Result<u64, MapError> {
     early_map::ensure_region_mapped(hhdm_offset, physical_address, length, extra_flags)
-}
-
-pub fn map_virtual_page(
-    hhdm_offset: u64,
-    virtual_address: u64,
-    physical_address: u64,
-    extra_flags: u64,
-) -> Result<(), MapError> {
-    early_map::map_virtual_page(hhdm_offset, virtual_address, physical_address, extra_flags)
-}
-
-pub fn unmap_virtual_page(hhdm_offset: u64, virtual_address: u64) -> Result<Option<u64>, MapError> {
-    early_map::unmap_virtual_page(hhdm_offset, virtual_address)
 }
 
 pub fn initialize_kernel_thread_context(
@@ -151,13 +126,4 @@ pub fn run_syscall_self_test() -> SyscallSelfTest {
         hxnu_close_result: result.hxnu_close_result,
         hxnu_abi_version_result: result.hxnu_abi_version_result,
     }
-}
-
-pub fn launch_exec_on_syscall_stack(
-    process_id: u64,
-    path_ptr: *const u8,
-    path_len: usize,
-    stack: &crate::syscall::BootstrapExecStackImage,
-) -> i64 {
-    interrupts::launch_exec_on_syscall_stack(process_id, path_ptr, path_len, stack)
 }

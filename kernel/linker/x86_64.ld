@@ -24,7 +24,6 @@ SECTIONS
 
     .text : ALIGN(0x1000)
     {
-        KEEP(*(.ap_trampoline))
         KEEP(*(.text._start))
         *(.text .text.*)
     } :text

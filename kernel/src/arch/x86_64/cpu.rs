@@ -85,11 +85,7 @@ pub fn probe() -> CpuInfo {
     }
 }
 
-pub fn current_initial_apic_id() -> u32 {
-    (cpuid::query(1).ebx >> 24) & 0xff
-}
-
-pub fn read_msr(msr: u32) -> u64 {
+fn read_msr(msr: u32) -> u64 {
     let low: u32;
     let high: u32;
     unsafe {
@@ -102,18 +98,4 @@ pub fn read_msr(msr: u32) -> u64 {
         );
     }
     ((high as u64) << 32) | (low as u64)
-}
-
-pub fn write_msr(msr: u32, value: u64) {
-    let low = value as u32;
-    let high = (value >> 32) as u32;
-    unsafe {
-        core::arch::asm!(
-            "wrmsr",
-            in("ecx") msr,
-            in("eax") low,
-            in("edx") high,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
 }

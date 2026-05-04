@@ -25,14 +25,11 @@ static TMPFS: GlobalTmpfs = GlobalTmpfs::new();
 
 struct TmpfsState {
     initialized: bool,
-    next_file_id: u64,
     files: Vec<TmpfsFile>,
 }
 
 struct TmpfsFile {
-    id: u64,
-    path: Option<String>,
-    open_count: usize,
+    path: String,
     content: Vec<u8>,
 }
 
@@ -56,15 +53,8 @@ pub struct TmpfsSummary {
 }
 
 pub struct TmpfsOpenFile {
-    pub file_id: u64,
     pub path: String,
     pub content: Vec<u8>,
-}
-
-pub struct TmpfsFileStatus {
-    pub file_id: u64,
-    pub size: usize,
-    pub link_count: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -98,7 +88,6 @@ pub fn initialize() -> Result<TmpfsSummary, TmpfsError> {
 
     *slot = Some(TmpfsState {
         initialized: true,
-        next_file_id: 1,
         files: Vec::new(),
     });
     Ok(summary())
@@ -121,9 +110,8 @@ pub fn summary() -> TmpfsSummary {
     let total_bytes = state
         .files
         .iter()
-        .filter(|file| file.path.is_some())
         .fold(0usize, |total, file| total.saturating_add(file.content.len()));
-    let file_count = state.files.iter().filter(|file| file.path.is_some()).count();
+    let file_count = state.files.len();
     TmpfsSummary {
         directory_count: 2,
         file_count,
@@ -139,16 +127,6 @@ pub fn handles_path(path: &str) -> bool {
         || path.starts_with("/run/")
 }
 
-pub fn file_id_for_path(path: &str) -> Option<u64> {
-    let normalized = normalize_path(path)?;
-    let state = unsafe { (&*TMPFS.get()).as_ref()? };
-    state
-        .files
-        .iter()
-        .find(|file| file.path.as_deref() == Some(normalized.as_str()))
-        .map(|file| file.id)
-}
-
 pub fn node_kind(path: &str) -> Option<TmpfsNodeKind> {
     let normalized = normalize_path(path)?;
     if normalized == TMP_ROOT_PATH || normalized == RUN_ROOT_PATH {
@@ -156,11 +134,7 @@ pub fn node_kind(path: &str) -> Option<TmpfsNodeKind> {
     }
 
     let state = unsafe { (&*TMPFS.get()).as_ref()? };
-    if state
-        .files
-        .iter()
-        .any(|file| file.path.as_deref() == Some(normalized.as_str()))
-    {
+    if state.files.iter().any(|file| file.path == normalized) {
         return Some(TmpfsNodeKind::File);
     }
     None
@@ -172,10 +146,7 @@ pub fn node_info(path: &str) -> Option<TmpfsNodeInfo> {
         TmpfsNodeKind::File => {
             let normalized = normalize_path(path)?;
             let state = unsafe { (&*TMPFS.get()).as_ref()? };
-            let file = state
-                .files
-                .iter()
-                .find(|file| file.path.as_deref() == Some(normalized.as_str()))?;
+            let file = state.files.iter().find(|file| file.path == normalized)?;
             Some(TmpfsNodeInfo {
                 size: file.content.len(),
             })
@@ -197,10 +168,7 @@ pub fn read(path: &str) -> Option<String> {
 pub fn read_bytes(path: &str) -> Option<Vec<u8>> {
     let normalized = normalize_path(path)?;
     let state = unsafe { (&*TMPFS.get()).as_ref()? };
-    let file = state
-        .files
-        .iter()
-        .find(|file| file.path.as_deref() == Some(normalized.as_str()))?;
+    let file = state.files.iter().find(|file| file.path == normalized)?;
     Some(file.content.clone())
 }
 
@@ -213,17 +181,11 @@ pub fn open_file(path: &str, create: bool, truncate: bool) -> Result<TmpfsOpenFi
         return Err(TmpfsError::IsDirectory);
     }
 
-    if let Some(file) = state
-        .files
-        .iter_mut()
-        .find(|file| file.path.as_deref() == Some(normalized.as_str()))
-    {
+    if let Some(file) = state.files.iter_mut().find(|file| file.path == normalized) {
         if truncate {
             file.content.clear();
         }
-        file.open_count = file.open_count.saturating_add(1);
         return Ok(TmpfsOpenFile {
-            file_id: file.id,
             path: normalized,
             content: file.content.clone(),
         });
@@ -236,16 +198,11 @@ pub fn open_file(path: &str, create: bool, truncate: bool) -> Result<TmpfsOpenFi
         return Err(TmpfsError::FileLimitReached);
     }
 
-    let file_id = state.next_file_id;
-    state.next_file_id = state.next_file_id.saturating_add(1);
     state.files.push(TmpfsFile {
-        id: file_id,
-        path: Some(normalized.clone()),
-        open_count: 1,
+        path: normalized.clone(),
         content: Vec::new(),
     });
     Ok(TmpfsOpenFile {
-        file_id,
         path: normalized,
         content: Vec::new(),
     })
@@ -256,113 +213,11 @@ pub fn write_file(path: &str, content: &[u8]) -> Result<(), TmpfsError> {
     ensure_tmpfs_parent(&normalized)?;
     let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
 
-    let Some(file) = state
-        .files
-        .iter_mut()
-        .find(|file| file.path.as_deref() == Some(normalized.as_str()))
-    else {
+    let Some(file) = state.files.iter_mut().find(|file| file.path == normalized) else {
         return Err(TmpfsError::NotFound);
     };
     file.content.clear();
     file.content.extend_from_slice(content);
-    Ok(())
-}
-
-pub fn read_bytes_by_id(file_id: u64) -> Option<Vec<u8>> {
-    let state = unsafe { (&*TMPFS.get()).as_ref()? };
-    let file = state.files.iter().find(|file| file.id == file_id)?;
-    Some(file.content.clone())
-}
-
-pub fn write_file_by_id(file_id: u64, content: &[u8]) -> Result<(), TmpfsError> {
-    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
-    let Some(file) = state.files.iter_mut().find(|file| file.id == file_id) else {
-        return Err(TmpfsError::NotFound);
-    };
-    file.content.clear();
-    file.content.extend_from_slice(content);
-    Ok(())
-}
-
-pub fn close_file_handle(file_id: u64) -> Result<(), TmpfsError> {
-    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
-    let Some(index) = state.files.iter().position(|file| file.id == file_id) else {
-        return Err(TmpfsError::NotFound);
-    };
-    if state.files[index].open_count != 0 {
-        state.files[index].open_count -= 1;
-    }
-    collect_orphaned_file(state, index);
-    Ok(())
-}
-
-pub fn file_status_by_id(file_id: u64) -> Option<TmpfsFileStatus> {
-    let state = unsafe { (&*TMPFS.get()).as_ref()? };
-    let file = state.files.iter().find(|file| file.id == file_id)?;
-    Some(TmpfsFileStatus {
-        file_id: file.id,
-        size: file.content.len(),
-        link_count: usize::from(file.path.is_some()),
-    })
-}
-
-pub fn unlink_file(path: &str) -> Result<(), TmpfsError> {
-    let normalized = normalize_path(path).ok_or(TmpfsError::InvalidPath)?;
-    if normalized == TMP_ROOT_PATH || normalized == RUN_ROOT_PATH {
-        return Err(TmpfsError::IsDirectory);
-    }
-
-    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
-    let Some(index) = state
-        .files
-        .iter()
-        .position(|file| file.path.as_deref() == Some(normalized.as_str()))
-    else {
-        return Err(TmpfsError::NotFound);
-    };
-    state.files[index].path = None;
-    collect_orphaned_file(state, index);
-    Ok(())
-}
-
-pub fn rename_file(source_path: &str, destination_path: &str) -> Result<(), TmpfsError> {
-    let source = normalize_path(source_path).ok_or(TmpfsError::InvalidPath)?;
-    let destination = normalize_path(destination_path).ok_or(TmpfsError::InvalidPath)?;
-    ensure_tmpfs_parent(&source)?;
-    ensure_tmpfs_parent(&destination)?;
-    if source == TMP_ROOT_PATH
-        || source == RUN_ROOT_PATH
-        || destination == TMP_ROOT_PATH
-        || destination == RUN_ROOT_PATH
-    {
-        return Err(TmpfsError::IsDirectory);
-    }
-    if source == destination {
-        return Ok(());
-    }
-
-    let state = unsafe { (&mut *TMPFS.get()).as_mut() }.ok_or(TmpfsError::NotInitialized)?;
-    let Some(mut source_index) = state
-        .files
-        .iter()
-        .position(|file| file.path.as_deref() == Some(source.as_str()))
-    else {
-        return Err(TmpfsError::NotFound);
-    };
-
-    if let Some(destination_index) = state
-        .files
-        .iter()
-        .position(|file| file.path.as_deref() == Some(destination.as_str()))
-    {
-        state.files[destination_index].path = None;
-        collect_orphaned_file(state, destination_index);
-        if destination_index < source_index {
-            source_index -= 1;
-        }
-    }
-
-    state.files[source_index].path = Some(destination);
     Ok(())
 }
 
@@ -395,10 +250,7 @@ fn render_directory(path: &str) -> Option<String> {
     let state = unsafe { (&*TMPFS.get()).as_ref()? };
     let mut entries: Vec<String> = Vec::new();
     for file in &state.files {
-        let Some(file_path) = file.path.as_deref() else {
-            continue;
-        };
-        if let Some(name) = direct_child_name(path, file_path) {
+        if let Some(name) = direct_child_name(path, &file.path) {
             entries.push(String::from(name));
         }
     }
@@ -455,13 +307,4 @@ fn normalize_path(path: &str) -> Option<String> {
         normalized.push_str(segment);
     }
     Some(normalized)
-}
-
-fn collect_orphaned_file(state: &mut TmpfsState, index: usize) {
-    if index >= state.files.len() {
-        return;
-    }
-    if state.files[index].path.is_none() && state.files[index].open_count == 0 {
-        state.files.remove(index);
-    }
 }

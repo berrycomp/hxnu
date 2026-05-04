@@ -1,4 +1,3 @@
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -7,22 +6,15 @@ use core::fmt::Write;
 use crate::devfs;
 use crate::devfs::DevfsNodeKind;
 use crate::exec;
-use crate::fat;
-use crate::fat::FatNodeKind;
 use crate::initrd;
 use crate::initrd::InitrdNodeKind;
 use crate::procfs;
 use crate::procfs::ProcfsNodeKind;
-use crate::tmpfs;
-use crate::tmpfs::TmpfsNodeKind;
 
 const ROOT_PATH: &str = "/";
 const DEV_ROOT_PATH: &str = "/dev";
 const PROC_ROOT_PATH: &str = "/proc";
 const INITRD_ROOT_PATH: &str = "/initrd";
-const FAT_ROOT_PATH: &str = "/fat";
-const TMP_ROOT_PATH: &str = "/tmp";
-const RUN_ROOT_PATH: &str = "/run";
 const INIT_PATH: &str = "/initrd/init";
 
 struct GlobalVfs(UnsafeCell<Option<VfsState>>);
@@ -41,25 +33,9 @@ impl GlobalVfs {
 
 static VFS: GlobalVfs = GlobalVfs::new();
 
-pub trait FileSystemOps {
-    fn lookup(&self, path: &str) -> Option<VfsNode>;
-    fn read(&self, node: &VfsNode) -> Option<String>;
-    fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]>;
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize>;
-    fn write_at(&self, node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize>;
-    fn file_len(&self, node: &VfsNode) -> Option<usize>;
-}
-
-struct VfsMount {
-    kind: VfsMountKind,
-    path: &'static str,
-    fs: &'static dyn FileSystemOps,
-}
-
+#[derive(Copy, Clone)]
 struct VfsState {
     initialized: bool,
-    mounts: Vec<VfsMount>,
-    dentry_cache: BTreeMap<String, VfsNode>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -68,8 +44,6 @@ pub enum VfsMountKind {
     Devfs,
     Initrd,
     Procfs,
-    Fat,
-    Tmpfs,
 }
 
 impl VfsMountKind {
@@ -79,8 +53,6 @@ impl VfsMountKind {
             Self::Devfs => "devfs",
             Self::Initrd => "initrd",
             Self::Procfs => "procfs",
-            Self::Fat => "fat",
-            Self::Tmpfs => "tmpfs",
         }
     }
 }
@@ -92,15 +64,12 @@ pub enum VfsNodeKind {
     Device,
 }
 
-#[derive(Clone)]
 pub struct VfsNode {
     pub path: String,
     pub mount: VfsMountKind,
     pub kind: VfsNodeKind,
     pub size: usize,
     pub executable: bool,
-    pub inode_number: u64,
-    pub fs_private: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -167,24 +136,6 @@ pub struct VmMapPlanEntry {
     pub executable: bool,
 }
 
-pub struct VmMapImageEntry {
-    pub index: usize,
-    pub file_offset: u64,
-    pub virtual_start: u64,
-    pub virtual_end: u64,
-    pub map_start: u64,
-    pub map_end: u64,
-    pub page_offset: u64,
-    pub file_bytes: u64,
-    pub memory_bytes: u64,
-    pub zero_fill_bytes: u64,
-    pub alignment: u64,
-    pub readable: bool,
-    pub writable: bool,
-    pub executable: bool,
-    pub bytes: Vec<u8>,
-}
-
 #[derive(Copy, Clone)]
 pub enum ExecutableDiscoveryError {
     VfsUnavailable,
@@ -216,8 +167,6 @@ pub struct ExecutableLoadPrep {
     pub machine: Option<u16>,
     pub entry_point: Option<u64>,
     pub program_header_count: usize,
-    pub program_header_entry_size: usize,
-    pub program_header_virtual_address: Option<u64>,
     pub load_segment_count: usize,
     pub load_base: Option<u64>,
     pub load_offset: Option<u64>,
@@ -235,27 +184,6 @@ pub struct ExecutableLoadPrep {
     pub interpreter_source: Option<String>,
     pub interpreter_argument: Option<String>,
     pub interpreter_resolved: bool,
-}
-
-pub struct ExecutableLoadImage {
-    pub path: String,
-    pub mount: VfsMountKind,
-    pub format: ExecutableFormat,
-    pub size: usize,
-    pub executable: bool,
-    pub image_type: Option<u16>,
-    pub machine: Option<u16>,
-    pub entry_point: Option<u64>,
-    pub program_header_count: usize,
-    pub program_header_entry_size: usize,
-    pub program_header_virtual_address: Option<u64>,
-    pub interpreter: Option<String>,
-    pub interpreter_source: Option<String>,
-    pub interpreter_argument: Option<String>,
-    pub interpreter_resolved: bool,
-    pub vm_map_images: Vec<VmMapImageEntry>,
-    pub vm_map_total_bytes: u64,
-    pub vm_map_zero_fill_bytes: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -279,67 +207,13 @@ pub fn initialize() -> Result<VfsSummary, VfsError> {
         return Err(VfsError::AlreadyInitialized);
     }
 
-    let mut mounts = Vec::new();
-    mounts.push(VfsMount {
-        kind: VfsMountKind::Root,
-        path: ROOT_PATH,
-        fs: &ROOT_FS,
-    });
-    mounts.push(VfsMount {
-        kind: VfsMountKind::Devfs,
-        path: DEV_ROOT_PATH,
-        fs: &DEVFS_FS,
-    });
-    mounts.push(VfsMount {
-        kind: VfsMountKind::Procfs,
-        path: PROC_ROOT_PATH,
-        fs: &PROCFS_FS,
-    });
-    if initrd::is_initialized() {
-        mounts.push(VfsMount {
-            kind: VfsMountKind::Initrd,
-            path: INITRD_ROOT_PATH,
-            fs: &INITRD_FS,
-        });
-    }
-    if fat::is_initialized() {
-        mounts.push(VfsMount {
-            kind: VfsMountKind::Fat,
-            path: FAT_ROOT_PATH,
-            fs: &FAT_FS,
-        });
-    }
-    if tmpfs::is_initialized() {
-        mounts.push(VfsMount {
-            kind: VfsMountKind::Tmpfs,
-            path: TMP_ROOT_PATH,
-            fs: &TMPFS_FS,
-        });
-        mounts.push(VfsMount {
-            kind: VfsMountKind::Tmpfs,
-            path: RUN_ROOT_PATH,
-            fs: &TMPFS_FS,
-        });
-    }
-
-    *slot = Some(VfsState {
-        initialized: true,
-        mounts,
-        dentry_cache: BTreeMap::new(),
-    });
+    *slot = Some(VfsState { initialized: true });
     Ok(summary())
 }
 
 pub fn summary() -> VfsSummary {
-    let state = unsafe { (&*VFS.get()).as_ref() };
-    let Some(state) = state else {
-        return VfsSummary {
-            mount_count: 0,
-            root_entry_count: 0,
-            directory_count: 0,
-        };
-    };
-    if !state.initialized {
+    let initialized = unsafe { (&*VFS.get()).as_ref().is_some_and(|state| state.initialized) };
+    if !initialized {
         return VfsSummary {
             mount_count: 0,
             root_entry_count: 0,
@@ -348,116 +222,35 @@ pub fn summary() -> VfsSummary {
     }
 
     let initrd_online = initrd::is_initialized();
-    let fat_online = fat::is_initialized();
-    let tmpfs_online = tmpfs::is_initialized();
-    let mount_count = state.mounts.len();
-    let root_entry_count = mount_count.saturating_sub(1);
+    let mount_count = 2 + usize::from(initrd_online);
     let directory_count = 3
         + if initrd_online {
             initrd::summary().directory_count
-        } else {
-            0
-        }
-        + if fat_online {
-            fat::summary().directory_count
-        } else {
-            0
-        }
-        + if tmpfs_online {
-            tmpfs::summary().directory_count
         } else {
             0
         };
 
     VfsSummary {
         mount_count,
-        root_entry_count,
+        root_entry_count: mount_count,
         directory_count,
     }
 }
 
 pub fn lookup(path: &str) -> Option<VfsNode> {
+    let _state = unsafe { (&*VFS.get()).as_ref()? };
     let normalized = normalize_path(path)?;
-    let state = unsafe { &mut *VFS.get() };
-    let state = state.as_mut()?;
-    if let Some(node) = state.dentry_cache.get(&normalized) {
-        return Some(node.clone());
-    }
-    let node = resolve_node(&normalized)?;
-    state.dentry_cache.insert(normalized, node.clone());
-    Some(node)
-}
-
-pub fn reverse_lookup(inode: u64) -> Option<String> {
-    let state = unsafe { &mut *VFS.get() };
-    let state = state.as_mut()?;
-    for (path, node) in &state.dentry_cache {
-        if node.inode_number == inode {
-            return Some(path.clone());
-        }
-    }
-    None
-}
-
-pub fn invalidate_dentry(path: &str) {
-    let normalized = match normalize_path(path) {
-        Some(p) => p,
-        None => return,
-    };
-    let state = unsafe { &mut *VFS.get() };
-    if let Some(state) = state.as_mut() {
-        state.dentry_cache.remove(&normalized);
-    }
-}
-
-pub fn retarget_dentry(source_path: &str, destination_path: &str) {
-    let source = match normalize_path(source_path) {
-        Some(p) => p,
-        None => return,
-    };
-    let destination = match normalize_path(destination_path) {
-        Some(p) => p,
-        None => return,
-    };
-    let state = unsafe { &mut *VFS.get() };
-    if let Some(state) = state.as_mut() {
-        if let Some(node) = state.dentry_cache.remove(&source) {
-            let mut new_node = node;
-            new_node.path = destination.clone();
-            state.dentry_cache.insert(destination, new_node);
-        }
-    }
-}
-
-fn find_mount_ops(kind: VfsMountKind) -> Option<&'static dyn FileSystemOps> {
-    let state = unsafe { (&*VFS.get()).as_ref()? };
-    for mount in &state.mounts {
-        if mount.kind == kind {
-            return Some(mount.fs);
-        }
-    }
-    None
+    resolve_node(&normalized)
 }
 
 pub fn read(path: &str) -> Option<String> {
     let node = lookup(path)?;
-    let ops = find_mount_ops(node.mount)?;
-    ops.read(&node)
-}
-
-pub fn read_at(node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-    let ops = find_mount_ops(node.mount)?;
-    ops.read_at(node, offset, buf)
-}
-
-pub fn write_at(node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize> {
-    let ops = find_mount_ops(node.mount)?;
-    ops.write_at(node, offset, buf)
-}
-
-pub fn file_len(node: &VfsNode) -> Option<usize> {
-    let ops = find_mount_ops(node.mount)?;
-    ops.file_len(node)
+    match node.mount {
+        VfsMountKind::Root => Some(render_root()),
+        VfsMountKind::Devfs => devfs::read(&node.path),
+        VfsMountKind::Initrd => initrd::read(&node.path),
+        VfsMountKind::Procfs => procfs::read(&node.path),
+    }
 }
 
 pub fn preview(path: &str, max_len: usize) -> Option<String> {
@@ -523,10 +316,6 @@ pub fn prepare_init_load() -> Result<ExecutableLoadPrep, ExecutableLoadPrepError
     prepare_executable_load(INIT_PATH)
 }
 
-pub fn materialize_init_image() -> Result<ExecutableLoadImage, ExecutableLoadPrepError> {
-    materialize_executable_image(INIT_PATH)
-}
-
 pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, ExecutableLoadPrepError> {
     let candidate = discover_executable(path).map_err(ExecutableLoadPrepError::Discovery)?;
     let bytes = read_executable_bytes(candidate.mount, &candidate.path).ok_or(
@@ -537,7 +326,6 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
     match image {
         exec::ExecutableImage::Elf64(elf) => {
             let load_plan = exec::build_load_plan(&elf).map_err(ExecutableLoadPrepError::Parse)?;
-            let program_header_virtual_address = program_header_virtual_address(&elf, &load_plan);
             let mut load_segment_count = 0usize;
             let mut load_base = None;
             let mut load_offset = None;
@@ -612,8 +400,6 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 machine: Some(elf.machine),
                 entry_point: Some(elf.entry_point),
                 program_header_count: elf.program_headers.len(),
-                program_header_entry_size: elf.program_header_entry_size,
-                program_header_virtual_address,
                 load_segment_count,
                 load_base,
                 load_offset,
@@ -646,8 +432,6 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
                 machine: None,
                 entry_point: None,
                 program_header_count: 0,
-                program_header_entry_size: 0,
-                program_header_virtual_address: None,
                 load_segment_count: 0,
                 load_base: None,
                 load_offset: None,
@@ -677,8 +461,6 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
             machine: None,
             entry_point: None,
             program_header_count: 0,
-            program_header_entry_size: 0,
-            program_header_virtual_address: None,
             load_segment_count: 0,
             load_base: None,
             load_offset: None,
@@ -700,170 +482,6 @@ pub fn prepare_executable_load(path: &str) -> Result<ExecutableLoadPrep, Executa
     }
 }
 
-pub fn materialize_executable_image(path: &str) -> Result<ExecutableLoadImage, ExecutableLoadPrepError> {
-    let candidate = discover_executable(path).map_err(ExecutableLoadPrepError::Discovery)?;
-    let bytes = read_executable_bytes(candidate.mount, &candidate.path).ok_or(
-        ExecutableLoadPrepError::Discovery(ExecutableDiscoveryError::BackendUnavailable),
-    )?;
-    let image = exec::inspect(bytes).map_err(ExecutableLoadPrepError::Parse)?;
-
-    match image {
-        exec::ExecutableImage::Elf64(elf) => {
-            let load_plan = exec::build_load_plan(&elf).map_err(ExecutableLoadPrepError::Parse)?;
-            let program_header_virtual_address = program_header_virtual_address(&elf, &load_plan);
-            let mapped_segments =
-                exec::materialize_load_segments(bytes, &load_plan).map_err(ExecutableLoadPrepError::Parse)?;
-            let mut vm_map_images = Vec::with_capacity(load_plan.len());
-            let mut vm_map_total_bytes = 0u64;
-            let mut vm_map_zero_fill_bytes = 0u64;
-
-            for (header, mapped_bytes) in load_plan.into_iter().zip(mapped_segments.into_iter()) {
-                let mapped_len = u64::try_from(mapped_bytes.len())
-                    .map_err(|_| ExecutableLoadPrepError::Parse(exec::ParseError::SegmentAddressOverflow))?;
-                vm_map_total_bytes = vm_map_total_bytes.saturating_add(mapped_len);
-                vm_map_zero_fill_bytes =
-                    vm_map_zero_fill_bytes.saturating_add(header.zero_fill_bytes);
-                vm_map_images.push(VmMapImageEntry {
-                    index: header.index,
-                    file_offset: header.file_offset,
-                    virtual_start: header.virtual_start,
-                    virtual_end: header.virtual_end,
-                    map_start: header.map_start,
-                    map_end: header.map_end,
-                    page_offset: header.page_offset,
-                    file_bytes: header.file_bytes,
-                    memory_bytes: header.memory_bytes,
-                    zero_fill_bytes: header.zero_fill_bytes,
-                    alignment: header.alignment,
-                    readable: header.permissions.read,
-                    writable: header.permissions.write,
-                    executable: header.permissions.execute,
-                    bytes: mapped_bytes,
-                });
-            }
-
-            let interpreter = elf.interpreter;
-            let interpreter_source = interpreter.as_deref().and_then(resolve_runtime_path);
-            let interpreter_resolved = interpreter_source.is_some();
-            Ok(ExecutableLoadImage {
-                path: candidate.path,
-                mount: candidate.mount,
-                format: candidate.format,
-                size: candidate.size,
-                executable: candidate.executable,
-                image_type: Some(elf.image_type),
-                machine: Some(elf.machine),
-                entry_point: Some(elf.entry_point),
-                program_header_count: elf.program_headers.len(),
-                program_header_entry_size: elf.program_header_entry_size,
-                program_header_virtual_address,
-                interpreter,
-                interpreter_source,
-                interpreter_argument: None,
-                interpreter_resolved,
-                vm_map_images,
-                vm_map_total_bytes,
-                vm_map_zero_fill_bytes,
-            })
-        }
-        exec::ExecutableImage::Shebang(script) => {
-            let interpreter_source = resolve_runtime_path(&script.interpreter);
-            let interpreter_resolved = interpreter_source.is_some();
-            Ok(ExecutableLoadImage {
-                path: candidate.path,
-                mount: candidate.mount,
-                format: candidate.format,
-                size: candidate.size,
-                executable: candidate.executable,
-                image_type: None,
-                machine: None,
-                entry_point: None,
-                program_header_count: 0,
-                program_header_entry_size: 0,
-                program_header_virtual_address: None,
-                interpreter: Some(script.interpreter),
-                interpreter_source,
-                interpreter_argument: script.argument,
-                interpreter_resolved,
-                vm_map_images: Vec::new(),
-                vm_map_total_bytes: 0,
-                vm_map_zero_fill_bytes: 0,
-            })
-        }
-        exec::ExecutableImage::Text | exec::ExecutableImage::Unknown => Ok(ExecutableLoadImage {
-            path: candidate.path,
-            mount: candidate.mount,
-            format: candidate.format,
-            size: candidate.size,
-            executable: candidate.executable,
-            image_type: None,
-            machine: None,
-            entry_point: None,
-            program_header_count: 0,
-            program_header_entry_size: 0,
-            program_header_virtual_address: None,
-            interpreter: None,
-            interpreter_source: None,
-            interpreter_argument: None,
-            interpreter_resolved: false,
-            vm_map_images: Vec::new(),
-            vm_map_total_bytes: 0,
-            vm_map_zero_fill_bytes: 0,
-        }),
-    }
-}
-
-fn program_header_virtual_address(
-    elf: &exec::ElfImage,
-    load_plan: &[exec::LoadSegmentPlan],
-) -> Option<u64> {
-    if let Some(header) = elf
-        .program_headers
-        .iter()
-        .find(|header| header.segment_type == exec::ProgramHeaderType::ProgramHeaderTable)
-    {
-        return Some(header.virtual_address);
-    }
-
-    let phdr_bytes = u64::try_from(
-        elf.program_header_entry_size
-            .checked_mul(elf.program_headers.len())?,
-    )
-    .ok()?;
-    let phdr_end = elf.program_header_offset.checked_add(phdr_bytes)?;
-    for segment in load_plan {
-        let file_end = segment.file_offset.checked_add(segment.file_bytes)?;
-        if elf.program_header_offset < segment.file_offset || phdr_end > file_end {
-            continue;
-        }
-
-        let relative = elf.program_header_offset.checked_sub(segment.file_offset)?;
-        return segment.virtual_start.checked_add(relative);
-    }
-
-    None
-}
-
-fn mount_device_id(mount: VfsMountKind) -> u64 {
-    match mount {
-        VfsMountKind::Root => 1,
-        VfsMountKind::Devfs => 2,
-        VfsMountKind::Initrd => 3,
-        VfsMountKind::Procfs => 4,
-        VfsMountKind::Fat => 5,
-        VfsMountKind::Tmpfs => 6,
-    }
-}
-
-pub fn hash_path_to_ino(mount: VfsMountKind, path: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in mount_device_id(mount).to_le_bytes().into_iter().chain(path.bytes()) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
-}
-
 fn resolve_node(path: &str) -> Option<VfsNode> {
     match path {
         ROOT_PATH => Some(VfsNode {
@@ -872,20 +490,10 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             kind: VfsNodeKind::Directory,
             size: render_root().len(),
             executable: false,
-            inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
-            fs_private: 0,
         }),
-        _ if path == TMP_ROOT_PATH
-            || path.starts_with("/tmp/")
-            || path == RUN_ROOT_PATH
-            || path.starts_with("/run/") =>
-        {
-            resolve_tmpfs_node(path)
-        }
         _ if path == DEV_ROOT_PATH || path.starts_with("/dev/") => resolve_devfs_node(path),
         _ if path == INITRD_ROOT_PATH || path.starts_with("/initrd/") => resolve_initrd_node(path),
         _ if path == PROC_ROOT_PATH || path.starts_with("/proc/") => resolve_procfs_node(path),
-        _ if path == FAT_ROOT_PATH || path.starts_with("/fat/") => resolve_fat_node(path),
         _ => None,
     }
 }
@@ -904,8 +512,6 @@ fn resolve_devfs_node(path: &str) -> Option<VfsNode> {
         kind,
         size,
         executable: false,
-        inode_number: hash_path_to_ino(VfsMountKind::Devfs, path),
-        fs_private: 0,
     })
 }
 
@@ -923,8 +529,6 @@ fn resolve_procfs_node(path: &str) -> Option<VfsNode> {
         kind,
         size,
         executable: false,
-        inode_number: hash_path_to_ino(VfsMountKind::Procfs, path),
-        fs_private: 0,
     })
 }
 
@@ -941,44 +545,6 @@ fn resolve_initrd_node(path: &str) -> Option<VfsNode> {
         kind,
         size: info.size,
         executable: info.executable,
-        inode_number: hash_path_to_ino(VfsMountKind::Initrd, path),
-        fs_private: 0,
-    })
-}
-
-fn resolve_fat_node(path: &str) -> Option<VfsNode> {
-    let kind = match fat::node_kind(path)? {
-        FatNodeKind::Directory => VfsNodeKind::Directory,
-        FatNodeKind::File => VfsNodeKind::File,
-    };
-    let info = fat::node_info(path)?;
-
-    Some(VfsNode {
-        path: String::from(path),
-        mount: VfsMountKind::Fat,
-        kind,
-        size: info.size,
-        executable: false,
-        inode_number: hash_path_to_ino(VfsMountKind::Fat, path),
-        fs_private: 0,
-    })
-}
-
-fn resolve_tmpfs_node(path: &str) -> Option<VfsNode> {
-    let kind = match tmpfs::node_kind(path)? {
-        TmpfsNodeKind::Directory => VfsNodeKind::Directory,
-        TmpfsNodeKind::File => VfsNodeKind::File,
-    };
-    let info = tmpfs::node_info(path)?;
-
-    Some(VfsNode {
-        path: String::from(path),
-        mount: VfsMountKind::Tmpfs,
-        kind,
-        size: info.size,
-        executable: false,
-        inode_number: hash_path_to_ino(VfsMountKind::Tmpfs, path),
-        fs_private: tmpfs::file_id_for_path(path).unwrap_or(0),
     })
 }
 
@@ -1002,14 +568,7 @@ fn render_root() -> String {
     if initrd::is_initialized() {
         let _ = writeln!(text, "initrd");
     }
-    if fat::is_initialized() {
-        let _ = writeln!(text, "fat");
-    }
     let _ = writeln!(text, "proc");
-    if tmpfs::is_initialized() {
-        let _ = writeln!(text, "tmp");
-        let _ = writeln!(text, "run");
-    }
     text
 }
 
@@ -1022,10 +581,11 @@ fn executable_format_from_kind(kind: exec::ImageKind) -> ExecutableFormat {
     }
 }
 
-fn read_executable_bytes(_mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
-    let node = lookup(path)?;
-    let ops = find_mount_ops(node.mount)?;
-    ops.read_bytes(&node)
+fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
+    match mount {
+        VfsMountKind::Initrd => initrd::read_bytes(path),
+        _ => None,
+    }
 }
 
 pub fn format_u16_hex(value: Option<u16>) -> String {
@@ -1082,222 +642,6 @@ fn hex_u64(value: u64) -> String {
     }
     text
 }
-
-struct RootFs;
-impl FileSystemOps for RootFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        if path == ROOT_PATH {
-            Some(VfsNode {
-                path: String::from(ROOT_PATH),
-                mount: VfsMountKind::Root,
-                kind: VfsNodeKind::Directory,
-                size: render_root().len(),
-                executable: false,
-                inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
-                fs_private: 0,
-            })
-        } else {
-            None
-        }
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        if node.path == ROOT_PATH {
-            Some(render_root())
-        } else {
-            None
-        }
-    }
-    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
-        None
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        let content = self.read(node)?;
-        let bytes = content.as_bytes();
-        let len = bytes.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
-        None
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        Some(node.size)
-    }
-}
-static ROOT_FS: RootFs = RootFs;
-
-struct DevfsFs;
-impl FileSystemOps for DevfsFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        resolve_devfs_node(path)
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        devfs::read(&node.path)
-    }
-    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
-        None
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        let content = self.read(node)?;
-        let bytes = content.as_bytes();
-        let len = bytes.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
-        None
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        Some(node.size)
-    }
-}
-static DEVFS_FS: DevfsFs = DevfsFs;
-
-struct ProcfsFs;
-impl FileSystemOps for ProcfsFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        resolve_procfs_node(path)
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        procfs::read(&node.path)
-    }
-    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
-        None
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        let content = self.read(node)?;
-        let bytes = content.as_bytes();
-        let len = bytes.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
-        None
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        Some(node.size)
-    }
-}
-static PROCFS_FS: ProcfsFs = ProcfsFs;
-
-struct InitrdFs;
-impl FileSystemOps for InitrdFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        resolve_initrd_node(path)
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        initrd::read(&node.path)
-    }
-    fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]> {
-        initrd::read_bytes(&node.path)
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        let bytes = self.read_bytes(node)?;
-        let len = bytes.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
-        None
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        Some(node.size)
-    }
-}
-static INITRD_FS: InitrdFs = InitrdFs;
-
-struct FatFs;
-impl FileSystemOps for FatFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        resolve_fat_node(path)
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        fat::read(&node.path)
-    }
-    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
-        None
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        let content = self.read(node)?;
-        let bytes = content.as_bytes();
-        let len = bytes.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
-        None
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        Some(node.size)
-    }
-}
-static FAT_FS: FatFs = FatFs;
-
-struct TmpfsFs;
-impl FileSystemOps for TmpfsFs {
-    fn lookup(&self, path: &str) -> Option<VfsNode> {
-        resolve_tmpfs_node(path)
-    }
-    fn read(&self, node: &VfsNode) -> Option<String> {
-        tmpfs::read(&node.path)
-    }
-    fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
-        None
-    }
-    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
-        if node.kind == VfsNodeKind::Directory {
-            let content = self.read(node)?;
-            let bytes = content.as_bytes();
-            let len = bytes.len().saturating_sub(offset);
-            let to_copy = len.min(buf.len());
-            buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
-            return Some(to_copy);
-        }
-        let file_id = node.fs_private;
-        if file_id == 0 {
-            return None;
-        }
-        let content = tmpfs::read_bytes_by_id(file_id)?;
-        let len = content.len().saturating_sub(offset);
-        let to_copy = len.min(buf.len());
-        buf[..to_copy].copy_from_slice(&content[offset..offset + to_copy]);
-        Some(to_copy)
-    }
-    fn write_at(&self, node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize> {
-        if node.kind != VfsNodeKind::File {
-            return None;
-        }
-        let file_id = node.fs_private;
-        if file_id == 0 {
-            return None;
-        }
-        let mut content = tmpfs::read_bytes_by_id(file_id)?;
-        let write_end = offset + buf.len();
-        if write_end > content.len() {
-            content.resize(write_end, 0);
-        }
-        content[offset..write_end].copy_from_slice(buf);
-        tmpfs::write_file_by_id(file_id, &content).ok()?;
-        Some(buf.len())
-    }
-    fn file_len(&self, node: &VfsNode) -> Option<usize> {
-        if node.kind == VfsNodeKind::Directory {
-            return self.read(node).map(|s| s.len());
-        }
-        let file_id = node.fs_private;
-        if file_id == 0 {
-            return None;
-        }
-        let content = tmpfs::read_bytes_by_id(file_id)?;
-        Some(content.len())
-    }
-}
-static TMPFS_FS: TmpfsFs = TmpfsFs;
 
 fn normalize_path(path: &str) -> Option<String> {
     if !path.starts_with('/') {

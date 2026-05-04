@@ -1,7 +1,5 @@
 # HXNU
 
-![HXNU logo](docs/logo.jpg)
-
 HXNU is the new Rust-based kernel line for Neonix. The old `heartix/kernel` tree remains the legacy reference implementation; new kernel bring-up starts here.
 
 ## Current Scope
@@ -26,7 +24,6 @@ Reason: the current bootstrap code is not a clean-room implementation. It alread
 - `kernel/`: Rust kernel crate
 - `boot/`: Limine configuration
 - `scripts/`: bootstrap, ISO build, and QEMU run helpers
-- `user/`: bootstrap init payloads and early userland experiments
 - `docs/`: roadmap and architecture notes
 
 Core design notes live in `docs/architecture.md`.
@@ -43,12 +40,10 @@ Core design notes live in `docs/architecture.md`.
 
 ```bash
 ./scripts/bootstrap.sh
-./scripts/build-kernel.sh
+cargo build -p hxnu-kernel
 ```
 
-`build-kernel.sh` prefers the external HXNU toolchain and builds the kernel as `x86_64-unknown-hxnu` when `hxnu-cargo` is available. It checks `HXNU_CARGO_BIN`, `hxnu-cargo` on `PATH`, and can bootstrap from a local compiler checkout at `../compilers/hxnu-rustc-compiler-x86_64`. If none are available, it falls back to Rust's built-in `x86_64-unknown-none` target with the same linker script.
-
-For wrapper-only validation, set `HXNU_BUILD_DRIVER=hxnu` to make the script fail instead of falling back.
+Current builds use Rust's built-in `x86_64-unknown-none` target with a custom linker script. A dedicated HXNU target JSON can be introduced later when the kernel ABI and memory model diverge enough to justify it.
 
 ## Build A Bootable ISO
 
@@ -56,11 +51,9 @@ For wrapper-only validation, set `HXNU_BUILD_DRIVER=hxnu` to make the script fai
 ./scripts/build-iso.sh
 ```
 
-`build-iso.sh` reuses `build-kernel.sh`, so ISO creation follows the same toolchain selection rules.
-
 `prepare-limine.sh` first tries to reuse a local `../heartix/target/limine-9.2.0` tree during bootstrap. If that does not exist, it downloads the pinned Limine binary archive for `9.2.0` and stages the required artifacts under `vendor/`.
 
-`build-initrd.sh` generates a small `cpio` `newc` archive and places it at `/boot/initrd.cpio` in the ISO. It now prefers the repo-local `hxnu-init` ELF payload under `user/init-zero/` for `/initrd/init`, falls back to the adjacent compiler workspace's `init-like` ELF example when needed, and finally falls back to the checked-in script placeholder. Set `HXNU_INITRD_INIT_MODE=elf|script|auto` to force the mode. Limine exposes the archive to the kernel as the `initrd` boot module.
+`build-initrd.sh` generates a small `cpio` `newc` archive from `initrd/` and places it at `/boot/initrd.cpio` in the ISO. Limine exposes it to the kernel as the `initrd` boot module.
 
 ## Run Under QEMU
 
@@ -75,63 +68,8 @@ Expected first output on the serial console:
 ```text
 HXNU: x86_64 early bootstrap
 HXNU: Limine protocol handshake ok
+HXNU: Rust kernel skeleton online
 ```
-
-When `/initrd/init` is staged as an ELF payload, later bring-up logs should also include:
-
-```text
-HXNU: exec syscall path=/initrd/init ...
-HXNU: init exec-commit pid=1 comm=init ...
-HXNU: init launch transfer path=/initrd/init ...
-HXNU: init launch heartbeat tick=...
-HXNU-INIT: payload online via int 0x80
-HXNU: exec replace old-path=/initrd/init ...
-HXNU: init exec-commit pid=1 comm=init cloexec-closed=1 ...
-HXNU-INIT: abi=0x10000 pid=1 tid=1 comm=init stage=post-exec ...
-HXNU-INIT: tmpfs smoke rename=0 source-access=-2 dest-access=0 unlink=0 removed-access=-2 pwrite0=13 pwrite-unlinked=8 seek=0 read=21 payload-ok=yes
-HXNU-INIT: dup smoke dup=3 dup3=42 read1=4 read2=6 getfl=1026 setfl=0 srcfd=0 dup3fd=1 shared-offset=yes shared-status=yes cloexec-split=yes
-HXNU-INIT: signal queue smoke sigaction=0 block=0 kill=0 sigpending=0 restore=0 sigpending-after=0 visible-while-blocked=yes visible-after-unblock=no
-HXNU-INIT: signal smoke sigaction=0 fork=10000 pending-before=yes handler=yes wait4=10000 status=0 pending-after=no
-```
-
-Those lines indicate the kernel entered the real HXNU `exec` syscall path for `/initrd/init`, committed an initial exec-style state reset for the bootstrap process, mapped the ELF load image plus a bootstrap stack with syscall headroom, transferred control into the loaded init image, closed a live `FD_CLOEXEC` descriptor during the second exec-commit, survived a payload-driven self-`exec` that replaced the previous lower-half image in place, preserved an open tmpfs handle across rename/unlink long enough to service post-unlink `pwrite64` and readback, verified that duplicated descriptors share one open-file description for offset and `F_SETFL` state while keeping `FD_CLOEXEC` descriptor-local, proved blocked self-signals become visible through `rt_sigpending` while hidden again after mask restore, and then exercised synthetic `fork/wait4` with observable `SIGCHLD` pending/clear behavior through `/proc/signals`.
-
-## PT_INTERP Smoke Acceptance
-
-```bash
-./scripts/smoke-ptinterp.sh
-```
-
-This command builds a dedicated PT_INTERP smoke ISO, boots it under QEMU, and verifies that HXNU maps both the main ELF image and a separate interpreter ELF before transferring control to the interpreter entry point.
-
-Expected acceptance lines include:
-
-```text
-HXNU: init load-prep path=/initrd/init ... interp=/initrd/interp-zero interp-src=/initrd/interp-zero interp-ok=yes ...
-HXNU: init launch transfer path=/initrd/init launch=/initrd/interp-zero ...
-HXNU-INTERP: abi=0x10000 pid=1 tid=1 argc=1 argv0=/initrd/init execfn=/initrd/init at-entry=0x0000000000503110 at-base=0x0000000000300000 at-phdr=0x0000000000500040 ...
-```
-
-Those lines show that the bootstrap `exec` stack now carries the main-program auxv view (`AT_ENTRY`, `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`) while control is transferred to a distinct interpreter image with a non-zero `AT_BASE`.
-
-## FAT Smoke Acceptance
-
-```bash
-./scripts/smoke-fat.sh
-```
-
-This command builds a synthetic GPT + FAT16 smoke image, boots it under QEMU, and verifies `/fat` mount visibility from kernel logs (`block`, `fat`, and `vfs` acceptance lines).
-
-Expected FAT bring-up lines now also include:
-
-```text
-HXNU: fat preview file path=/fat/HELLO.TXT data=Hello HXNU!
-HXNU: fat preview nested path=/fat/BIN/README.TXT data=Nested README
-HXNU: fat preview lfn-root path=/fat/HELLO-LONG-NAME.TXT data=Long root file
-HXNU: fat preview lfn-nested path=/fat/BIN/README-LONG-NAME.TXT data=Nested long README
-```
-
-Those lines show that the FAT mount is no longer limited to root-directory listing: HXNU can now traverse into subdirectories, read file content back through the normal VFS preview path, and assemble checksum-validated long filename chains from staged LFN directory entries.
 
 Current bring-up logs also include:
 
@@ -151,7 +89,6 @@ Current bring-up logs also include:
 - SMP topology inventory and AP bring-up target summary from `MADT`
 - read-only `procfs` snapshot bootstrap
 - read-only `devfs` namespace bootstrap
-- dynamic block device nodes under `/dev` (`/dev/sdX`, `/dev/nvmeXn1`, `/dev/nvmXn` and partition variants) when block discovery is online
 - minimal VFS mount and read facade for `/`, `/dev`, `/proc`, and `/initrd`
 - normalized VFS path resolution and node lookup facade for mount-backed paths
 - `cpio` `newc` initrd module discovery and `/initrd` read path

@@ -1,11 +1,6 @@
 use core::arch::global_asm;
 
-use crate::vector;
-
 const STACK_ALIGNMENT: usize = 16;
-const VECTOR_CONTEXT_STORAGE_BYTES: usize = 4096;
-const VECTOR_CONTEXT_ALIGNMENT: usize = 64;
-const VECTOR_CONTEXT_BUFFER_BYTES: usize = VECTOR_CONTEXT_STORAGE_BYTES + VECTOR_CONTEXT_ALIGNMENT;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -17,7 +12,6 @@ pub struct TaskContext {
     pub r13: u64,
     pub r14: u64,
     pub r15: u64,
-    vector_area: [u8; VECTOR_CONTEXT_BUFFER_BYTES],
 }
 
 impl TaskContext {
@@ -30,16 +24,7 @@ impl TaskContext {
             r13: 0,
             r14: 0,
             r15: 0,
-            vector_area: [0; VECTOR_CONTEXT_BUFFER_BYTES],
         }
-    }
-
-    fn vector_area_ptr(&self) -> *const u8 {
-        align_up_ptr(self.vector_area.as_ptr())
-    }
-
-    fn vector_area_mut_ptr(&mut self) -> *mut u8 {
-        align_up_mut_ptr(self.vector_area.as_mut_ptr())
     }
 }
 
@@ -68,97 +53,7 @@ pub fn initialize_kernel_thread(
 
 pub unsafe fn switch(current: &mut TaskContext, next: &TaskContext) -> ! {
     unsafe {
-        save_vector_context(current);
-        restore_vector_context(next);
         hxnu_context_switch(current as *mut TaskContext, next as *const TaskContext);
-    }
-}
-
-unsafe fn save_vector_context(context: &mut TaskContext) {
-    match vector::context_mode() {
-        vector::VectorContextMode::ScalarOnly
-        | vector::VectorContextMode::Aarch64FpSimd
-        | vector::VectorContextMode::Ppc64Vsx => {}
-        vector::VectorContextMode::Fxsave => unsafe { fxsave(context.vector_area_mut_ptr()) },
-        vector::VectorContextMode::Xsave => unsafe {
-            xsave(context.vector_area_mut_ptr(), vector::xsave_mask())
-        },
-    }
-}
-
-unsafe fn restore_vector_context(context: &TaskContext) {
-    match vector::context_mode() {
-        vector::VectorContextMode::ScalarOnly
-        | vector::VectorContextMode::Aarch64FpSimd
-        | vector::VectorContextMode::Ppc64Vsx => {}
-        vector::VectorContextMode::Fxsave => unsafe { fxrstor(context.vector_area_ptr()) },
-        vector::VectorContextMode::Xsave => unsafe { xrstor(context.vector_area_ptr(), vector::xsave_mask()) },
-    }
-}
-
-#[inline(always)]
-fn align_up_ptr(ptr: *const u8) -> *const u8 {
-    let address = ptr as usize;
-    let aligned = (address + (VECTOR_CONTEXT_ALIGNMENT - 1)) & !(VECTOR_CONTEXT_ALIGNMENT - 1);
-    aligned as *const u8
-}
-
-#[inline(always)]
-fn align_up_mut_ptr(ptr: *mut u8) -> *mut u8 {
-    let address = ptr as usize;
-    let aligned = (address + (VECTOR_CONTEXT_ALIGNMENT - 1)) & !(VECTOR_CONTEXT_ALIGNMENT - 1);
-    aligned as *mut u8
-}
-
-#[inline(always)]
-unsafe fn fxsave(area: *mut u8) {
-    unsafe {
-        core::arch::asm!(
-            "fxsave64 [{}]",
-            in(reg) area,
-            options(nostack, preserves_flags),
-        );
-    }
-}
-
-#[inline(always)]
-unsafe fn fxrstor(area: *const u8) {
-    unsafe {
-        core::arch::asm!(
-            "fxrstor64 [{}]",
-            in(reg) area,
-            options(nostack, preserves_flags),
-        );
-    }
-}
-
-#[inline(always)]
-unsafe fn xsave(area: *mut u8, mask: u64) {
-    let eax = mask as u32;
-    let edx = (mask >> 32) as u32;
-    unsafe {
-        core::arch::asm!(
-            "xsave [{}]",
-            in(reg) area,
-            in("eax") eax,
-            in("edx") edx,
-            options(nostack, preserves_flags),
-        );
-    }
-}
-
-#[inline(always)]
-unsafe fn xrstor(area: *const u8, mask: u64) {
-    let eax = mask as u32;
-    let edx = (mask >> 32) as u32;
-    unsafe {
-        core::arch::asm!(
-            "xrstor [{}]",
-            in(reg) area,
-            in("eax") eax,
-            in("edx") edx,
-            options(nostack, preserves_flags),
-        );
     }
 }
 

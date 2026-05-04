@@ -46,6 +46,7 @@ echo "HXNU: building baseline ISO"
 
 rm -rf "${SMOKE_WORK_DIR}"
 mkdir -p "${SMOKE_WORK_DIR}" "${SMOKE_ISO_ROOT}"
+
 TMP_INITRD_DIR="$(mktemp -d "${SMOKE_WORK_DIR}/initrd-src.XXXXXX")"
 trap 'rm -rf "${TMP_INITRD_DIR}"' EXIT
 
@@ -66,38 +67,6 @@ from pathlib import Path
 src = Path(sys.argv[1])
 out = Path(sys.argv[2])
 data = bytearray(src.read_bytes())
-
-
-def lfn_checksum(short_name: bytes) -> int:
-    checksum = 0
-    for byte in short_name:
-        checksum = (((checksum & 1) << 7) + (checksum >> 1) + byte) & 0xFF
-    return checksum
-
-
-def build_lfn_entries(name: str, short_name: bytes) -> list[bytearray]:
-    units = [ord(ch) for ch in name]
-    chunks = [units[index : index + 13] for index in range(0, len(units), 13)]
-    checksum = lfn_checksum(short_name)
-    entries: list[bytearray] = []
-    for index, chunk in enumerate(reversed(chunks), start=1):
-        sequence = len(chunks) - index + 1
-        entry = bytearray(32)
-        entry[0] = sequence
-        if index == 1:
-            entry[0] |= 0x40
-        entry[11] = 0x0F
-        entry[13] = checksum
-        positions = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]
-        encoded = list(chunk)
-        if len(encoded) < 13:
-            encoded.append(0x0000)
-            while len(encoded) < 13:
-                encoded.append(0xFFFF)
-        for codepoint, position in zip(encoded, positions):
-            entry[position : position + 2] = codepoint.to_bytes(2, "little")
-        entries.append(entry)
-    return entries
 
 SECTOR = 512
 part_start = 64
@@ -177,16 +146,13 @@ for fat_lba in (fat1_lba, fat2_lba):
     data[offset + 2 : offset + 4] = (0xFFFF).to_bytes(2, "little")
     data[offset + 4 : offset + 6] = (0xFFFF).to_bytes(2, "little")
     data[offset + 6 : offset + 8] = (0xFFFF).to_bytes(2, "little")
-    data[offset + 8 : offset + 10] = (0xFFFF).to_bytes(2, "little")
-    data[offset + 10 : offset + 12] = (0xFFFF).to_bytes(2, "little")
-    data[offset + 12 : offset + 14] = (0xFFFF).to_bytes(2, "little")
 
 root_offset = root_lba * SECTOR
 hello_entry = bytearray(32)
 hello_entry[0:11] = b"HELLO   TXT"
 hello_entry[11] = 0x20
 hello_entry[26:28] = (2).to_bytes(2, "little")
-hello_entry[28:32] = (11).to_bytes(4, "little")
+hello_entry[28:32] = (12).to_bytes(4, "little")
 data[root_offset : root_offset + 32] = hello_entry
 
 bin_entry = bytearray(32)
@@ -195,53 +161,11 @@ bin_entry[11] = 0x10
 bin_entry[26:28] = (3).to_bytes(2, "little")
 data[root_offset + 32 : root_offset + 64] = bin_entry
 
-long_root_short = bytearray(32)
-long_root_short[0:11] = b"HELLO~1TXT"
-long_root_short[11] = 0x20
-long_root_short[26:28] = (5).to_bytes(2, "little")
-long_root_short[28:32] = (14).to_bytes(4, "little")
-for index, entry in enumerate(build_lfn_entries("HELLO-LONG-NAME.TXT", bytes(long_root_short[0:11]))):
-    start = root_offset + 64 + (index * 32)
-    data[start : start + 32] = entry
-data[root_offset + 128 : root_offset + 160] = long_root_short
+data[root_offset + 64] = 0x00
 
-data[root_offset + 160] = 0x00
-
-payload = b"Hello HXNU!"
+payload = b"Hello HXNU!\n"
 cluster2_offset = first_data_lba * SECTOR
 data[cluster2_offset : cluster2_offset + len(payload)] = payload
-
-cluster3_offset = (first_data_lba + 1) * SECTOR
-readme_entry = bytearray(32)
-readme_entry[0:11] = b"README  TXT"
-readme_entry[11] = 0x20
-readme_entry[26:28] = (4).to_bytes(2, "little")
-readme_entry[28:32] = (13).to_bytes(4, "little")
-data[cluster3_offset : cluster3_offset + 32] = readme_entry
-
-long_nested_short = bytearray(32)
-long_nested_short[0:11] = b"README~1TXT"
-long_nested_short[11] = 0x20
-long_nested_short[26:28] = (6).to_bytes(2, "little")
-long_nested_short[28:32] = (18).to_bytes(4, "little")
-for index, entry in enumerate(build_lfn_entries("README-LONG-NAME.TXT", bytes(long_nested_short[0:11]))):
-    start = cluster3_offset + 32 + (index * 32)
-    data[start : start + 32] = entry
-data[cluster3_offset + 96 : cluster3_offset + 128] = long_nested_short
-
-data[cluster3_offset + 128] = 0x00
-
-nested_payload = b"Nested README"
-cluster4_offset = (first_data_lba + 2) * SECTOR
-data[cluster4_offset : cluster4_offset + len(nested_payload)] = nested_payload
-
-long_root_payload = b"Long root file"
-cluster5_offset = (first_data_lba + 3) * SECTOR
-data[cluster5_offset : cluster5_offset + len(long_root_payload)] = long_root_payload
-
-long_nested_payload = b"Nested long README"
-cluster6_offset = (first_data_lba + 4) * SECTOR
-data[cluster6_offset : cluster6_offset + len(long_nested_payload)] = long_nested_payload
 
 out.write_bytes(data)
 PY
@@ -302,23 +226,13 @@ kill -INT "${QEMU_PID}" 2>/dev/null || true
 wait "${QEMU_PID}" 2>/dev/null || true
 
 assert_log "HXNU: block online .*gpt-devices=1"
-assert_log "HXNU: fat online table=gpt .*directories=2 files=4"
+assert_log "HXNU: fat online table=gpt"
 assert_log "HXNU: vfs online mounts=4"
 assert_log "HXNU: vfs preview root=.*fat"
-assert_log "HXNU: devfs preview sda=path /dev/sda"
-assert_log "HXNU: devfs preview sda1=path /dev/sda1"
-assert_log "HXNU: devfs preview nvme0n1=path /dev/nvme0n1"
-assert_log "HXNU: devfs preview nvme0n1p1=path /dev/nvme0n1p1"
-assert_log "HXNU: devfs preview nvm0n=path /dev/nvm0n"
-assert_log "HXNU: devfs preview nvm0np1=path /dev/nvm0np1"
 assert_log "HXNU: fat preview root="
 assert_log "HXNU: init candidate path=/initrd/init"
-assert_log "HXNU: fat preview file path=/fat/HELLO.TXT data=Hello HXNU!"
-assert_log "HXNU: fat preview nested path=/fat/BIN/README.TXT data=Nested README"
-assert_log "HXNU: fat preview lfn-root path=/fat/HELLO-LONG-NAME.TXT data=Long root file"
-assert_log "HXNU: fat preview lfn-nested path=/fat/BIN/README-LONG-NAME.TXT data=Nested long README"
 
 echo "HXNU: FAT smoke acceptance passed"
-grep -En "HXNU: (block online|fat online|vfs online|vfs preview root|devfs preview sda|devfs preview sda1|devfs preview nvme0n1|devfs preview nvme0n1p1|devfs preview nvm0n|devfs preview nvm0np1|fat preview root|fat preview file|fat preview nested|fat preview lfn-root|fat preview lfn-nested|init candidate)" "${SMOKE_LOG}"
+grep -En "HXNU: (block online|fat online|vfs online|vfs preview root|fat preview root|init candidate)" "${SMOKE_LOG}"
 echo "HXNU: iso=${SMOKE_ISO}"
 echo "HXNU: log=${SMOKE_LOG}"

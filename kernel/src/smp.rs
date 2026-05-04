@@ -145,16 +145,6 @@ pub fn topology() -> Option<&'static SmpTopology> {
     unsafe { (&*TOPOLOGY.get()).as_ref() }
 }
 
-pub fn mark_cpu_online(index: usize) {
-    unsafe {
-        if let Some(ref mut topology) = *TOPOLOGY.get() {
-            if let Some(ref mut cpu) = topology.cpus.get_mut(index) {
-                cpu.online = true;
-            }
-        }
-    }
-}
-
 fn build_cpu_entry(
     index: usize,
     processor: MadtProcessor,
