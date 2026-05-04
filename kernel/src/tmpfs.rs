@@ -139,6 +139,16 @@ pub fn handles_path(path: &str) -> bool {
         || path.starts_with("/run/")
 }
 
+pub fn file_id_for_path(path: &str) -> Option<u64> {
+    let normalized = normalize_path(path)?;
+    let state = unsafe { (&*TMPFS.get()).as_ref()? };
+    state
+        .files
+        .iter()
+        .find(|file| file.path.as_deref() == Some(normalized.as_str()))
+        .map(|file| file.id)
+}
+
 pub fn node_kind(path: &str) -> Option<TmpfsNodeKind> {
     let normalized = normalize_path(path)?;
     if normalized == TMP_ROOT_PATH || normalized == RUN_ROOT_PATH {

@@ -921,7 +921,6 @@ struct OpenFileDescription {
     executable: bool,
     inode_number: u64,
     offset: usize,
-    content: Vec<u8>,
     tmpfs_file_id: Option<u64>,
     pipe_endpoint: Option<PipeEndpoint>,
 }
@@ -5637,17 +5636,12 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
         return SyscallOutcome::errno(ENOTDIR);
     }
 
-    let content = match vfs::read(&node.path) {
-        Some(content) => content.into_bytes(),
-        None => return SyscallOutcome::errno(EIO),
-    };
     let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
     let status_flags = status_flags_from_open_mode(mode, node.kind);
     match alloc_open_file(
         node.mount,
         node.kind,
         node.executable,
-        content,
         status_flags,
         fd_flags,
         None,
@@ -5669,14 +5663,12 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
                     return Err(EISDIR);
                 }
                 let node = vfs::lookup(path).ok_or(ENOENT)?;
-                let content = tmpfs::read(&node.path).ok_or(EIO)?.into_bytes();
                 let fd_flags = if mode.cloexec { FD_CLOEXEC } else { 0 };
                 let status_flags = status_flags_from_open_mode(mode, VfsNodeKind::Directory);
                 return alloc_open_file(
                     VfsMountKind::Tmpfs,
                     VfsNodeKind::Directory,
                     false,
-                    content,
                     status_flags,
                     fd_flags,
                     None,
@@ -5702,7 +5694,6 @@ fn open_tmpfs_path(path: &str, mode: OpenMode) -> Result<i64, i64> {
         VfsMountKind::Tmpfs,
         VfsNodeKind::File,
         false,
-        opened.content,
         status_flags,
         fd_flags,
         Some(opened.file_id),
@@ -6635,36 +6626,6 @@ fn release_open_file_resources(open: &OpenFileDescription) {
     }
 }
 
-fn refresh_open_file_content(open: &mut OpenFileDescription) -> Result<(), i64> {
-    if open.mount != VfsMountKind::Tmpfs {
-        return Ok(());
-    }
-
-    if open.kind == VfsNodeKind::Directory {
-        let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
-        open.content = tmpfs::read(&path).ok_or(EIO)?.into_bytes();
-        return Ok(());
-    }
-
-    if let Some(file_id) = open.tmpfs_file_id {
-        open.content = tmpfs::read_bytes_by_id(file_id).ok_or(ENOENT)?;
-    }
-    Ok(())
-}
-
-fn flush_open_file_content(open: &OpenFileDescription) -> Result<(), i64> {
-    if open.mount != VfsMountKind::Tmpfs || open.kind != VfsNodeKind::File {
-        return Ok(());
-    }
-
-    if let Some(file_id) = open.tmpfs_file_id {
-        tmpfs::write_file_by_id(file_id, &open.content).map_err(map_tmpfs_error)?;
-    } else {
-        return Err(EIO);
-    }
-    Ok(())
-}
-
 fn open_description_id_for_process(table: &FdTable, owner_process_id: u64, fd: i32) -> Result<u64, i64> {
     table
         .files
@@ -7239,7 +7200,6 @@ fn alloc_pipe_endpoint(pipe_id: u64, end: PipeEnd, fd_flags: u32, status_flags: 
         executable: false,
         inode_number: description_id,
         offset: 0,
-        content: Vec::new(),
         tmpfs_file_id: None,
         pipe_endpoint: Some(PipeEndpoint { pipe_id, end }),
     });
@@ -7925,7 +7885,6 @@ fn alloc_open_file(
     mount: VfsMountKind,
     kind: VfsNodeKind,
     executable: bool,
-    content: Vec<u8>,
     status_flags: u64,
     fd_flags: u32,
     tmpfs_file_id: Option<u64>,
@@ -7948,7 +7907,6 @@ fn alloc_open_file(
         executable,
         inode_number,
         offset: 0,
-        content,
         tmpfs_file_id,
         pipe_endpoint: None,
     });
@@ -7982,26 +7940,22 @@ fn write_open_file(fd: i32, source_ptr: usize, count: usize) -> Result<i64, i64>
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
-    refresh_open_file_content(open)?;
     if count == 0 {
         return Ok(0);
     }
 
     let bytes = copyin_bytes(source_ptr, count)?;
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+    let node = vfs::lookup(&path).ok_or(EIO)?;
+
     if open.status_flags & O_APPEND != 0 {
-        open.offset = open.content.len();
+        open.offset = vfs::file_len(&node).ok_or(EIO)?;
     }
 
-    let write_end = open.offset.checked_add(bytes.len()).ok_or(ERANGE)?;
-    if write_end > open.content.len() {
-        open.content.resize(write_end, 0);
-    }
-    open.content[open.offset..write_end].copy_from_slice(&bytes);
-    open.offset = write_end;
+    let written = vfs::write_at(&node, open.offset, &bytes).ok_or(EIO)?;
+    open.offset = open.offset.saturating_add(written);
 
-    flush_open_file_content(open)?;
-
-    i64::try_from(bytes.len()).map_err(|_| ERANGE)
+    i64::try_from(written).map_err(|_| ERANGE)
 }
 
 fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
@@ -8021,17 +7975,19 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
-    refresh_open_file_content(open)?;
 
     if count == 0 {
         return Ok(0);
     }
 
-    let available = open.content.len().saturating_sub(open.offset);
-    let read_len = min(count, available);
-    let bytes = &open.content[open.offset..open.offset + read_len];
-    uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
-    open.offset = open.offset.saturating_add(read_len);
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+    let node = vfs::lookup(&path).ok_or(EIO)?;
+    let mut buf = vec![0u8; count];
+    let read_len = vfs::read_at(&node, open.offset, &mut buf).ok_or(EIO)?;
+    if read_len > 0 {
+        uaccess::copyout(&buf[..read_len], destination_ptr).map_err(map_uaccess_error)?;
+        open.offset = open.offset.saturating_add(read_len);
+    }
 
     i64::try_from(read_len).map_err(|_| ERANGE)
 }
@@ -8050,21 +8006,15 @@ fn read_open_file_at_offset(fd: i32, destination_ptr: usize, count: usize, offse
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
-    let mut snapshot = open.content.clone();
-    if open.mount == VfsMountKind::Tmpfs {
-        if let Some(file_id) = open.tmpfs_file_id {
-            snapshot = tmpfs::read_bytes_by_id(file_id).ok_or(ENOENT)?;
-        }
-    }
     let start = usize::try_from(offset).map_err(|_| ERANGE)?;
-    if start >= snapshot.len() {
-        return Ok(0);
-    }
 
-    let available = snapshot.len().saturating_sub(start);
-    let read_len = min(count, available);
-    let bytes = &snapshot[start..start + read_len];
-    uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+    let node = vfs::lookup(&path).ok_or(EIO)?;
+    let mut buf = vec![0u8; count];
+    let read_len = vfs::read_at(&node, start, &mut buf).ok_or(EIO)?;
+    if read_len > 0 {
+        uaccess::copyout(&buf[..read_len], destination_ptr).map_err(map_uaccess_error)?;
+    }
 
     i64::try_from(read_len).map_err(|_| ERANGE)
 }
@@ -8083,22 +8033,18 @@ fn write_open_file_at_offset(fd: i32, source_ptr: usize, count: usize, offset: i
     if open.kind == VfsNodeKind::Directory {
         return Err(EISDIR);
     }
-    refresh_open_file_content(open)?;
 
     let start = usize::try_from(offset).map_err(|_| ERANGE)?;
     if count == 0 {
         return Ok(0);
     }
     let bytes = copyin_bytes(source_ptr, count)?;
-    let write_end = start.checked_add(bytes.len()).ok_or(ERANGE)?;
-    if write_end > open.content.len() {
-        open.content.resize(write_end, 0);
-    }
-    open.content[start..write_end].copy_from_slice(&bytes);
 
-    flush_open_file_content(open)?;
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+    let node = vfs::lookup(&path).ok_or(EIO)?;
+    let written = vfs::write_at(&node, start, &bytes).ok_or(EIO)?;
 
-    i64::try_from(bytes.len()).map_err(|_| ERANGE)
+    i64::try_from(written).map_err(|_| ERANGE)
 }
 
 fn close_open_file(fd: i32) -> Result<i64, i64> {
@@ -8140,10 +8086,16 @@ fn stat_open_file(fd: i32, stat_ptr: usize) -> Result<i64, i64> {
                 status.link_count as u64,
             )?
         } else {
-            build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), open.inode_number)?
+            let path = vfs::reverse_lookup(open.inode_number).ok_or(ENOENT)?;
+            let node = vfs::lookup(&path).ok_or(ENOENT)?;
+            let size = vfs::file_len(&node).ok_or(EIO)?;
+            build_linux_stat(open.mount, open.kind, open.executable, size, open.inode_number)?
         }
     } else {
-        build_linux_stat(open.mount, open.kind, open.executable, open.content.len(), open.inode_number)?
+        let path = vfs::reverse_lookup(open.inode_number).ok_or(ENOENT)?;
+        let node = vfs::lookup(&path).ok_or(ENOENT)?;
+        let size = vfs::file_len(&node).ok_or(EIO)?;
+        build_linux_stat(open.mount, open.kind, open.executable, size, open.inode_number)?
     };
     copyout_struct(stat_ptr, &stat)?;
     Ok(0)
@@ -8158,9 +8110,8 @@ fn read_directory_entries(fd: i32, destination_ptr: usize, count: usize) -> Resu
         return Err(ENOTDIR);
     }
     let parent_path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
-    refresh_open_file_content(open)?;
-
-    let entries = directory_entry_names(&open.content)?;
+    let listing = vfs::read(&parent_path).ok_or(EIO)?;
+    let entries = directory_entry_names(listing.as_bytes())?;
     if open.offset >= entries.len() {
         return Ok(0);
     }
@@ -8202,12 +8153,15 @@ fn seek_open_file(fd: i32, offset: i64, whence: i32) -> Result<i64, i64> {
     if open.pipe_endpoint.is_some() {
         return Err(ESPIPE);
     }
-    refresh_open_file_content(open)?;
+
+    let path = vfs::reverse_lookup(open.inode_number).ok_or(EIO)?;
+    let node = vfs::lookup(&path).ok_or(EIO)?;
 
     let end = if open.kind == VfsNodeKind::Directory {
-        directory_entry_count(&open.content)?
+        let listing = vfs::read(&path).ok_or(EIO)?;
+        directory_entry_count(listing.as_bytes())?
     } else {
-        open.content.len()
+        vfs::file_len(&node).ok_or(EIO)?
     };
 
     let base = match whence {

@@ -45,6 +45,9 @@ pub trait FileSystemOps {
     fn lookup(&self, path: &str) -> Option<VfsNode>;
     fn read(&self, node: &VfsNode) -> Option<String>;
     fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]>;
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize>;
+    fn write_at(&self, node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize>;
+    fn file_len(&self, node: &VfsNode) -> Option<usize>;
 }
 
 struct VfsMount {
@@ -97,6 +100,7 @@ pub struct VfsNode {
     pub size: usize,
     pub executable: bool,
     pub inode_number: u64,
+    pub fs_private: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -439,6 +443,21 @@ pub fn read(path: &str) -> Option<String> {
     let node = lookup(path)?;
     let ops = find_mount_ops(node.mount)?;
     ops.read(&node)
+}
+
+pub fn read_at(node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+    let ops = find_mount_ops(node.mount)?;
+    ops.read_at(node, offset, buf)
+}
+
+pub fn write_at(node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize> {
+    let ops = find_mount_ops(node.mount)?;
+    ops.write_at(node, offset, buf)
+}
+
+pub fn file_len(node: &VfsNode) -> Option<usize> {
+    let ops = find_mount_ops(node.mount)?;
+    ops.file_len(node)
 }
 
 pub fn preview(path: &str, max_len: usize) -> Option<String> {
@@ -854,6 +873,7 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             size: render_root().len(),
             executable: false,
             inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
+            fs_private: 0,
         }),
         _ if path == TMP_ROOT_PATH
             || path.starts_with("/tmp/")
@@ -885,6 +905,7 @@ fn resolve_devfs_node(path: &str) -> Option<VfsNode> {
         size,
         executable: false,
         inode_number: hash_path_to_ino(VfsMountKind::Devfs, path),
+        fs_private: 0,
     })
 }
 
@@ -903,6 +924,7 @@ fn resolve_procfs_node(path: &str) -> Option<VfsNode> {
         size,
         executable: false,
         inode_number: hash_path_to_ino(VfsMountKind::Procfs, path),
+        fs_private: 0,
     })
 }
 
@@ -920,6 +942,7 @@ fn resolve_initrd_node(path: &str) -> Option<VfsNode> {
         size: info.size,
         executable: info.executable,
         inode_number: hash_path_to_ino(VfsMountKind::Initrd, path),
+        fs_private: 0,
     })
 }
 
@@ -937,6 +960,7 @@ fn resolve_fat_node(path: &str) -> Option<VfsNode> {
         size: info.size,
         executable: false,
         inode_number: hash_path_to_ino(VfsMountKind::Fat, path),
+        fs_private: 0,
     })
 }
 
@@ -954,6 +978,7 @@ fn resolve_tmpfs_node(path: &str) -> Option<VfsNode> {
         size: info.size,
         executable: false,
         inode_number: hash_path_to_ino(VfsMountKind::Tmpfs, path),
+        fs_private: tmpfs::file_id_for_path(path).unwrap_or(0),
     })
 }
 
@@ -1069,6 +1094,7 @@ impl FileSystemOps for RootFs {
                 size: render_root().len(),
                 executable: false,
                 inode_number: hash_path_to_ino(VfsMountKind::Root, ROOT_PATH),
+                fs_private: 0,
             })
         } else {
             None
@@ -1084,6 +1110,20 @@ impl FileSystemOps for RootFs {
     fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
         None
     }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let content = self.read(node)?;
+        let bytes = content.as_bytes();
+        let len = bytes.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
+        None
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        Some(node.size)
+    }
 }
 static ROOT_FS: RootFs = RootFs;
 
@@ -1097,6 +1137,20 @@ impl FileSystemOps for DevfsFs {
     }
     fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
         None
+    }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let content = self.read(node)?;
+        let bytes = content.as_bytes();
+        let len = bytes.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
+        None
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        Some(node.size)
     }
 }
 static DEVFS_FS: DevfsFs = DevfsFs;
@@ -1112,6 +1166,20 @@ impl FileSystemOps for ProcfsFs {
     fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
         None
     }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let content = self.read(node)?;
+        let bytes = content.as_bytes();
+        let len = bytes.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
+        None
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        Some(node.size)
+    }
 }
 static PROCFS_FS: ProcfsFs = ProcfsFs;
 
@@ -1125,6 +1193,19 @@ impl FileSystemOps for InitrdFs {
     }
     fn read_bytes(&self, node: &VfsNode) -> Option<&'static [u8]> {
         initrd::read_bytes(&node.path)
+    }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let bytes = self.read_bytes(node)?;
+        let len = bytes.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
+        None
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        Some(node.size)
     }
 }
 static INITRD_FS: InitrdFs = InitrdFs;
@@ -1140,6 +1221,20 @@ impl FileSystemOps for FatFs {
     fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
         None
     }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let content = self.read(node)?;
+        let bytes = content.as_bytes();
+        let len = bytes.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, _node: &VfsNode, _offset: usize, _buf: &[u8]) -> Option<usize> {
+        None
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        Some(node.size)
+    }
 }
 static FAT_FS: FatFs = FatFs;
 
@@ -1153,6 +1248,53 @@ impl FileSystemOps for TmpfsFs {
     }
     fn read_bytes(&self, _node: &VfsNode) -> Option<&'static [u8]> {
         None
+    }
+    fn read_at(&self, node: &VfsNode, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        if node.kind == VfsNodeKind::Directory {
+            let content = self.read(node)?;
+            let bytes = content.as_bytes();
+            let len = bytes.len().saturating_sub(offset);
+            let to_copy = len.min(buf.len());
+            buf[..to_copy].copy_from_slice(&bytes[offset..offset + to_copy]);
+            return Some(to_copy);
+        }
+        let file_id = node.fs_private;
+        if file_id == 0 {
+            return None;
+        }
+        let content = tmpfs::read_bytes_by_id(file_id)?;
+        let len = content.len().saturating_sub(offset);
+        let to_copy = len.min(buf.len());
+        buf[..to_copy].copy_from_slice(&content[offset..offset + to_copy]);
+        Some(to_copy)
+    }
+    fn write_at(&self, node: &VfsNode, offset: usize, buf: &[u8]) -> Option<usize> {
+        if node.kind != VfsNodeKind::File {
+            return None;
+        }
+        let file_id = node.fs_private;
+        if file_id == 0 {
+            return None;
+        }
+        let mut content = tmpfs::read_bytes_by_id(file_id)?;
+        let write_end = offset + buf.len();
+        if write_end > content.len() {
+            content.resize(write_end, 0);
+        }
+        content[offset..write_end].copy_from_slice(buf);
+        tmpfs::write_file_by_id(file_id, &content).ok()?;
+        Some(buf.len())
+    }
+    fn file_len(&self, node: &VfsNode) -> Option<usize> {
+        if node.kind == VfsNodeKind::Directory {
+            return self.read(node).map(|s| s.len());
+        }
+        let file_id = node.fs_private;
+        if file_id == 0 {
+            return None;
+        }
+        let content = tmpfs::read_bytes_by_id(file_id)?;
+        Some(content.len())
     }
 }
 static TMPFS_FS: TmpfsFs = TmpfsFs;
