@@ -66,6 +66,7 @@ Current status:
 - Power-reset self-test reaches the FADT reset-register path on `x86_64`
 - Trap-frame-aware ring3 scheduler handoff is online on `x86_64`
 - First user fatal-exception kill-and-resume policy is online on `x86_64`
+- Bootstrap `init` exit-triggered restart policy is online on `x86_64`
 
 Cross-repo status (as of 2026-03-29):
 - External compiler repository `hxnu-rustc-compiler-x86_64` is online and versioned separately
@@ -141,6 +142,7 @@ Current focus (as of 2026-06-11):
 - aarch64 SMP topology bring-up
 - Heterogeneous CPU topology support
 - big.LITTLE or hybrid-core scheduling awareness
+- Minimal `busybox-rust` bootstrap trials after stable `exec/spawn`, writable VFS, and PTY foundations are in place
 - Basic Ethernet bring-up
 - Early network driver model
 - Loopback and packet path groundwork
