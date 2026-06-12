@@ -15,6 +15,21 @@ static SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
 static SCHEDULER_TICKS: AtomicU64 = AtomicU64::new(0);
 static SCHEDULER: GlobalScheduler = GlobalScheduler::new();
 static IDLE_STACK: GlobalIdleStack = GlobalIdleStack::new();
+static USER_STACKS: GlobalUserStacks = GlobalUserStacks::new();
+
+struct GlobalUserStacks(UnsafeCell<[AlignedStack; MAX_THREADS]>);
+
+unsafe impl Sync for GlobalUserStacks {}
+
+impl GlobalUserStacks {
+    const fn new() -> Self {
+        Self(UnsafeCell::new([AlignedStack::new(); MAX_THREADS]))
+    }
+
+    fn get(&self) -> *mut [AlignedStack; MAX_THREADS] {
+        self.0.get()
+    }
+}
 
 struct GlobalScheduler(UnsafeCell<Scheduler>);
 
@@ -44,6 +59,7 @@ impl GlobalIdleStack {
     }
 }
 
+#[derive(Copy, Clone)]
 #[repr(align(16))]
 struct AlignedStack([u8; KERNEL_STACK_SIZE]);
 
@@ -160,6 +176,7 @@ enum ThreadRole {
     None,
     Bootstrap,
     Idle,
+    User,
 }
 
 impl ThreadRole {
@@ -168,6 +185,7 @@ impl ThreadRole {
             Self::None => "none",
             Self::Bootstrap => "bootstrap",
             Self::Idle => "idle",
+            Self::User => "user",
         }
     }
 }
@@ -287,6 +305,10 @@ impl Scheduler {
 
         let thread_id = self.next_thread_id;
         self.next_thread_id = self.next_thread_id.saturating_add(1);
+        let mut context = arch::x86_64::TaskContext::empty();
+        if role != ThreadRole::User {
+            context.cr3 = arch::x86_64::read_cr3();
+        }
         self.threads[slot] = Thread {
             id: thread_id,
             process_id: identity.process_id,
@@ -297,7 +319,7 @@ impl Scheduler {
             state: ThreadState::Runnable,
             total_ticks: 0,
             dispatch_count: 0,
-            context: arch::x86_64::TaskContext::empty(),
+            context,
         };
         self.thread_count += 1;
         Ok(slot)
@@ -380,21 +402,47 @@ impl Scheduler {
         self.threads[self.runqueue[self.current_runqueue_index]]
     }
 
-    fn activate_idle_thread(&mut self) -> Result<(), SchedulerError> {
-        if !self.initialized || self.runqueue_depth == 0 || self.idle_thread_id == 0 {
+    fn restore_bootstrap_as_current(&mut self) {
+        let Some(bootstrap_slot) = self.bootstrap_slot() else {
+            return;
+        };
+
+        for slot in 0..self.thread_count {
+            if self.threads[slot].state == ThreadState::Running {
+                self.threads[slot].state = ThreadState::Runnable;
+            }
+        }
+
+        self.threads[bootstrap_slot].state = ThreadState::Running;
+        self.threads[bootstrap_slot].dispatch_count = self.threads[bootstrap_slot]
+            .dispatch_count
+            .saturating_add(1);
+
+        for index in 0..self.runqueue_depth {
+            if self.runqueue[index] == bootstrap_slot {
+                self.current_runqueue_index = index;
+                break;
+            }
+        }
+    }
+
+    fn activate_thread_slot(&mut self, target_slot: usize) -> Result<(), SchedulerError> {
+        if !self.initialized || self.runqueue_depth == 0 || target_slot >= self.thread_count {
             return Err(SchedulerError::MissingIdleThread);
         }
 
         let current_slot = self.runqueue[self.current_runqueue_index];
-        if self.threads[current_slot].id == self.idle_thread_id {
-            self.threads[current_slot].state = ThreadState::Running;
+        if current_slot == target_slot {
+            self.threads[target_slot].state = ThreadState::Running;
             return Ok(());
         }
 
-        self.threads[current_slot].state = ThreadState::Runnable;
+        if self.threads[current_slot].state == ThreadState::Running {
+            self.threads[current_slot].state = ThreadState::Runnable;
+        }
         for index in 0..self.runqueue_depth {
             let slot = self.runqueue[index];
-            if self.threads[slot].id == self.idle_thread_id {
+            if slot == target_slot {
                 self.current_runqueue_index = index;
                 self.threads[slot].state = ThreadState::Running;
                 self.context_switches = self.context_switches.saturating_add(1);
@@ -405,39 +453,117 @@ impl Scheduler {
         Err(SchedulerError::MissingIdleThread)
     }
 
-    fn idle_context_pair(
-        &mut self,
-    ) -> Result<(&mut arch::x86_64::TaskContext, &arch::x86_64::TaskContext), SchedulerError> {
-        self.activate_idle_thread()?;
-
-        let mut bootstrap_slot = None;
-        let mut idle_slot = None;
+    fn first_runnable_user_slot(&self) -> Option<usize> {
         for slot in 0..self.thread_count {
-            match self.threads[slot].role {
-                ThreadRole::Bootstrap => bootstrap_slot = Some(slot),
-                ThreadRole::Idle => idle_slot = Some(slot),
-                ThreadRole::None => {}
+            if self.threads[slot].role == ThreadRole::User
+                && self.threads[slot].state != ThreadState::Exited
+            {
+                return Some(slot);
             }
         }
+        None
+    }
 
-        let bootstrap_slot = bootstrap_slot.ok_or(SchedulerError::MissingIdleThread)?;
-        let idle_slot = idle_slot.ok_or(SchedulerError::MissingIdleThread)?;
-        if bootstrap_slot == idle_slot {
-            return Err(SchedulerError::MissingIdleThread);
+    fn idle_slot(&self) -> Option<usize> {
+        for slot in 0..self.thread_count {
+            if self.threads[slot].role == ThreadRole::Idle {
+                return Some(slot);
+            }
         }
+        None
+    }
 
-        let (left, right) = self.threads.split_at_mut(idle_slot.max(bootstrap_slot));
-        if bootstrap_slot < idle_slot {
+    fn bootstrap_slot(&self) -> Option<usize> {
+        for slot in 0..self.thread_count {
+            if self.threads[slot].role == ThreadRole::Bootstrap {
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    fn initial_context_pair(
+        &mut self,
+    ) -> Result<(&mut arch::x86_64::TaskContext, &arch::x86_64::TaskContext), SchedulerError> {
+        let bootstrap_slot = self.bootstrap_slot().ok_or(SchedulerError::MissingIdleThread)?;
+        for index in (0..self.runqueue_depth).rev() {
+            if self.runqueue[index] == bootstrap_slot {
+                self.remove_runqueue_index(index);
+                break;
+            }
+        }
+        self.threads[bootstrap_slot].state = ThreadState::Exited;
+
+        let target_slot = self.first_runnable_user_slot()
+            .or_else(|| self.idle_slot())
+            .ok_or(SchedulerError::MissingIdleThread)?;
+        self.activate_thread_slot(target_slot)?;
+        self.prepare_resume_slot(target_slot);
+
+        let (left, right) = self.threads.split_at_mut(target_slot.max(bootstrap_slot));
+        if bootstrap_slot < target_slot {
             let current = &mut left[bootstrap_slot].context;
             let next = &right[0].context;
             Ok((current, next))
         } else {
-            let next = &left[idle_slot].context;
+            let next = &left[target_slot].context;
             let current = &mut right[0].context;
             Ok((current, next))
         }
     }
 
+    fn prepare_resume_slot(&self, slot: usize) {
+        if self.threads[slot].context.kind == arch::x86_64::CONTEXT_KIND_USER {
+            arch::x86_64::set_tss_rsp0(self.threads[slot].context.kernel_rsp0);
+        }
+    }
+
+    fn next_switch_index(&self) -> Option<usize> {
+        if !self.initialized || self.runqueue_depth < 2 {
+            return None;
+        }
+
+        let current_slot = self.runqueue[self.current_runqueue_index];
+        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
+        for _ in 0..self.runqueue_depth {
+            let candidate = self.runqueue[next_index];
+            if candidate != current_slot && self.threads[candidate].state != ThreadState::Exited {
+                return Some(next_index);
+            }
+            next_index = (next_index + 1) % self.runqueue_depth;
+        }
+
+        None
+    }
+
+
+    fn context_switch_pair(&mut self) -> Option<(&mut arch::x86_64::TaskContext, &arch::x86_64::TaskContext)> {
+        let current_slot = self.runqueue[self.current_runqueue_index];
+        let next_index = self.next_switch_index()?;
+        let next_slot = self.runqueue[next_index];
+
+        if self.threads[current_slot].state == ThreadState::Running {
+            self.threads[current_slot].state = ThreadState::Runnable;
+        }
+        self.current_runqueue_index = next_index;
+        self.threads[next_slot].state = ThreadState::Running;
+        self.threads[next_slot].dispatch_count = self.threads[next_slot]
+            .dispatch_count
+            .saturating_add(1);
+        self.context_switches = self.context_switches.saturating_add(1);
+        self.prepare_resume_slot(next_slot);
+
+        let (left, right) = self.threads.split_at_mut(current_slot.max(next_slot));
+        if current_slot < next_slot {
+            let current = &mut left[current_slot].context;
+            let next = &right[0].context;
+            Some((current, next))
+        } else {
+            let next = &left[next_slot].context;
+            let current = &mut right[0].context;
+            Some((current, next))
+        }
+    }
     fn stats(&self, total_ticks: u64) -> SchedulerStats {
         let current = self.current_thread();
         SchedulerStats {
@@ -547,6 +673,71 @@ impl Scheduler {
             runqueue_depth: self.runqueue_depth,
         })
     }
+
+    fn yield_current_user_thread(
+        &mut self,
+        saved_user_rsp: u64,
+    ) -> Option<*const arch::x86_64::TaskContext> {
+        if !self.initialized || self.runqueue_depth < 2 {
+            return None;
+        }
+
+        let current_slot = self.runqueue[self.current_runqueue_index];
+        if self.threads[current_slot].role != ThreadRole::User
+            || self.threads[current_slot].state == ThreadState::Exited
+        {
+            return None;
+        }
+
+        self.threads[current_slot].context.rsp = saved_user_rsp;
+        self.threads[current_slot].state = ThreadState::Runnable;
+
+        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
+        let mut found = None;
+        for _ in 0..self.runqueue_depth {
+            let candidate = self.runqueue[next_index];
+            if self.threads[candidate].state != ThreadState::Exited {
+                found = Some(next_index);
+                break;
+            }
+            next_index = (next_index + 1) % self.runqueue_depth;
+        }
+
+        let next_index = found?;
+        let next_slot = self.runqueue[next_index];
+        if next_slot == current_slot {
+            self.threads[current_slot].state = ThreadState::Running;
+            return None;
+        }
+
+        self.current_runqueue_index = next_index;
+        self.threads[next_slot].state = ThreadState::Running;
+        self.threads[next_slot].dispatch_count = self.threads[next_slot]
+            .dispatch_count
+            .saturating_add(1);
+        self.context_switches = self.context_switches.saturating_add(1);
+        if SCHEDULER_SWITCH_LOGS.fetch_add(1, Ordering::AcqRel) < 8 {
+            kprintln!(
+                "HXNU: scheduler yield {}#{} -> {}#{}",
+                self.threads[current_slot].name,
+                self.threads[current_slot].id,
+                self.threads[next_slot].name,
+                self.threads[next_slot].id,
+            );
+        }
+        self.prepare_resume_slot(next_slot);
+        Some(&self.threads[next_slot].context as *const arch::x86_64::TaskContext)
+    }
+
+    fn current_context_ptr_for_resume(&self) -> Option<*const arch::x86_64::TaskContext> {
+        if !self.initialized || self.runqueue_depth == 0 {
+            return None;
+        }
+
+        let slot = self.runqueue[self.current_runqueue_index];
+        self.prepare_resume_slot(slot);
+        Some(&self.threads[slot].context as *const arch::x86_64::TaskContext)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -592,6 +783,10 @@ pub fn bootstrap(
     BOOTSTRAP_ACTIVE.store(false, Ordering::Release);
     SCHEDULER_READY.store(true, Ordering::Release);
 
+    unsafe {
+        (*SCHEDULER.get()).restore_bootstrap_as_current();
+    }
+
     let stats = unsafe { (*SCHEDULER.get()).stats(SCHEDULER_TICKS.load(Ordering::Acquire)) };
     Ok(SchedulerBootstrap {
         source: "local-apic-periodic",
@@ -612,12 +807,72 @@ pub fn bootstrap(
     })
 }
 
+
+pub fn create_user_thread(
+    entry_point: u64,
+    user_stack: u64,
+    page_table: u64,
+) -> Result<u64, SchedulerError> {
+    let scheduler = unsafe { &mut *SCHEDULER.get() };
+    if !scheduler.initialized {
+        return Err(SchedulerError::MissingIdleThread);
+    }
+
+    let identity = ProcessIdentity {
+        process_id: scheduler.next_thread_id,
+        parent_process_id: 0,
+        thread_group_id: scheduler.next_thread_id,
+    };
+
+    let slot = scheduler.create_thread(
+        "user-init",
+        ThreadRole::User,
+        identity,
+    )?;
+
+    let user_stacks = unsafe { &mut *USER_STACKS.get() };
+    let init_stack = &mut user_stacks[slot].0;
+    let init_stack_base = init_stack.as_mut_ptr() as u64;
+
+    kprintln!(
+        "HXNU: create_user_thread slot={} init_stack_base={:#018x} before_init rsp={:#018x}",
+        slot, init_stack_base, scheduler.threads[slot].context.rsp
+    );
+
+    arch::x86_64::initialize_user_thread(
+        &mut scheduler.threads[slot].context,
+        init_stack,
+        entry_point,
+        user_stack,
+        page_table,
+    );
+
+    kprintln!(
+        "HXNU: create_user_thread after_init rsp={:#018x}",
+        scheduler.threads[slot].context.rsp
+    );
+
+    scheduler.enqueue(slot)?;
+    Ok(scheduler.threads[slot].id)
+}
+
+static NEED_RESCHEDULE: AtomicBool = AtomicBool::new(false);
+static SCHEDULER_SWITCH_LOGS: AtomicU64 = AtomicU64::new(0);
+
 pub fn on_timer_interrupt(_apic_tick: u64) {
-    if !BOOTSTRAP_ACTIVE.load(Ordering::Acquire) && !SCHEDULER_READY.load(Ordering::Acquire) {
+    let bootstrap_active = BOOTSTRAP_ACTIVE.load(Ordering::Acquire);
+    if !bootstrap_active && !SCHEDULER_READY.load(Ordering::Acquire) {
         return;
     }
 
     let tick = SCHEDULER_TICKS.fetch_add(1, Ordering::AcqRel) + 1;
+    if !bootstrap_active {
+        if unsafe { (*SCHEDULER.get()).next_switch_index() }.is_some() {
+            NEED_RESCHEDULE.store(true, Ordering::Release);
+        }
+        return;
+    }
+
     let dispatch = unsafe { (*SCHEDULER.get()).on_timer_tick() };
     if tick <= BOOTSTRAP_TARGET_TICKS {
         if let Some(dispatch) = dispatch {
@@ -644,12 +899,47 @@ pub fn request_exit_group(status: i32) -> Option<ExitGroupRecord> {
 }
 
 pub fn idle_loop() -> ! {
-    let (current, next) = unsafe { (*SCHEDULER.get()).idle_context_pair() }
+    let (current, next) = unsafe { (*SCHEDULER.get()).initial_context_pair() }
         .unwrap_or_else(|error| panic!("scheduler idle switch failed: {}", error.as_str()));
-    unsafe { arch::x86_64::switch_context(current, next) }
+    unsafe { arch::x86_64::switch_context_with_cr3(current, next) };
+    unreachable!()
+}
+
+pub fn sched_yield_switch() {
+    if unsafe { (*SCHEDULER.get()).next_switch_index() }.is_some() {
+        NEED_RESCHEDULE.store(true, Ordering::Release);
+    }
+}
+
+pub fn run_idle_cycle() {
+    if NEED_RESCHEDULE.swap(false, Ordering::AcqRel) {
+        if let Some((current, next)) = unsafe { (*SCHEDULER.get()).context_switch_pair() } {
+            let stats = stats();
+            if SCHEDULER_SWITCH_LOGS.fetch_add(1, Ordering::AcqRel) < 8 {
+                kprintln!(
+                    "HXNU: scheduler timer-switch next={}#{} role={}",
+                    stats.current_thread_name,
+                    stats.current_thread_id,
+                    stats.current_thread_role,
+                );
+            }
+            unsafe {
+                arch::x86_64::switch_context_with_cr3(current, next);
+            }
+        }
+    }
+}
+
+pub fn yield_current_user_thread(saved_user_rsp: u64) -> Option<*const arch::x86_64::TaskContext> {
+    unsafe { (*SCHEDULER.get()).yield_current_user_thread(saved_user_rsp) }
+}
+
+pub fn current_context_ptr_for_resume() -> Option<*const arch::x86_64::TaskContext> {
+    unsafe { (*SCHEDULER.get()).current_context_ptr_for_resume() }
 }
 
 extern "C" fn idle_thread_entry() -> ! {
+    crate::serial::write_str("HXNU: idle thread entry\n");
     let stats = stats();
     kprintln!(
         "HXNU: scheduler idle loop entered current={} role={} id={}",
@@ -658,6 +948,7 @@ extern "C" fn idle_thread_entry() -> ! {
         stats.current_thread_id,
     );
     loop {
+        run_idle_cycle();
         unsafe {
             asm!("sti; hlt", options(nomem, nostack));
         }

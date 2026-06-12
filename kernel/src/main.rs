@@ -9,6 +9,7 @@ mod acpi;
 mod arch;
 mod devfs;
 mod exec;
+mod init_exec;
 mod fb;
 mod initrd;
 #[macro_use]
@@ -677,6 +678,26 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    let init_activation = init_exec::activate_init_handoff();
+    match &init_activation {
+        Ok(summary) => kprintln_style!(
+            crate::tty::ConsoleStyle::Success,
+            "HXNU: init activation armed={} entry={:#018x} vm={:#018x}..{:#018x} segments={} bytes={} zero={}",
+            yes_no(summary.armed),
+            summary.entry_point,
+            summary.vm_start,
+            summary.vm_end,
+            summary.segment_count,
+            summary.total_bytes,
+            summary.zero_fill_bytes,
+        ),
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Error,
+            "HXNU: init activation failed reason={}",
+            error.as_str(),
+        ),
+    }
+
     match sched::bootstrap(hhdm_offset, &cpu_info) {
         Ok(state) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
@@ -701,6 +722,19 @@ pub extern "C" fn _start() -> ! {
             kprintln!("HXNU: scheduler bootstrap offline reason={}", error.as_str());
             halt();
         }
+    }
+
+    match init_exec::spawn_init_process() {
+        Ok(thread_id) => kprintln_style!(
+            crate::tty::ConsoleStyle::Success,
+            "HXNU: init process spawned thread_id={}",
+            thread_id,
+        ),
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Error,
+            "HXNU: init process spawn failed reason={}",
+            error.as_str(),
+        ),
     }
 
     let tty_stats = tty::stats();

@@ -43,6 +43,8 @@ pub extern "C" fn _start() -> ! {
     );
     log_bytes(line.as_bytes());
 
+    maybe_trigger_fault_smoke();
+
     loop {
         let _ = syscall0(HXNU_SYS_SCHED_YIELD);
         spin_loop();
@@ -83,6 +85,62 @@ fn syscall(number: u64, args: [u64; 6]) -> i64 {
         );
     }
     result as i64
+}
+
+fn maybe_trigger_fault_smoke() {
+    #[cfg(feature = "fault-page")]
+    {
+        trigger_page_fault();
+        fault_smoke_fallback();
+    }
+
+    #[cfg(all(not(feature = "fault-page"), feature = "fault-gp"))]
+    {
+        trigger_general_protection_fault();
+        fault_smoke_fallback();
+    }
+
+    #[cfg(all(
+        not(feature = "fault-page"),
+        not(feature = "fault-gp"),
+        feature = "fault-ud"
+    ))]
+    {
+        trigger_invalid_opcode();
+        fault_smoke_fallback();
+    }
+}
+
+#[cfg(feature = "fault-page")]
+fn trigger_page_fault() {
+    log_static("HXNU-INIT: fault-page smoke armed\n");
+    unsafe {
+        let fault_address = 0x0000_4000_0000_0000usize as *mut u64;
+        fault_address.write_volatile(0x4858_4e55_4641_554c);
+    }
+}
+
+#[cfg(feature = "fault-gp")]
+fn trigger_general_protection_fault() {
+    log_static("HXNU-INIT: fault-gp smoke armed\n");
+    unsafe {
+        asm!("cli", options(nomem, nostack));
+    }
+}
+
+#[cfg(feature = "fault-ud")]
+fn trigger_invalid_opcode() {
+    log_static("HXNU-INIT: fault-ud smoke armed\n");
+    unsafe {
+        asm!("ud2", options(nomem, nostack));
+    }
+}
+
+#[cfg(any(feature = "fault-page", feature = "fault-gp", feature = "fault-ud"))]
+fn fault_smoke_fallback() -> ! {
+    loop {
+        spin_loop();
+    }
 }
 
 struct StackLine<const N: usize> {

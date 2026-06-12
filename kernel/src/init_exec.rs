@@ -3,8 +3,12 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
+use crate::arch;
+use crate::initrd;
+use crate::mm;
+use crate::sched;
 use crate::vfs;
-use crate::vfs::{ExecutableFormat, VmMapImageEntry};
+use crate::vfs::{ExecutableFormat, VmMapPlanEntry};
 
 struct GlobalInitExec(UnsafeCell<InitExecState>);
 
@@ -84,6 +88,7 @@ pub struct InitExecSummary {
 #[derive(Copy, Clone)]
 pub enum InitExecActivateError {
     Load(vfs::ExecutableLoadPrepError),
+    BytesUnavailable,
     UnsupportedFormat,
     MissingEntryPoint,
     MissingImageType,
@@ -98,6 +103,7 @@ impl InitExecActivateError {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Load(error) => error.as_str(),
+            Self::BytesUnavailable => "init executable bytes not available",
             Self::UnsupportedFormat => "init executable format is not ELF",
             Self::MissingEntryPoint => "init executable has no entry point",
             Self::MissingImageType => "init executable is missing ELF image type",
@@ -112,8 +118,10 @@ impl InitExecActivateError {
 
 pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError> {
     let result = (|| {
-        let image = vfs::materialize_init_image().map_err(InitExecActivateError::Load)?;
-        build_activation(image)
+        let image = vfs::prepare_init_load().map_err(InitExecActivateError::Load)?;
+        let bytes = initrd::read_bytes("/initrd/init")
+            .ok_or(InitExecActivateError::BytesUnavailable)?;
+        build_activation(image, bytes)
     })();
 
     let state = state_mut();
@@ -184,7 +192,13 @@ pub fn render_status() -> String {
     text
 }
 
-fn build_activation(image: vfs::ExecutableLoadImage) -> Result<ActivatedInitImage, InitExecActivateError> {
+const USER_SPACE_BASE: u64 = 0x0000_0000_0040_0000;
+const USER_SPACE_LIMIT: u64 = 0x0000_8000_0000_0000;
+
+fn build_activation(
+    image: vfs::ExecutableLoadPrep,
+    bytes: &'static [u8],
+) -> Result<ActivatedInitImage, InitExecActivateError> {
     if image.format != ExecutableFormat::Elf {
         return Err(InitExecActivateError::UnsupportedFormat);
     }
@@ -192,29 +206,59 @@ fn build_activation(image: vfs::ExecutableLoadImage) -> Result<ActivatedInitImag
     let entry_point = image.entry_point.ok_or(InitExecActivateError::MissingEntryPoint)?;
     let image_type = image.image_type.ok_or(InitExecActivateError::MissingImageType)?;
     let machine = image.machine.ok_or(InitExecActivateError::MissingMachine)?;
-    if image.vm_map_images.is_empty() {
+    if image.vm_map_entries.is_empty() {
         return Err(InitExecActivateError::NoLoadSegments);
     }
 
-    let mut vm_start = u64::MAX;
-    let mut vm_end = 0u64;
+    let mut orig_vm_start = u64::MAX;
+    let mut orig_vm_end = 0u64;
+    for segment in &image.vm_map_entries {
+        orig_vm_start = orig_vm_start.min(segment.map_start);
+        orig_vm_end = orig_vm_end.max(segment.map_end);
+    }
+    let user_load_base = if orig_vm_start < USER_SPACE_LIMIT {
+        orig_vm_start
+    } else {
+        USER_SPACE_BASE
+    };
+
     let mut has_executable_segment = false;
     let mut entry_segment_index = None;
     let mut entry_segment_map_offset = 0u64;
-    let mut segments = Vec::with_capacity(image.vm_map_images.len());
+    let mut segments = Vec::with_capacity(image.vm_map_entries.len());
 
-    for segment in image.vm_map_images.into_iter() {
-        let expected_len = segment
-            .map_end
-            .checked_sub(segment.map_start)
-            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
-        let actual_len = u64::try_from(segment.bytes.len()).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+    for segment in image.vm_map_entries.into_iter() {
+        let file_offset = usize::try_from(segment.file_offset)
+            .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+        let file_bytes_usize = usize::try_from(segment.file_bytes)
+            .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+        let segment_bytes = if file_offset + file_bytes_usize <= bytes.len() {
+            bytes[file_offset..file_offset + file_bytes_usize].to_vec()
+        } else {
+            return Err(InitExecActivateError::InvalidSegmentMap);
+        };
+
+        let expected_len = segment.file_bytes;
+        let actual_len = u64::try_from(segment_bytes.len())
+            .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
         if expected_len != actual_len {
             return Err(InitExecActivateError::InvalidSegmentMap);
         }
 
-        vm_start = vm_start.min(segment.map_start);
-        vm_end = vm_end.max(segment.map_end);
+        let offset = segment.map_start.checked_sub(orig_vm_start)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let user_map_start = user_load_base.checked_add(offset)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let user_map_end = user_map_start.checked_add(segment.map_end - segment.map_start)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let user_virtual_start = user_load_base.checked_add(
+            segment.virtual_start.checked_sub(orig_vm_start)
+                .ok_or(InitExecActivateError::InvalidSegmentMap)?,
+        ).ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let user_virtual_end = user_load_base.checked_add(
+            segment.virtual_end.checked_sub(orig_vm_start)
+                .ok_or(InitExecActivateError::InvalidSegmentMap)?,
+        ).ok_or(InitExecActivateError::InvalidSegmentMap)?;
 
         if segment.executable {
             has_executable_segment = true;
@@ -226,7 +270,19 @@ fn build_activation(image: vfs::ExecutableLoadImage) -> Result<ActivatedInitImag
             }
         }
 
-        segments.push(to_activated_segment(segment));
+        segments.push(ActivatedSegment {
+            index: segment.index,
+            virtual_start: user_virtual_start,
+            virtual_end: user_virtual_end,
+            map_start: user_map_start,
+            map_end: user_map_end,
+            file_bytes: segment.file_bytes,
+            memory_bytes: segment.memory_bytes,
+            readable: segment.readable,
+            writable: segment.writable,
+            executable: segment.executable,
+            bytes: segment_bytes,
+        });
     }
 
     if !has_executable_segment {
@@ -234,36 +290,30 @@ fn build_activation(image: vfs::ExecutableLoadImage) -> Result<ActivatedInitImag
     }
     let entry_segment_index = entry_segment_index.ok_or(InitExecActivateError::EntryOutsideExecutableSegments)?;
 
+    let user_entry = user_load_base.checked_add(
+        entry_point.checked_sub(orig_vm_start)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?,
+    ).ok_or(InitExecActivateError::InvalidSegmentMap)?;
+
+    let vm_size = orig_vm_end.checked_sub(orig_vm_start)
+        .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+    let user_vm_end = user_load_base.checked_add(vm_size)
+        .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+
     Ok(ActivatedInitImage {
         path: image.path,
         format: image.format,
         image_type,
         machine,
-        entry_point,
-        vm_start,
-        vm_end,
+        entry_point: user_entry,
+        vm_start: user_load_base,
+        vm_end: user_vm_end,
         total_bytes: image.vm_map_total_bytes,
         zero_fill_bytes: image.vm_map_zero_fill_bytes,
         entry_segment_index,
         entry_segment_map_offset,
         segments,
     })
-}
-
-fn to_activated_segment(segment: VmMapImageEntry) -> ActivatedSegment {
-    ActivatedSegment {
-        index: segment.index,
-        virtual_start: segment.virtual_start,
-        virtual_end: segment.virtual_end,
-        map_start: segment.map_start,
-        map_end: segment.map_end,
-        file_bytes: segment.file_bytes,
-        memory_bytes: segment.memory_bytes,
-        readable: segment.readable,
-        writable: segment.writable,
-        executable: segment.executable,
-        bytes: segment.bytes,
-    }
 }
 
 fn activation_summary(activation: &ActivatedInitImage) -> InitExecSummary {
@@ -293,4 +343,113 @@ fn state_mut() -> &'static mut InitExecState {
 
 const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+pub fn spawn_init_process() -> Result<u64, InitExecActivateError> {
+    let state = state_ref();
+    let activation = state.activation.as_ref().ok_or(InitExecActivateError::BytesUnavailable)?;
+
+    let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+
+    let user_pml4 = arch::x86_64::create_user_page_table(hhdm_offset)
+        .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+    for segment in &activation.segments {
+        let flags = if segment.writable {
+            arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH
+        } else {
+            arch::x86_64::FLAG_USER_ACCESSIBLE
+        };
+
+        map_segment_pages(
+            segment,
+            user_pml4,
+            hhdm_offset,
+            flags,
+        )?;
+    }
+
+    let user_stack_top = 0x0000_7fff_ffff_0000u64;
+    let user_stack_size = 4096usize;
+    let user_stack_phys = mm::frame::allocate_frame()
+        .ok_or(InitExecActivateError::InvalidSegmentMap)?
+        .start_address();
+
+    arch::x86_64::map_user_region(
+        user_pml4,
+        hhdm_offset,
+        user_stack_top - user_stack_size as u64,
+        user_stack_phys,
+        user_stack_size,
+        arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH,
+    ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+    let thread_id = sched::create_user_thread(
+        activation.entry_point,
+        user_stack_top,
+        user_pml4,
+    ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+    Ok(thread_id)
+}
+
+fn map_segment_pages(
+    segment: &ActivatedSegment,
+    user_pml4: u64,
+    hhdm_offset: u64,
+    flags: u64,
+) -> Result<(), InitExecActivateError> {
+    let file_start = segment.virtual_start;
+    let file_end = file_start
+        .checked_add(u64::try_from(segment.bytes.len()).map_err(|_| InitExecActivateError::InvalidSegmentMap)?)
+        .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+
+    let mut page = segment.map_start;
+    while page < segment.map_end {
+        let frame = mm::frame::allocate_frame()
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let phys = frame.start_address();
+        let virt = hhdm_offset
+            .checked_add(phys)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+
+        unsafe {
+            core::ptr::write_bytes(virt as *mut u8, 0, mm::frame::PAGE_SIZE as usize);
+        }
+
+        let page_end = page
+            .checked_add(mm::frame::PAGE_SIZE)
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        let copy_start = page.max(file_start);
+        let copy_end = page_end.min(file_end);
+        if copy_start < copy_end {
+            let dest_offset = usize::try_from(copy_start - page)
+                .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+            let src_offset = usize::try_from(copy_start - file_start)
+                .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+            let copy_len = usize::try_from(copy_end - copy_start)
+                .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    segment.bytes.as_ptr().add(src_offset),
+                    (virt as *mut u8).add(dest_offset),
+                    copy_len,
+                );
+            }
+        }
+
+        arch::x86_64::map_user_region(
+            user_pml4,
+            hhdm_offset,
+            page,
+            phys,
+            mm::frame::PAGE_SIZE as usize,
+            flags,
+        ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+        page = page_end;
+    }
+
+    Ok(())
 }

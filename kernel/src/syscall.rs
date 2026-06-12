@@ -101,6 +101,7 @@ impl SyscallAbi {
 #[derive(Copy, Clone)]
 pub enum SyscallAction {
     Continue,
+    YieldThread,
     ExitGroup { status: i32 },
 }
 
@@ -309,7 +310,10 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
         HXNU_SYS_THREAD_SELF => thread_id(),
         HXNU_SYS_PROCESS_SELF => process_id(),
         HXNU_SYS_UPTIME_NSEC => uptime_ns(),
-        HXNU_SYS_SCHED_YIELD => SyscallOutcome::success(0),
+        HXNU_SYS_SCHED_YIELD => SyscallOutcome {
+            value: 0,
+            action: SyscallAction::YieldThread,
+        },
         HXNU_SYS_ABI_VERSION => SyscallOutcome::success(HXNU_NATIVE_ABI_VERSION),
         HXNU_SYS_EXIT_GROUP => exit_group(args),
         _ => SyscallOutcome::errno(ENOSYS),
@@ -755,6 +759,7 @@ fn exit_group(args: [u64; 6]) -> SyscallOutcome {
 fn exit_status(outcome: SyscallOutcome) -> (bool, i32) {
     match outcome.action {
         SyscallAction::ExitGroup { status } => (true, status),
+        SyscallAction::YieldThread => (false, 0),
         SyscallAction::Continue => (false, 0),
     }
 }

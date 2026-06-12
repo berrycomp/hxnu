@@ -99,6 +99,12 @@ build_with_hxnu_runner() {
         --target "${TARGET_TRIPLE}"
         -p "${PACKAGE_NAME}"
     )
+    if [ -n "${HXNU_INIT_CARGO_ARGS:-}" ]; then
+        local -a extra_args=()
+        # shellcheck disable=SC2206
+        extra_args=(${HXNU_INIT_CARGO_ARGS})
+        args+=("${extra_args[@]}")
+    fi
 
     case "${runner}" in
         binary:*)

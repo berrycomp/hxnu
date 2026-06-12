@@ -12,7 +12,6 @@ use super::apic;
 const SYSCALL_VECTOR: usize = 0x80;
 const INTERRUPT_GATE: u8 = 0x8e;
 const USER_INTERRUPT_GATE: u8 = 0xee;
-
 unsafe extern "C" {
     fn hxnu_x86_64_syscall_entry();
 }
@@ -35,6 +34,7 @@ hxnu_x86_64_syscall_entry:
     push rdx
     push rcx
     push rbx
+    push rbp
     push rax
 
     mov rdi, rsp
@@ -45,6 +45,7 @@ hxnu_x86_64_syscall_entry:
     mov [rsp], rax
 
     pop rax
+    pop rbp
     pop rbx
     pop rcx
     pop rdx
@@ -65,6 +66,7 @@ hxnu_x86_64_syscall_entry:
 #[repr(C)]
 struct SyscallRegisterFrame {
     rax: u64,
+    rbp: u64,
     rbx: u64,
     rcx: u64,
     rdx: u64,
@@ -79,6 +81,8 @@ struct SyscallRegisterFrame {
     r14: u64,
     r15: u64,
 }
+
+const SYSCALL_REGISTER_QWORDS: usize = size_of::<SyscallRegisterFrame>() / size_of::<u64>();
 
 #[derive(Copy, Clone)]
 pub struct SyscallSelfTest {
@@ -258,8 +262,26 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
         frame.rax,
         [frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9],
     );
+    let syscall_value = outcome.value as u64;
+    let from_user = syscall_from_user(frame);
     match outcome.action {
-        SyscallAction::Continue => outcome.value as u64,
+        SyscallAction::Continue => syscall_value,
+        SyscallAction::YieldThread => {
+            let next_context = if from_user {
+                crate::sched::yield_current_user_thread(frame as *mut SyscallRegisterFrame as u64)
+                    .unwrap_or(core::ptr::null())
+            } else {
+                core::ptr::null()
+            };
+            if !next_context.is_null() {
+                frame.rax = syscall_value;
+                crate::serial::write_str("HXNU: syscall resume-switch\n");
+                unsafe {
+                    crate::arch::x86_64::resume_context_with_cr3(&*next_context);
+                }
+            }
+            syscall_value
+        }
         SyscallAction::ExitGroup { status } => {
             if let Some(record) = crate::sched::request_exit_group(status) {
                 kprintln!(
@@ -282,9 +304,28 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
                     status
                 );
             }
-            outcome.value as u64
+            let next_context = if from_user {
+                crate::sched::current_context_ptr_for_resume()
+                    .unwrap_or(core::ptr::null())
+            } else {
+                core::ptr::null()
+            };
+            if !next_context.is_null() {
+                frame.rax = syscall_value;
+                crate::serial::write_str("HXNU: syscall resume-switch\n");
+                unsafe {
+                    crate::arch::x86_64::resume_context_with_cr3(&*next_context);
+                }
+            }
+            syscall_value
         }
     }
+}
+
+fn syscall_from_user(frame: &SyscallRegisterFrame) -> bool {
+    let words = frame as *const SyscallRegisterFrame as *const u64;
+    let code_segment = unsafe { *words.add(SYSCALL_REGISTER_QWORDS + 1) };
+    (code_segment & 0x3) == 0x3
 }
 
 pub fn run_syscall_self_test() -> SyscallSelfTest {
@@ -452,6 +493,10 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
+    if resume_after_user_exception("invalid opcode", &stack_frame, None, None, 132) {
+        return;
+    }
+
     report_fatal_exception("invalid opcode", &stack_frame, None, None);
     halt_forever();
 }
@@ -465,6 +510,16 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
+    if resume_after_user_exception(
+        "general protection fault",
+        &stack_frame,
+        Some(error_code),
+        None,
+        139,
+    ) {
+        return;
+    }
+
     report_fatal_exception("general protection fault", &stack_frame, Some(error_code), None);
     halt_forever();
 }
@@ -476,6 +531,16 @@ extern "x86-interrupt" fn page_fault_handler(
     let fault_address: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_address, options(nomem, nostack, preserves_flags));
+    }
+
+    if resume_after_user_exception(
+        "page fault",
+        &stack_frame,
+        Some(error_code),
+        Some(fault_address),
+        139,
+    ) {
+        return;
     }
 
     report_fatal_exception("page fault", &stack_frame, Some(error_code), Some(fault_address));
@@ -522,6 +587,56 @@ fn report_fatal_exception(
     }
     crate::serial::write_fmt(format_args!("action    cpu halted\n"));
     crate::serial::write_fmt(format_args!("====================================================\n"));
+}
+
+fn resume_after_user_exception(
+    kind: &str,
+    stack_frame: &InterruptStackFrame,
+    error_code: Option<u64>,
+    fault_address: Option<u64>,
+    exit_status: i32,
+) -> bool {
+    if !fault_from_user(stack_frame) {
+        return false;
+    }
+
+    let stats = crate::sched::stats();
+    kprintln!(
+        "HXNU: user fault kind={} current={}#{} pid={} rip={:#018x} error={:#x} addr={:#018x} action=kill-group",
+        kind,
+        stats.current_thread_name,
+        stats.current_thread_id,
+        stats.current_process_id,
+        stack_frame.instruction_pointer,
+        error_code.unwrap_or(0),
+        fault_address.unwrap_or(0),
+    );
+
+    if let Some(record) = crate::sched::request_exit_group(exit_status) {
+        kprintln!(
+            "HXNU: user fault exit status={} exited={}#{} pid={} threads={} next={}#{} pid={} runqueue={}",
+            record.status,
+            record.exited_thread_name,
+            record.exited_thread_id,
+            record.exited_process_id,
+            record.exited_thread_count,
+            record.next_thread_name,
+            record.next_thread_id,
+            record.next_process_id,
+            record.runqueue_depth,
+        );
+        if let Some(next_context) = crate::sched::current_context_ptr_for_resume() {
+            unsafe {
+                crate::arch::x86_64::resume_context_with_cr3(&*next_context);
+            }
+        }
+    }
+
+    false
+}
+
+const fn fault_from_user(stack_frame: &InterruptStackFrame) -> bool {
+    (stack_frame.code_segment & 0x3) == 0x3
 }
 
 fn halt_forever() -> ! {

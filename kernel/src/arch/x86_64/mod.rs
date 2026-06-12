@@ -33,9 +33,16 @@ pub struct SyscallSelfTest {
 }
 
 pub use apic::{PeriodicTimer, TimerBringUp, TimerError};
-pub use context::TaskContext;
+pub use context::{
+    CONTEXT_KIND_USER,
+    TaskContext,
+    initialize_user_thread,
+    resume_with_cr3 as resume_context_with_cr3,
+    switch_with_cr3 as switch_context_with_cr3,
+};
 pub use cpu::CpuInfo;
-pub use early_map::MapError;
+pub use early_map::{MapError, create_user_page_table, map_user_region, allocate_page_table_frame, read_cr3, write_cr3, FLAG_USER_ACCESSIBLE, FLAG_WRITE_THROUGH, FLAG_CACHE_DISABLE};
+pub use gdt::set_tss_rsp0;
 
 pub fn initialize() {
     gdt::initialize();
@@ -91,10 +98,6 @@ pub fn initialize_kernel_thread_context(
     entry: extern "C" fn() -> !,
 ) {
     context::initialize_kernel_thread(context, stack, entry)
-}
-
-pub unsafe fn switch_context(current: &mut TaskContext, next: &TaskContext) -> ! {
-    unsafe { context::switch(current, next) }
 }
 
 pub fn mask_local_apic_timer() {
