@@ -11,6 +11,7 @@ use crate::tty;
 fn panic(info: &PanicInfo<'_>) -> ! {
     serial::init();
     disable_interrupts();
+    tty::show_log_console();
     write_fatal_line(format_args!(
         "==================== KERNEL PANIC ===================="
     ));
@@ -35,6 +36,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
 fn alloc_error(layout: Layout) -> ! {
     serial::init();
     disable_interrupts();
+    tty::show_log_console();
     write_fatal_line(format_args!(
         "================= ALLOCATION FAILURE ================="
     ));

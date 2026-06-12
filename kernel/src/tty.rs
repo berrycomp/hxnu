@@ -8,6 +8,7 @@ pub use crate::fb::{ConsoleGlyph, ConsoleStyle};
 const OUTPUT_SERIAL: u8 = 1 << 0;
 const OUTPUT_FRAMEBUFFER: u8 = 1 << 1;
 
+pub const LOG_CONSOLE_ID: u32 = 0;
 pub const VIRTUAL_CONSOLE_COUNT: usize = 4;
 
 const DEFAULT_COLUMNS: usize = 80;
@@ -303,6 +304,10 @@ impl TtyConsole {
         );
     }
 
+    fn show_log_console(&mut self) {
+        let _ = self.switch_active_console(LOG_CONSOLE_ID);
+    }
+
     fn stats(&self) -> TtyStats {
         let outputs = if self.initialized { self.outputs } else { OUTPUT_SERIAL };
         TtyStats {
@@ -343,6 +348,12 @@ pub fn write_to_console(
 
 pub fn switch_active_console(console_id: u32) -> Result<(), TtyError> {
     unsafe { (*TTY_CONSOLE.get()).switch_active_console(console_id) }
+}
+
+pub fn show_log_console() {
+    unsafe {
+        (*TTY_CONSOLE.get()).show_log_console();
+    }
 }
 
 pub fn stats() -> TtyStats {
