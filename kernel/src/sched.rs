@@ -120,6 +120,12 @@ pub struct ExitGroupRecord {
 }
 
 #[derive(Copy, Clone)]
+pub struct SpawnedUserThread {
+    pub thread_id: u64,
+    pub process_id: u64,
+}
+
+#[derive(Copy, Clone)]
 pub enum SchedulerError {
     Timer(arch::x86_64::TimerError),
     Timeout,
@@ -814,7 +820,7 @@ pub fn create_user_thread(
     entry_point: u64,
     user_stack: u64,
     page_table: u64,
-) -> Result<u64, SchedulerError> {
+) -> Result<SpawnedUserThread, SchedulerError> {
     let scheduler = unsafe { &mut *SCHEDULER.get() };
     if !scheduler.initialized {
         return Err(SchedulerError::MissingIdleThread);
@@ -855,7 +861,10 @@ pub fn create_user_thread(
     );
 
     scheduler.enqueue(slot)?;
-    Ok(scheduler.threads[slot].id)
+    Ok(SpawnedUserThread {
+        thread_id: scheduler.threads[slot].id,
+        process_id: scheduler.threads[slot].process_id,
+    })
 }
 
 static NEED_RESCHEDULE: AtomicBool = AtomicBool::new(false);
@@ -941,6 +950,26 @@ extern "C" fn idle_thread_entry() -> ! {
         stats.current_thread_id,
     );
     loop {
+        if let Some(result) = crate::init_exec::service_pending_restart() {
+            match result {
+                Ok(restart) => {
+                    kprintln!(
+                        "HXNU: init lifecycle restarted pid={} tid={} count={} last-status={}",
+                        restart.process_id,
+                        restart.thread_id,
+                        restart.restart_count,
+                        restart.last_exit_status,
+                    );
+                    sched_yield_switch();
+                }
+                Err(error) => {
+                    kprintln!(
+                        "HXNU: init lifecycle restart failed reason={}",
+                        error.as_str(),
+                    );
+                }
+            }
+        }
         run_idle_cycle();
         unsafe {
             asm!("sti; hlt", options(nomem, nostack));

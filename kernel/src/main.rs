@@ -725,10 +725,12 @@ pub extern "C" fn _start() -> ! {
     }
 
     match init_exec::spawn_init_process() {
-        Ok(thread_id) => kprintln_style!(
+        Ok(spawned) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
-            "HXNU: init process spawned thread_id={}",
-            thread_id,
+            "HXNU: init process spawned pid={} thread_id={} restart-count={}",
+            spawned.process_id,
+            spawned.thread_id,
+            spawned.restart_count,
         ),
         Err(error) => kprintln_style!(
             crate::tty::ConsoleStyle::Error,

@@ -8,3 +8,4 @@ publish = false
 fault-page = []
 fault-gp = []
 fault-ud = []
+exit-immediate = []

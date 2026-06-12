@@ -14,6 +14,8 @@ const HXNU_SYS_PROCESS_SELF: u64 = 0x484e_0003;
 const HXNU_SYS_UPTIME_NSEC: u64 = 0x484e_0004;
 const HXNU_SYS_SCHED_YIELD: u64 = 0x484e_0005;
 const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
+#[cfg(feature = "exit-immediate")]
+const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
@@ -44,6 +46,7 @@ pub extern "C" fn _start() -> ! {
     log_bytes(line.as_bytes());
 
     maybe_trigger_fault_smoke();
+    maybe_trigger_exit_smoke();
 
     loop {
         let _ = syscall0(HXNU_SYS_SCHED_YIELD);
@@ -61,6 +64,11 @@ fn log_bytes(bytes: &[u8]) {
 
 fn syscall0(number: u64) -> i64 {
     syscall(number, [0; 6])
+}
+
+#[cfg(feature = "exit-immediate")]
+fn syscall1(number: u64, arg0: u64) -> i64 {
+    syscall(number, [arg0, 0, 0, 0, 0, 0])
 }
 
 fn syscall2(number: u64, arg0: u64, arg1: u64) -> i64 {
@@ -108,6 +116,17 @@ fn maybe_trigger_fault_smoke() {
     {
         trigger_invalid_opcode();
         fault_smoke_fallback();
+    }
+}
+
+fn maybe_trigger_exit_smoke() {
+    #[cfg(feature = "exit-immediate")]
+    {
+        log_static("HXNU-INIT: exit-immediate smoke armed\n");
+        let _ = syscall1(HXNU_SYS_EXIT_GROUP, 33);
+        loop {
+            spin_loop();
+        }
     }
 }
 

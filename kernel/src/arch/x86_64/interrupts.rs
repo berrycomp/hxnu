@@ -296,6 +296,25 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
                     record.next_process_id,
                     record.runqueue_depth,
                 );
+                if let Some(init_exit) = crate::init_exec::note_init_exit(
+                    record.exited_process_id,
+                    record.exited_thread_id,
+                    record.status,
+                ) {
+                    kprintln!(
+                        "HXNU: init lifecycle exit pid={} tid={} status={} action={} attempt={}/{}",
+                        init_exit.process_id,
+                        init_exit.thread_id,
+                        init_exit.exit_status,
+                        if init_exit.restart_scheduled {
+                            "restart-pending"
+                        } else {
+                            "restart-limit-reached"
+                        },
+                        init_exit.next_restart_attempt,
+                        init_exit.restart_limit,
+                    );
+                }
             } else {
                 kprintln!(
                     "HXNU: syscall exit_group abi={} status={} scheduler=unavailable",
@@ -623,6 +642,25 @@ fn resume_after_user_exception(
             record.next_process_id,
             record.runqueue_depth,
         );
+        if let Some(init_exit) = crate::init_exec::note_init_exit(
+            record.exited_process_id,
+            record.exited_thread_id,
+            record.status,
+        ) {
+            kprintln!(
+                "HXNU: init lifecycle exit pid={} tid={} status={} action={} attempt={}/{}",
+                init_exit.process_id,
+                init_exit.thread_id,
+                init_exit.exit_status,
+                if init_exit.restart_scheduled {
+                    "restart-pending"
+                } else {
+                    "restart-limit-reached"
+                },
+                init_exit.next_restart_attempt,
+                init_exit.restart_limit,
+            );
+        }
         if let Some(next_context) = crate::sched::current_context_ptr_for_resume() {
             unsafe {
                 crate::arch::x86_64::resume_context_with_cr3(&*next_context);

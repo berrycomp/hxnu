@@ -25,10 +25,16 @@ impl GlobalInitExec {
 }
 
 static INIT_EXEC: GlobalInitExec = GlobalInitExec::new();
+const MAX_INIT_RESTARTS: u32 = 4;
 
 struct InitExecState {
     activation: Option<ActivatedInitImage>,
     last_error: Option<InitExecActivateError>,
+    current_process_id: u64,
+    current_thread_id: u64,
+    restart_pending: bool,
+    restart_count: u32,
+    last_exit_status: Option<i32>,
 }
 
 impl InitExecState {
@@ -36,6 +42,11 @@ impl InitExecState {
         Self {
             activation: None,
             last_error: None,
+            current_process_id: 0,
+            current_thread_id: 0,
+            restart_pending: false,
+            restart_count: 0,
+            last_exit_status: None,
         }
     }
 }
@@ -86,6 +97,31 @@ pub struct InitExecSummary {
 }
 
 #[derive(Copy, Clone)]
+pub struct SpawnedInitProcess {
+    pub thread_id: u64,
+    pub process_id: u64,
+    pub restart_count: u32,
+}
+
+#[derive(Copy, Clone)]
+pub struct InitExitDisposition {
+    pub process_id: u64,
+    pub thread_id: u64,
+    pub exit_status: i32,
+    pub restart_scheduled: bool,
+    pub next_restart_attempt: u32,
+    pub restart_limit: u32,
+}
+
+#[derive(Copy, Clone)]
+pub struct RestartedInitProcess {
+    pub thread_id: u64,
+    pub process_id: u64,
+    pub restart_count: u32,
+    pub last_exit_status: i32,
+}
+
+#[derive(Copy, Clone)]
 pub enum InitExecActivateError {
     Load(vfs::ExecutableLoadPrepError),
     BytesUnavailable,
@@ -130,11 +166,21 @@ pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError>
             let summary = activation_summary(&activation);
             state.activation = Some(activation);
             state.last_error = None;
+            state.current_process_id = 0;
+            state.current_thread_id = 0;
+            state.restart_pending = false;
+            state.restart_count = 0;
+            state.last_exit_status = None;
             Ok(summary)
         }
         Err(error) => {
             state.activation = None;
             state.last_error = Some(error);
+            state.current_process_id = 0;
+            state.current_thread_id = 0;
+            state.restart_pending = false;
+            state.restart_count = 0;
+            state.last_exit_status = None;
             Err(error)
         }
     }
@@ -345,7 +391,7 @@ const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
-pub fn spawn_init_process() -> Result<u64, InitExecActivateError> {
+pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError> {
     let state = state_ref();
     let activation = state.activation.as_ref().ok_or(InitExecActivateError::BytesUnavailable)?;
 
@@ -384,13 +430,68 @@ pub fn spawn_init_process() -> Result<u64, InitExecActivateError> {
         arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH,
     ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
-    let thread_id = sched::create_user_thread(
+    let spawned = sched::create_user_thread(
         activation.entry_point,
         user_stack_top,
         user_pml4,
     ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
-    Ok(thread_id)
+    let state = state_mut();
+    state.current_process_id = spawned.process_id;
+    state.current_thread_id = spawned.thread_id;
+    state.restart_pending = false;
+
+    Ok(SpawnedInitProcess {
+        thread_id: spawned.thread_id,
+        process_id: spawned.process_id,
+        restart_count: state.restart_count,
+    })
+}
+
+pub fn note_init_exit(
+    process_id: u64,
+    thread_id: u64,
+    exit_status: i32,
+) -> Option<InitExitDisposition> {
+    let state = state_mut();
+    if state.current_process_id == 0 || state.current_process_id != process_id {
+        return None;
+    }
+
+    state.current_process_id = 0;
+    state.current_thread_id = 0;
+    state.last_exit_status = Some(exit_status);
+    state.restart_pending = state.restart_count < MAX_INIT_RESTARTS;
+
+    Some(InitExitDisposition {
+        process_id,
+        thread_id,
+        exit_status,
+        restart_scheduled: state.restart_pending,
+        next_restart_attempt: state.restart_count.saturating_add(1),
+        restart_limit: MAX_INIT_RESTARTS,
+    })
+}
+
+pub fn service_pending_restart() -> Option<Result<RestartedInitProcess, InitExecActivateError>> {
+    let last_exit_status;
+    {
+        let state = state_mut();
+        if !state.restart_pending {
+            return None;
+        }
+
+        state.restart_pending = false;
+        state.restart_count = state.restart_count.saturating_add(1);
+        last_exit_status = state.last_exit_status.unwrap_or(0);
+    }
+
+    Some(spawn_init_process().map(|spawned| RestartedInitProcess {
+        thread_id: spawned.thread_id,
+        process_id: spawned.process_id,
+        restart_count: spawned.restart_count,
+        last_exit_status,
+    }))
 }
 
 fn map_segment_pages(
