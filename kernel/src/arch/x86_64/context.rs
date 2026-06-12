@@ -103,9 +103,9 @@ pub fn initialize_user_thread(
     }
 }
 
-pub unsafe fn switch_with_cr3(current: &mut TaskContext, next: &TaskContext) {
+pub unsafe fn switch_with_cr3(current: *mut TaskContext, next: *const TaskContext) {
     unsafe {
-        hxnu_switch_with_cr3(current as *mut TaskContext, next as *const TaskContext);
+        hxnu_switch_with_cr3(current, next);
     }
 }
 
@@ -124,7 +124,7 @@ extern "C" fn thread_exit_trap() -> ! {
 }
 
 unsafe extern "C" {
-    fn hxnu_switch_with_cr3(current: *mut TaskContext, next: *const TaskContext) -> !;
+    fn hxnu_switch_with_cr3(current: *mut TaskContext, next: *const TaskContext);
     fn hxnu_resume_with_cr3(next: *const TaskContext) -> !;
 }
 

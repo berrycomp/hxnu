@@ -275,7 +275,6 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
             };
             if !next_context.is_null() {
                 frame.rax = syscall_value;
-                crate::serial::write_str("HXNU: syscall resume-switch\n");
                 unsafe {
                     crate::arch::x86_64::resume_context_with_cr3(&*next_context);
                 }
@@ -312,7 +311,6 @@ extern "C" fn hxnu_x86_64_handle_syscall_frame(frame: &mut SyscallRegisterFrame)
             };
             if !next_context.is_null() {
                 frame.rax = syscall_value;
-                crate::serial::write_str("HXNU: syscall resume-switch\n");
                 unsafe {
                     crate::arch::x86_64::resume_context_with_cr3(&*next_context);
                 }

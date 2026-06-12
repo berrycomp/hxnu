@@ -399,6 +399,10 @@ impl Scheduler {
             return Thread::empty();
         }
 
+        if self.current_runqueue_index >= self.runqueue_depth {
+            return Thread::empty();
+        }
+
         self.threads[self.runqueue[self.current_runqueue_index]]
     }
 
@@ -484,7 +488,7 @@ impl Scheduler {
 
     fn initial_context_pair(
         &mut self,
-    ) -> Result<(&mut arch::x86_64::TaskContext, &arch::x86_64::TaskContext), SchedulerError> {
+    ) -> Result<(*mut arch::x86_64::TaskContext, *const arch::x86_64::TaskContext), SchedulerError> {
         let bootstrap_slot = self.bootstrap_slot().ok_or(SchedulerError::MissingIdleThread)?;
         for index in (0..self.runqueue_depth).rev() {
             if self.runqueue[index] == bootstrap_slot {
@@ -502,12 +506,12 @@ impl Scheduler {
 
         let (left, right) = self.threads.split_at_mut(target_slot.max(bootstrap_slot));
         if bootstrap_slot < target_slot {
-            let current = &mut left[bootstrap_slot].context;
-            let next = &right[0].context;
+            let current = &mut left[bootstrap_slot].context as *mut arch::x86_64::TaskContext;
+            let next = &right[0].context as *const arch::x86_64::TaskContext;
             Ok((current, next))
         } else {
-            let next = &left[target_slot].context;
-            let current = &mut right[0].context;
+            let next = &left[target_slot].context as *const arch::x86_64::TaskContext;
+            let current = &mut right[0].context as *mut arch::x86_64::TaskContext;
             Ok((current, next))
         }
     }
@@ -537,7 +541,13 @@ impl Scheduler {
     }
 
 
-    fn context_switch_pair(&mut self) -> Option<(&mut arch::x86_64::TaskContext, &arch::x86_64::TaskContext)> {
+    fn context_switch_pair(
+        &mut self,
+    ) -> Option<(
+        *mut arch::x86_64::TaskContext,
+        *const arch::x86_64::TaskContext,
+        DispatchDecision,
+    )> {
         let current_slot = self.runqueue[self.current_runqueue_index];
         let next_index = self.next_switch_index()?;
         let next_slot = self.runqueue[next_index];
@@ -552,16 +562,17 @@ impl Scheduler {
             .saturating_add(1);
         self.context_switches = self.context_switches.saturating_add(1);
         self.prepare_resume_slot(next_slot);
+        let dispatch = self.dispatch_snapshot(next_slot);
 
         let (left, right) = self.threads.split_at_mut(current_slot.max(next_slot));
         if current_slot < next_slot {
-            let current = &mut left[current_slot].context;
-            let next = &right[0].context;
-            Some((current, next))
+            let current = &mut left[current_slot].context as *mut arch::x86_64::TaskContext;
+            let next = &right[0].context as *const arch::x86_64::TaskContext;
+            Some((current, next, dispatch))
         } else {
-            let next = &left[next_slot].context;
-            let current = &mut right[0].context;
-            Some((current, next))
+            let next = &left[next_slot].context as *const arch::x86_64::TaskContext;
+            let current = &mut right[0].context as *mut arch::x86_64::TaskContext;
+            Some((current, next, dispatch))
         }
     }
     fn stats(&self, total_ticks: u64) -> SchedulerStats {
@@ -716,15 +727,6 @@ impl Scheduler {
             .dispatch_count
             .saturating_add(1);
         self.context_switches = self.context_switches.saturating_add(1);
-        if SCHEDULER_SWITCH_LOGS.fetch_add(1, Ordering::AcqRel) < 8 {
-            kprintln!(
-                "HXNU: scheduler yield {}#{} -> {}#{}",
-                self.threads[current_slot].name,
-                self.threads[current_slot].id,
-                self.threads[next_slot].name,
-                self.threads[next_slot].id,
-            );
-        }
         self.prepare_resume_slot(next_slot);
         Some(&self.threads[next_slot].context as *const arch::x86_64::TaskContext)
     }
@@ -857,7 +859,6 @@ pub fn create_user_thread(
 }
 
 static NEED_RESCHEDULE: AtomicBool = AtomicBool::new(false);
-static SCHEDULER_SWITCH_LOGS: AtomicU64 = AtomicU64::new(0);
 
 pub fn on_timer_interrupt(_apic_tick: u64) {
     let bootstrap_active = BOOTSTRAP_ACTIVE.load(Ordering::Acquire);
@@ -912,17 +913,9 @@ pub fn sched_yield_switch() {
 }
 
 pub fn run_idle_cycle() {
+    disable_interrupts();
     if NEED_RESCHEDULE.swap(false, Ordering::AcqRel) {
-        if let Some((current, next)) = unsafe { (*SCHEDULER.get()).context_switch_pair() } {
-            let stats = stats();
-            if SCHEDULER_SWITCH_LOGS.fetch_add(1, Ordering::AcqRel) < 8 {
-                kprintln!(
-                    "HXNU: scheduler timer-switch next={}#{} role={}",
-                    stats.current_thread_name,
-                    stats.current_thread_id,
-                    stats.current_thread_role,
-                );
-            }
+        if let Some((current, next, _dispatch)) = unsafe { (*SCHEDULER.get()).context_switch_pair() } {
             unsafe {
                 arch::x86_64::switch_context_with_cr3(current, next);
             }
