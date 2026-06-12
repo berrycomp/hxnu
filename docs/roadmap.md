@@ -1,7 +1,9 @@
 # HXNU Roadmap
 
 Release target:
-- `2605` as the first version marker for May 2026
+- `2608` as the active first version marker for August 2026
+- As of 2026-06-11, the first public bootstrap release is expected to wait for
+  closure of `Phase 3.5` and a stable `x86_64` SMP baseline from `Phase 4`
 
 ## Phase 0
 - Separate Rust kernel repository
@@ -56,10 +58,14 @@ Current status:
 - Multiple virtual TTY screen foundation is online on `x86_64`
 - Scheduler thread table and runqueue skeleton are online on `x86_64`
 - Bootstrap to idle-thread context switching is online on `x86_64`
+- Initial user page-table creation and bootstrap ELF segment mapping are online on `x86_64`
+- `/initrd/init` first userspace handoff is online on `x86_64`
+- HXNU-native ring3 bootstrap payload can issue `int 0x80` syscalls on `x86_64`
 - Styled framebuffer console output is online on `x86_64`
 - Breakpoint, page fault, and general protection fault self-tests are working
 - Power-reset self-test reaches the FADT reset-register path on `x86_64`
-- Broader scheduler work remains next
+- Trap-frame-aware ring3 scheduler handoff is online on `x86_64`
+- First user fatal-exception kill-and-resume policy is online on `x86_64`
 
 Cross-repo status (as of 2026-03-29):
 - External compiler repository `hxnu-rustc-compiler-x86_64` is online and versioned separately
@@ -93,16 +99,30 @@ Cross-repo status (as of 2026-03-29):
 - Reboot and poweroff plumbing
 - Userspace ABI planning
 
+## Phase 3.5
+- Trap-frame-aware user thread context save and restore
+- Timer-driven ring3 preemption and real `sched_yield` handoff
+- Scheduler bookkeeping for user threads beyond bootstrap, idle, and single-init bring-up
+- Page-fault classification plus first resolve-or-kill policy for user faults
+- Stable `init` lifetime, exit, and restart semantics
+- Early keyboard or console input path
+- Block device, partition, and FAT bootstrap needed to move beyond initrd-only boot
+
+Current focus (as of 2026-06-11):
+- Harden the ring3 scheduler and first user-fault handling path before broad compatibility work
+- Treat `Phase 4` entry as a narrow SMP/per-CPU milestone first
+- Keep POSIX, PTY, and driver-loading work behind stable process and SMP foundations
+
 ## Phase 4
-- SMP bring-up on `x86_64`
-- BSP to AP startup flow
+- Stable SMP bring-up on `x86_64`
+- Stable BSP to AP startup flow
 - Per-CPU data areas
 - IPI support
 - TLB shootdown path
 - POSIX personality
 - Legacy Ghost compatibility layer
 - Core virtualization or LVE hooks
-- Linux or Unix-like `init` startup contract
+- Full Linux or Unix-like `init` startup contract
 - PTY and POSIX terminal semantics
 - Active TTY switching and console session routing
 - Driver object model

@@ -118,7 +118,7 @@ fn render_root() -> String {
 
 fn render_version() -> String {
     let mut text = String::new();
-    let _ = writeln!(text, "HXNU 2605 x86_64");
+    let _ = writeln!(text, "HXNU 2608 x86_64");
     text
 }
 

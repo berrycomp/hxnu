@@ -5,12 +5,12 @@ HXNU is the new Rust-based kernel line for Neonix. The old `heartix/kernel` tree
 ## Current Scope
 
 - New repository dedicated to the kernel rewrite
-- First release target: `2605` for May 2026
+- First release target: `2608` for August 2026
 - Hybrid kernel direction
 - First target: `x86_64`
-- `aarch64` is planned for phase 2, after the x86_64 boot and memory path is stable
+- `aarch64` is planned for phase 5, after the `x86_64` process, memory, and SMP path is stable
 - POSIX and legacy Ghost support are planned as compatibility layers
-- `init` startup and process handoff are expected to follow Linux or Unix-like conventions
+- Bootstrap `init` startup and process handoff are online; full Unix-like lifecycle work is still in progress
 - ABI compatibility with existing userspace is explicitly deferred until the native kernel core is stable
 
 ## Licensing
