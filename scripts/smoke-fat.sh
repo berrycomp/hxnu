@@ -225,11 +225,12 @@ sleep "${SMOKE_TIMEOUT}"
 kill -INT "${QEMU_PID}" 2>/dev/null || true
 wait "${QEMU_PID}" 2>/dev/null || true
 
-assert_log "HXNU: block online .*gpt-devices=1"
-assert_log "HXNU: fat online table=gpt"
+assert_log "HXNU: block online .*partitions=1.*gpt-devices=1"
+assert_log "HXNU: block partition0 .*table=gpt.*gpt-index=1.*lba=64.*sectors=5000"
+assert_log "HXNU: fat online .*table=gpt.*type=fat16.*root-entries=2"
 assert_log "HXNU: vfs online mounts=4"
 assert_log "HXNU: vfs preview root=.*fat"
-assert_log "HXNU: fat preview root="
+assert_log "HXNU: fat preview root=HELLO\\.TXT"
 assert_log "HXNU: init candidate path=/initrd/init"
 
 echo "HXNU: FAT smoke acceptance passed"

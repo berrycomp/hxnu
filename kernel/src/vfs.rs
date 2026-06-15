@@ -6,6 +6,8 @@ use core::fmt::Write;
 use crate::devfs;
 use crate::devfs::DevfsNodeKind;
 use crate::exec;
+use crate::fat;
+use crate::fat::FatNodeKind;
 use crate::initrd;
 use crate::initrd::InitrdNodeKind;
 use crate::procfs;
@@ -13,6 +15,7 @@ use crate::procfs::ProcfsNodeKind;
 
 const ROOT_PATH: &str = "/";
 const DEV_ROOT_PATH: &str = "/dev";
+const FAT_ROOT_PATH: &str = "/fat";
 const PROC_ROOT_PATH: &str = "/proc";
 const INITRD_ROOT_PATH: &str = "/initrd";
 const INIT_PATH: &str = "/initrd/init";
@@ -42,6 +45,7 @@ struct VfsState {
 pub enum VfsMountKind {
     Root,
     Devfs,
+    Fat,
     Initrd,
     Procfs,
 }
@@ -51,6 +55,7 @@ impl VfsMountKind {
         match self {
             Self::Root => "rootfs",
             Self::Devfs => "devfs",
+            Self::Fat => "fat",
             Self::Initrd => "initrd",
             Self::Procfs => "procfs",
         }
@@ -222,10 +227,16 @@ pub fn summary() -> VfsSummary {
     }
 
     let initrd_online = initrd::is_initialized();
-    let mount_count = 2 + usize::from(initrd_online);
+    let fat_online = fat::is_initialized();
+    let mount_count = 2 + usize::from(initrd_online) + usize::from(fat_online);
     let directory_count = 3
         + if initrd_online {
             initrd::summary().directory_count
+        } else {
+            0
+        }
+        + if fat_online {
+            fat::summary().directory_count
         } else {
             0
         };
@@ -248,6 +259,7 @@ pub fn read(path: &str) -> Option<String> {
     match node.mount {
         VfsMountKind::Root => Some(render_root()),
         VfsMountKind::Devfs => devfs::read(&node.path),
+        VfsMountKind::Fat => fat::read(&node.path),
         VfsMountKind::Initrd => initrd::read(&node.path),
         VfsMountKind::Procfs => procfs::read(&node.path),
     }
@@ -492,6 +504,7 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             executable: false,
         }),
         _ if path == DEV_ROOT_PATH || path.starts_with("/dev/") => resolve_devfs_node(path),
+        _ if path == FAT_ROOT_PATH || path.starts_with("/fat/") => resolve_fat_node(path),
         _ if path == INITRD_ROOT_PATH || path.starts_with("/initrd/") => resolve_initrd_node(path),
         _ if path == PROC_ROOT_PATH || path.starts_with("/proc/") => resolve_procfs_node(path),
         _ => None,
@@ -532,6 +545,22 @@ fn resolve_procfs_node(path: &str) -> Option<VfsNode> {
     })
 }
 
+fn resolve_fat_node(path: &str) -> Option<VfsNode> {
+    let info = fat::node_info(path)?;
+    let kind = match info.kind {
+        FatNodeKind::Directory => VfsNodeKind::Directory,
+        FatNodeKind::File => VfsNodeKind::File,
+    };
+
+    Some(VfsNode {
+        path: String::from(path),
+        mount: VfsMountKind::Fat,
+        kind,
+        size: info.size,
+        executable: false,
+    })
+}
+
 fn resolve_initrd_node(path: &str) -> Option<VfsNode> {
     let info = initrd::node_info(path)?;
     let kind = match info.kind {
@@ -565,6 +594,9 @@ fn resolve_runtime_path(path: &str) -> Option<String> {
 fn render_root() -> String {
     let mut text = String::new();
     let _ = writeln!(text, "dev");
+    if fat::is_initialized() {
+        let _ = writeln!(text, "fat");
+    }
     if initrd::is_initialized() {
         let _ = writeln!(text, "initrd");
     }

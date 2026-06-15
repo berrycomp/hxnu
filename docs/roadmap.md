@@ -43,6 +43,7 @@ Current status:
 - Minimal VFS mount and read facade is online on `x86_64`
 - VFS normalized path resolution and node lookup facade are online on `x86_64`
 - `cpio` `newc` initrd discovery and `/initrd` read path are online on `x86_64`
+- Initrd-backed bootstrap block device, GPT partition discovery, and read-only `/fat` VFS mount smoke path are online on `x86_64`
 - `/initrd/init` executable candidate discovery and format probe are online on `x86_64`
 - `/initrd/init` ELF64 header and program-header inspection skeleton is online on `x86_64`
 - `/initrd/init` ELF `PT_LOAD` vm-map planning with RWX and BSS accounting is online on `x86_64`

@@ -7,8 +7,10 @@ extern crate alloc;
 
 mod acpi;
 mod arch;
+mod block;
 mod devfs;
 mod exec;
+mod fat;
 mod init_exec;
 mod fb;
 mod initrd;
@@ -29,6 +31,7 @@ mod uaccess;
 mod vfs;
 
 use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::arch::asm;
 
@@ -503,6 +506,76 @@ pub extern "C" fn _start() -> ! {
             error.as_str()
         ),
     }
+    match block::initialize() {
+        Ok(summary) => {
+            kprintln_style!(
+                crate::tty::ConsoleStyle::Success,
+                "HXNU: block online devices={} partitions={} bytes={} mbr-devices={} gpt-devices={}",
+                summary.device_count,
+                summary.partition_count,
+                summary.total_bytes,
+                summary.mbr_device_count,
+                summary.gpt_device_count,
+            );
+            if let Some(device) = block::device(0) {
+                kprintln_style!(
+                    crate::tty::ConsoleStyle::Muted,
+                    "HXNU: block device0 id={} kind={} name={} ro={} sector-size={} sectors={} bytes={}",
+                    device.id,
+                    device.kind.as_str(),
+                    device.name,
+                    yes_no(device.read_only),
+                    device.sector_size,
+                    device.sector_count,
+                    device.size_bytes,
+                );
+            }
+            if let Some(partition) = block::partition(0) {
+                kprintln_style!(
+                    crate::tty::ConsoleStyle::Muted,
+                    "HXNU: block partition0 id={} device={} table={} mbr-index={} gpt-index={} type={:#04x} bootable={} lba={} sectors={}",
+                    partition.id,
+                    partition.device_id,
+                    partition.table_kind.as_str(),
+                    partition.mbr_index,
+                    partition.gpt_index,
+                    partition.partition_type,
+                    yes_no(partition.bootable),
+                    partition.start_lba,
+                    partition.sector_count,
+                );
+            }
+        }
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Warning,
+            "HXNU: block offline reason={}",
+            error.as_str()
+        ),
+    }
+    match fat::initialize() {
+        Ok(summary) => kprintln_style!(
+            crate::tty::ConsoleStyle::Success,
+            "HXNU: fat online mounted={} partition={} device={} table={} type={} root-entries={} directories={}",
+            yes_no(summary.mounted),
+            summary
+                .partition_id
+                .map_or(String::from("<none>"), |value| value.to_string()),
+            summary
+                .device_id
+                .map_or(String::from("<none>"), |value| value.to_string()),
+            summary
+                .partition_table
+                .map_or("<none>", |kind| kind.as_str()),
+            summary.fat_type.map_or("<none>", |kind| kind.as_str()),
+            summary.root_entry_count,
+            summary.directory_count,
+        ),
+        Err(error) => kprintln_style!(
+            crate::tty::ConsoleStyle::Warning,
+            "HXNU: fat offline reason={}",
+            error.as_str()
+        ),
+    }
     match vfs::initialize() {
         Ok(summary) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
@@ -876,6 +949,13 @@ pub extern "C" fn _start() -> ! {
             crate::tty::ConsoleStyle::Muted,
             "HXNU: initrd preview root={}",
             initrd_root,
+        );
+    }
+    if let Some(fat_root) = vfs::preview("/fat", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: fat preview root={}",
+            fat_root,
         );
     }
     if let Some(init) = vfs::preview("/initrd/init", 80) {
