@@ -15,9 +15,7 @@ HXNU is the new Rust-based kernel line for Neonix. The old `heartix/kernel` tree
 
 ## Licensing
 
-HXNU currently should be treated as `GPLv3-or-later`.
-
-Reason: the current bootstrap code is not a clean-room implementation. It already reuses Ghost/Heartix-derived implementation material for boot protocol setup and early bring-up structure. See `NOTICE.md` for the current licensing position.
+HXNU currently treated as `MPL 2.0-or-later`.
 
 ## Repository Layout
 
