@@ -183,7 +183,11 @@ pub fn create_user_page_table(hhdm_offset: u64) -> Result<u64, MapError> {
     unsafe {
         for i in KERNEL_HIGHER_HALF_START..ENTRIES_PER_TABLE {
             let entry = read_volatile(kernel_pml4_virt.add(i));
-            write_volatile(user_pml4_virt.add(i), entry);
+            if entry & PAGE_PRESENT != 0 {
+                write_volatile(user_pml4_virt.add(i), entry | PAGE_USER);
+            } else {
+                write_volatile(user_pml4_virt.add(i), entry);
+            }
         }
     }
 

@@ -1,190 +1,83 @@
-# HXNU Roadmap
+# HXNU Roadmap & Neonix Blueprint
 
 Release target:
 - `2608` as the active first version marker for August 2026
-- As of 2026-06-11, the first public bootstrap release is expected to wait for
-  closure of `Phase 3.5` and a stable `x86_64` SMP baseline from `Phase 4`
+- As of 2026-07-02, the architectural trajectory has been massively expanded to support the **Neonix Ecosystem** (HPS, HFS, Supernova, LCL, Custom Compiler).
 
-## Phase 0
-- Separate Rust kernel repository
-- x86_64 target definition
-- Minimal ELF kernel entry
-- Early serial logging
+## Phase 0 - Phase 2 (Completed Bootstraps)
+- Separate Rust kernel repository, x86_64 target definition, Limine handoff.
+- Frame allocator, Kernel heap, GDT/IDT, Exception handlers.
+- APIC bring-up, base interrupt dispatch.
+- **Current status:** CPUID, ACPI, SMP topology, basic VFS, FAT32 initrd discovery, and early `int 0x80` syscall dispatcher are online on `x86_64`.
 
-## Phase 1
-- Limine handoff wrappers
-- Physical memory map parsing
-- Early logging and panic reporting
-- Frame allocator bootstrap
-- Kernel heap bootstrap
+## Phase 3: Kernel Virtualization & Syscall Foundation
+- Virtual memory manager (VMM) with low latency.
+- Page-fault resolution and trap-frame-aware user thread context save.
+- Syscall entry path completion (Implementing all missing Ghost/POSIX syscalls).
+- **Internal Hardware Scheduler:** Hardening the zero-latency, bare-metal internal IRQ scheduler.
+- FAT32 support in-kernel for `/initrd` boot parsing.
+- TTY core and UEFI framebuffer console plumbing.
 
-## Phase 2
-- GDT/IDT
-- Exception handlers
-- APIC or timer bring-up
-- Interrupt dispatch
-- Basic scheduler skeleton
-- Structured kernel diagnostics and panic reports
+## Phase 4: HPS Integration & Compatibility Layers
+- **HPS (Heterogenous Processing Scheduler) Linkage:** Directly tying the internal hardware scheduler to the HPS software bridge.
+- Stable SMP bring-up on `x86_64`.
+- **Linux Compatibility Layer (LCL):** Intercepting Linux ELF syscalls and mapping them to HXNU/HPS APIs.
+- Legacy Ghost compatibility layer.
+- Driver discovery and load policy: Mounting `.hxext` and `.hxmd` drivers natively from `/boot` or `/`.
 
-Current status:
-- GDT/IDT activation is online on `x86_64`
-- CPUID inventory is online on `x86_64`
-- CPUID topology leaf inventory from `0x0B/0x1F` is online on `x86_64`
-- UEFI framebuffer or GOP handoff is online on `x86_64`
-- Output-only TTY console bootstrap is online on `x86_64`
-- Local APIC timer one-shot bring-up is online on `x86_64`
-- Local APIC periodic tick and scheduler bootstrap are online on `x86_64`
-- Minimal ACPI discovery with `RSDP`, `XSDT`, `MADT`, and `FADT` parsing is online on `x86_64`
-- MADT processor, IO APIC, and interrupt-override topology summaries are online on `x86_64`
-- FADT power and reset-register summaries are online on `x86_64`
-- SMP topology inventory and AP bring-up target discovery are online on `x86_64`
-- Read-only `procfs` snapshot bootstrap is online on `x86_64`
-- Read-only `devfs` namespace bootstrap is online on `x86_64`
-- Minimal VFS mount and read facade is online on `x86_64`
-- VFS normalized path resolution and node lookup facade are online on `x86_64`
-- `cpio` `newc` initrd discovery and `/initrd` read path are online on `x86_64`
-- Initrd-backed bootstrap block device, GPT partition discovery, and read-only `/fat` VFS mount smoke path are online on `x86_64`
-- `/initrd/init` executable candidate discovery and format probe are online on `x86_64`
-- `/initrd/init` ELF64 header and program-header inspection skeleton is online on `x86_64`
-- `/initrd/init` ELF `PT_LOAD` vm-map planning with RWX and BSS accounting is online on `x86_64`
-- Early Unix-like shebang interpreter fallback from `/bin/*` to `/initrd/bin/*` is online on `x86_64`
-- Partial Linux + Ghost + HXNU-native syscall compatibility dispatcher bootstrap is online on `x86_64`
-- `x86_64` `int 0x80` syscall gate, register-frame dispatch, and entry self-test are online
-- Bootstrap `uaccess` copyin/copyout validation facade is online on `x86_64`
-- Bootstrap `openat/read/close` (`Linux`) and `open/read/close` (`Ghost`, `HXNU`) VFS-backed syscall paths are online
-- `exit_group` syscall path is connected to scheduler thread-exit request handling
-- Scheduler-backed `getpid/getppid/gettid` identity path is online for bootstrap syscall personalities
-- Open-file table ownership is now process-scoped, and `exit_group` purges owned descriptors
-- `exit_group` now tears down the current thread-group and advances to the next runnable scheduler entry
-- Multiple virtual TTY screen foundation is online on `x86_64`
-- Scheduler thread table and runqueue skeleton are online on `x86_64`
-- Bootstrap to idle-thread context switching is online on `x86_64`
-- Initial user page-table creation and bootstrap ELF segment mapping are online on `x86_64`
-- `/initrd/init` first userspace handoff is online on `x86_64`
-- HXNU-native ring3 bootstrap payload can issue `int 0x80` syscalls on `x86_64`
-- Styled framebuffer console output is online on `x86_64`
-- Breakpoint, page fault, and general protection fault self-tests are working
-- Power-reset self-test reaches the FADT reset-register path on `x86_64`
-- Trap-frame-aware ring3 scheduler handoff is online on `x86_64`
-- First user fatal-exception kill-and-resume policy is online on `x86_64`
-- Bootstrap `init` exit-triggered restart policy is online on `x86_64`
+## Phase 5: The Heterogeneous Compute Era
+- **Supernova NVIDIA Driver:** Loading the bare-metal GSP driver with embedded **MaRTix Core** for zero-latency Ray-Tracing.
+- **ReDaemon DRIVER:** It will target the RX 6000 series and beyond, as the RT core acceleration will be implemented in a way similar to MaRTix in Supernova.
+- **PhantomGP Driver:** This driver will be standard on all ARM GPUs from the Mali/Immortalis In Valhall architecture onwards. Ray tracing cores should also be supported, just like MaRTix in Supernova.
+- **Rockchip SoC Support:** Support for all Rockchip SoCs from the generation starting with Rockchip RK3588 is required. Ray tracing cores should also be supported, just like MaRTix in Supernova & ReDeamon.
+- **HFS (Heterogenous File System):** Merging RAM + VRAM + SSD into a unified namespace. Solutions need to be developed to address the power outage situation and prevent data loss.
+- **SECinter:** Activating the Syscall-level Zero-Trust entropy-ID security layer.
+- **Next-Gen Architecture Bring-up:** Initial direct translation and hardware bring-up for **ARMv9** (leveraging advanced SVE2 vector pipelines) and RISC-V.
+- **HVL (Heterogeneous Virtualization Library):** A highly advanced virtualization layer that integrates with HPS and hardware schedulers, but also supports NeoIO and allows for the translation of many ISAs using LUT methods with MoltenEMU. Native or LUT translation is possible. **(NEONIX EXCLUSIVE)
 
-Cross-repo status (as of 2026-03-29):
-- External compiler repository `hxnu-rustc-compiler-x86_64` is online and versioned separately
-- Rust-first SDK `v0.1.0` is tagged and includes `hxnu-rustc`, `hxnu-cargo`, `hxnu-sdk`, and `x86_64-unknown-hxnu` target spec
-- SDK bundle flow (`build`, `pack`, `install`) and ELF verification flow are automated in the compiler repository
-- Kernel integration model is consumer-style (`PATH` + `hxnu-cargo`), with no monorepo coupling
+## Phase 6: MVP Version of Neonix
+- **Driver Support for Customers:** Support for essential I/O, Wi-Fi, audio, and Ethernet chips commonly found on consumer motherboards, such as Realtek, MediaTek, Intel, and Nuvoton. NOTE: Drivers will not be located in the same place; it is STRONGLY RECOMMENDED that they be written separately to minimize cumbersome processes.
+- **Porting essential libraries & applications from Linux:** All essential packages such as gcc, build-essential, nxpkg (in the Neonix folder), flatpak, and Firefox must be ready, and cross-compilation libraries must be prepared.
+- **Completion of the basic system components** such like nxinitd & nxsysd (systemd variant) with neonix-sdk.
 
-## Phase 3
-- Virtual memory manager
-- Kernel virtual address-space management
-- User virtual address-space management
-- Page-fault resolution path
-- Process and thread core
-- Syscall entry path
-- User-kernel memory copy and validation path
-- IPC fast path
-- ELF loader
-- VFS core
-- `devfs`
-- `procfs`
-- TTY core and console plumbing
-- Multiple virtual TTY screens or virtual consoles
-- Early keyboard or console input path
-- UEFI framebuffer or GOP handoff and framebuffer console
-- Block device layer
-- Partition discovery
-- cpio-compatible initrd support
-- FAT16/32 support
-- Minimal ACPI discovery on `x86_64`
-- MADT and FADT parsing
-- Reboot and poweroff plumbing
-- Userspace ABI planning
-
-## Phase 3.5
-- Trap-frame-aware user thread context save and restore
-- Timer-driven ring3 preemption and real `sched_yield` handoff
-- Scheduler bookkeeping for user threads beyond bootstrap, idle, and single-init bring-up
-- Page-fault classification plus first resolve-or-kill policy for user faults
-- Stable `init` lifetime, exit, and restart semantics
-- Early keyboard or console input path
-- Block device, partition, and FAT bootstrap needed to move beyond initrd-only boot
-
-Current focus (as of 2026-06-11):
-- Harden the ring3 scheduler and first user-fault handling path before broad compatibility work
-- Treat `Phase 4` entry as a narrow SMP/per-CPU milestone first
-- Keep POSIX, PTY, and driver-loading work behind stable process and SMP foundations
-
-## Phase 4
-- Stable SMP bring-up on `x86_64`
-- Stable BSP to AP startup flow
-- Per-CPU data areas
-- IPI support
-- TLB shootdown path
-- POSIX personality
-- Legacy Ghost compatibility layer
-- Core virtualization or LVE hooks
-- Full Linux or Unix-like `init` startup contract
-- PTY and POSIX terminal semantics
-- Active TTY switching and console session routing
-- Driver object model
-- Device enumeration and bus framework
-- Driver loading infrastructure for external driver directories
-- Driver discovery and load policy for filesystem-backed modules
-- Driver trust and load policy
-- ext4 driver
-- exFAT driver
-
-## Phase 5
-- aarch64 bring-up
-- PL011 early UART
-- DTB parsing
-- Exception vectors and GIC
-- aarch64 SMP topology bring-up
-- Heterogeneous CPU topology support
-- big.LITTLE or hybrid-core scheduling awareness
-- Minimal `busybox-rust` bootstrap trials after stable `exec/spawn`, writable VFS, and PTY foundations are in place
-- Basic Ethernet bring-up
-- Early network driver model
-- Loopback and packet path groundwork
-- Minimal userspace networking boundary
-
-## Phase 6
-- Rust cross compiler support with `x86_64` and `aarch64` as first-class targets (`x86_64` bootstrap release is online in external compiler repo)
-- C and C++ cross compiler support with `x86_64` and `aarch64` as first-class targets
-- Additional architectures after the main two are stable
-- PPC 32-bit bring-up
-- Audio stack entry point
-- Additional driver families loaded from external driver directories
-- AHCI, NVMe, or virtio-blk expansion
-- Richer Ethernet and audio driver families
-- Debug monitor, symbol lookup, and crash dump direction
+## Phase 7: Global Domination
+- **Custom HXNU Compiler:** Full migration to the bespoke, zero-latency optimizing HXNU compiler toolchain.
+- **paragon-core:** Native `.hxmd` tensor execution library bypassing libc/rayon.
+- **Future ISA Targets:** Full native compiler and scheduler support for advanced **ARMv9** topologies, **PowerISA (both Big-Endian and Little-Endian)**, and the bespoke **H16B (Dual-Pipeline 128-bit ISA: MPS + AVX-512 Hybrid)** architecture. Development and direct translation of the H16B hardware matrix pipelines will be driven exclusively by the Local Agent (Antigravity Operasyon Timi).
+- Advanced Network & Audio stacks.
+- Official rollout of the **HXNU Public License (HPL)** enforcement.
 
 ## Architecture Direction
+- **Neonix** is the overarching ecosystem; **HXNU** is the micro-hybrid kernel.
+- **Two-Tiered Scheduling:** HXNU handles raw bare-metal IRQs via its Internal Scheduler. This scheduler is directly tied to **HPS**, which acts as the intelligent software bridge for Neonix userspace (merging MPS, GMS, MLS).
+- **POSIX Philosophy:** Retains POSIX API surfaces for LCL/software portability, but ABSOLUTELY ABANDONS POSIX compliance for internal scheduling and memory management.
+- **Boot Minimalism:** `/initrd` contains ONLY an in-kernel FAT32 driver. Massive drivers load from `/boot` or root `/`.
+- **Licensing:** The entire ecosystem is protected under the bespoke **HPL (HXNU Public License)**.
 
-- HXNU is a hybrid kernel
-- Native HXNU primitives come first
-- POSIX and legacy Ghost support are compatibility personalities, not the native kernel model
-- Boot-critical and virtualization-critical pieces stay in kernel
-- Replaceable services and policy should move to user space
-- FAT16/32 can live in kernel if that keeps early boot and recovery simpler
-- ext4 and exFAT are expected to work well as separate drivers or service modules
-- `devfs` and `procfs` should arrive early with the VFS core
-- TTY and framebuffer console support should be available before broader userspace compatibility work
-- Multiple virtual TTY screens should sit between the early console path and full PTY/session semantics
-- UEFI framebuffer support should be treated as a boot-critical display path
-- Minimal ACPI discovery and power-state plumbing belong in kernel
-- Full power-policy logic should stay outside the kernel when practical
-- SMP comes before broad userspace compatibility work
-- Heterogeneous CPU scheduling belongs after base SMP and timer stability
-- The syscall and user-kernel boundary should be treated as a first-class kernel milestone
-- Storage needs a block layer before filesystem work can scale
-- Driver loading from dedicated filesystem directories should be supported after the base VFS and init path are stable
+## Tier 1 Support List (HIGH PRIORITY)
+- **H16B Custom 128 bit MultiVec (2x512 bit MVX) ISA**
+- **All Explicitly parallel instruction computing (EPIC) based ISA's**
+- **x86_64 / amd64 with AVX-512**
+- **RISC-V 64 & 128 bit ISA**
+- **ARMv9 Microrchitecture with aarch64 ISA & NEON SIMD**
 
-## Toolchain Priorities
+# Tier 2 Support List (MEDUIM PRIORITY)
+- **PowerISA LE/BE with AltiVec & CELL BE Support**
+- **ARMv8 Microrchitecture with aarch64**
+- **Elbrus 2000 ISA**
+- **Other SIMD's for amd64**
 
-- Rust cross compilation: `x86_64`, then `aarch64`
-- C and C++ cross compilation: `x86_64`, then `aarch64`
-- Other architectures only after the main two toolchains are reliable
-- Compiler development continues in a dedicated repository: `https://github.com/neonix-bmx/hxnu-rustc-compiler-x86_64`
-- Kernel repository tracks integration contract and acceptance checks, not compiler internals
+# Tier 3 Support List (LOW PRIORITY)
+- **MIPS**
+- **SPARC**
+
+# Tier 4 List (NON SUPPORTED)
+- **ALL 32 bit CPU ISA's!!!**
+- **Itanium (IA-64)**s
+
+# FOLDER REQUIRED TO LOOK
+- /home/eilhanzy/Projects/Neonix/
+- /home/eilhanzy/Projects/neonix-uxperience/
+- /home/eilhanzy/Projects/moltenemu/
+- /home/eilhanzy/Projects/ParagonHPC/ && /home/eilhanzy/Projects/ParagonPE/
+- /home/eilhanzy/Projects/Compilers/ **FOR HXNU**

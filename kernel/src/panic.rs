@@ -29,7 +29,8 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     write_fatal_line(format_args!("action    cpu halted"));
     write_fatal_line(format_args!("======================================================"));
 
-    halt_forever()
+    // Ses sürücüsü donanımsal olarak CPU'yu kilitleyerek (Infinite Loop) crash buzz'ı çalacak.
+    crate::speaker::play_md80_altitude_warning();
 }
 
 #[alloc_error_handler]
@@ -42,10 +43,10 @@ fn alloc_error(layout: Layout) -> ! {
     ));
     write_fatal_line(format_args!("size      {}", layout.size()));
     write_fatal_line(format_args!("align     {}", layout.align()));
-    write_fatal_line(format_args!("action    cpu halted"));
     write_fatal_line(format_args!("======================================================"));
 
-    halt_forever()
+    // Ses sürücüsü donanımsal olarak CPU'yu kilitleyerek (Infinite Loop) crash buzz'ı çalacak.
+    crate::speaker::play_md80_altitude_warning();
 }
 
 pub(crate) fn write_fatal_line(args: fmt::Arguments<'_>) {

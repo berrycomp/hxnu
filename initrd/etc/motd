@@ -1,2 +1,0 @@
-HXNU 2608 bootstrap initrd
-serial, framebuffer, ACPI, SMP inventory, VFS, and cpio initrd are online.

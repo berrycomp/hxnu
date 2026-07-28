@@ -1,0 +1,16 @@
+--- kernel/src/main.rs
++++ kernel/src/main.rs
+@@ -951,6 +951,12 @@
+     kprintln!("HXNU: Rust kernel skeleton online");
+ 
+     hps::init_hxext();
++    crate::sched::register_hps_bridge(test_hps_hook);
++    crate::sched::trigger_hps_bridge(42, true);
++    let val = HPS_HOOK_CALLED.load(core::sync::atomic::Ordering::SeqCst);
++    kprintln!("HXNU: HPS_HOOK_CALLED={}", val);
++    if val != 1 {
++        panic!("HXNU: HPS hook failed!");
++    }
+ 
+     sched::idle_loop()
+ }

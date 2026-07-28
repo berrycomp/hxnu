@@ -7,7 +7,7 @@ use core::fmt::Write;
 
 use crate::block;
 
-const FAT_PATH_ROOT: &str = "/fat";
+const FAT_PATH_ROOT: &str = "/boot";
 const DIRECTORY_ENTRY_BYTES: usize = 32;
 const FAT32_EOC_MIN: u32 = 0x0fff_fff8;
 const FAT32_BAD_CLUSTER: u32 = 0x0fff_fff7;
@@ -32,6 +32,8 @@ static FAT: GlobalFat = GlobalFat::new();
 struct FatState {
     summary: FatSummary,
     root_entries: Vec<FatRootEntry>,
+    partition: crate::block::PartitionInfo,
+    bpb: BpbLayout,
 }
 
 #[derive(Clone)]
@@ -39,6 +41,7 @@ struct FatRootEntry {
     name: String,
     kind: FatNodeKind,
     size: usize,
+    cluster: u32,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -152,7 +155,7 @@ pub fn node_kind(path: &str) -> Option<FatNodeKind> {
         return Some(FatNodeKind::Directory);
     }
 
-    let name = normalized.strip_prefix("/fat/")?;
+    let name = normalized.strip_prefix("/boot/")?;
     state
         .root_entries
         .iter()
@@ -170,7 +173,7 @@ pub fn node_info(path: &str) -> Option<FatNodeInfo> {
         });
     }
 
-    let name = normalized.strip_prefix("/fat/")?;
+    let name = normalized.strip_prefix("/boot/")?;
     state
         .root_entries
         .iter()
@@ -179,6 +182,59 @@ pub fn node_info(path: &str) -> Option<FatNodeInfo> {
             kind: entry.kind,
             size: entry.size,
         })
+}
+
+pub fn read_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
+    let state = unsafe { (&*FAT.get()).as_ref()? };
+    let normalized = normalize_fat_path(path)?;
+    if normalized == FAT_PATH_ROOT {
+        return None;
+    }
+
+    let file_name = normalized.strip_prefix(FAT_PATH_ROOT)?.strip_prefix('/').unwrap_or(&normalized);
+    
+    let entry = state.root_entries.iter().find(|e| e.name.eq_ignore_ascii_case(file_name))?;
+    if entry.kind == FatNodeKind::Directory || entry.size == 0 || entry.cluster < 2 {
+        return None; // Cannot read empty or directory
+    }
+
+    let mut data = alloc::vec::Vec::with_capacity(entry.size);
+    let mut cluster = entry.cluster;
+    let bpb = &state.bpb;
+    let mut sector_buf = [0u8; crate::block::SECTOR_BYTES];
+
+    while cluster >= 2 && cluster < 0x0FFFFFF8 {
+        let cluster_lba = state.partition.start_lba
+            + u64::from(bpb.first_data_sector_offset)
+            + (u64::from(cluster - 2) * u64::from(bpb.sectors_per_cluster));
+
+        for sec in 0..bpb.sectors_per_cluster {
+            if crate::block::read(state.partition.device_id, cluster_lba + u64::from(sec), 1, &mut sector_buf).is_err() {
+                return None;
+            }
+            let remaining = entry.size.saturating_sub(data.len());
+            if remaining == 0 {
+                break;
+            }
+            let to_copy = remaining.min(crate::block::SECTOR_BYTES);
+            data.extend_from_slice(&sector_buf[..to_copy]);
+        }
+
+        if data.len() >= entry.size {
+            break;
+        }
+
+        match bpb.fat_type {
+            FatType::Fat32 => {
+                cluster = read_fat32_entry(state.partition, bpb, cluster)?;
+            }
+            FatType::Fat16 => {
+                return None; // Basic support, skip Fat16 file reads for now
+            }
+        }
+    }
+
+    Some(data)
 }
 
 pub fn read(path: &str) -> Option<String> {
@@ -227,6 +283,8 @@ fn try_mount_partition(partition: block::PartitionInfo) -> Option<FatState> {
             directory_count,
         },
         root_entries,
+        partition,
+        bpb,
     })
 }
 
@@ -434,7 +492,12 @@ fn parse_directory_sector(sector: &[u8; block::SECTOR_BYTES], out: &mut Vec<FatR
             FatNodeKind::File
         };
         let size = read_u32_le(sector, offset + 28) as usize;
-        out.push(FatRootEntry { name, kind, size });
+        
+        let cluster_hi = read_u16_le(sector, offset + 20) as u32;
+        let cluster_lo = read_u16_le(sector, offset + 26) as u32;
+        let cluster = (cluster_hi << 16) | cluster_lo;
+
+        out.push(FatRootEntry { name, kind, size, cluster });
 
         offset += DIRECTORY_ENTRY_BYTES;
     }
@@ -484,15 +547,15 @@ fn render_root_entries(entries: &[FatRootEntry]) -> String {
 }
 
 fn normalize_fat_path(path: &str) -> Option<String> {
-    if path == FAT_PATH_ROOT || path == "/fat/" {
+    if path == FAT_PATH_ROOT || path == "/boot/" {
         return Some(String::from(FAT_PATH_ROOT));
     }
-    if !path.starts_with("/fat/") {
+    if !path.starts_with("/boot/") {
         return None;
     }
 
     let trimmed = path.trim_end_matches('/');
-    let name = trimmed.strip_prefix("/fat/")?;
+    let name = trimmed.strip_prefix("/boot/")?;
     if name.is_empty() || name.contains('/') {
         return None;
     }

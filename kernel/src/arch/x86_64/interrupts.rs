@@ -12,12 +12,76 @@ use super::apic;
 const SYSCALL_VECTOR: usize = 0x80;
 const INTERRUPT_GATE: u8 = 0x8e;
 const USER_INTERRUPT_GATE: u8 = 0xee;
+
+const IA32_STAR: u32 = 0xC0000081;
+const IA32_LSTAR: u32 = 0xC0000082;
+const IA32_FMASK: u32 = 0xC0000084;
+
 unsafe extern "C" {
     fn hxnu_x86_64_syscall_entry();
+    fn hxnu_x86_64_fast_syscall_entry();
 }
 
 global_asm!(
     r#"
+    .global hxnu_x86_64_fast_syscall_entry
+    .type hxnu_x86_64_fast_syscall_entry,@function
+hxnu_x86_64_fast_syscall_entry:
+    swapgs
+    mov gs:16, rsp # Save user RSP to per-cpu scratch
+    mov rsp, gs:8  # Load kernel RSP from per-cpu structure
+
+    # Construct IRETQ frame on kernel stack to match int 0x80
+    push 0x2B      # User SS
+    push gs:16     # User RSP
+    push r11       # User RFLAGS (saved by syscall)
+    push 0x33      # User CS
+    push rcx       # User RIP (saved by syscall)
+
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rbp
+    push rax
+
+    mov rdi, rsp
+    sub rsp, 8
+    call hxnu_x86_64_handle_syscall_frame
+    add rsp, 8
+
+    mov [rsp], rax
+    
+    pop rax
+    pop rbp
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+
+    add rsp, 40 # skip IRETQ frame
+    mov rsp, gs:16 # Restore user RSP
+    swapgs
+    sysretq
+
     .global hxnu_x86_64_syscall_entry
     .type hxnu_x86_64_syscall_entry,@function
 hxnu_x86_64_syscall_entry:
@@ -194,6 +258,10 @@ static IDT: GlobalIdt = GlobalIdt::new();
 pub fn initialize() {
     let idt = unsafe { &mut *IDT.get() };
     let code_selector = read_code_segment();
+    
+    // NMI Vector 2 for Device Tree PFI (Power Fail Interrupt) -> NVMP
+    idt.entries[2].set_handler_addr(nmi_handler as *const () as usize, code_selector);
+    
     idt.entries[3].set_handler_addr(breakpoint_handler as *const () as usize, code_selector);
     idt.entries[6].set_handler_addr(invalid_opcode_handler as *const () as usize, code_selector);
     idt.entries[8].set_handler_addr(double_fault_handler as *const () as usize, code_selector);
@@ -212,6 +280,7 @@ pub fn initialize() {
         code_selector,
         USER_INTERRUPT_GATE,
     );
+    idt.entries[0x81].set_handler_addr(asymmetric_irq_handler as *const () as usize, code_selector);
 
     let idtr = DescriptorTablePointer {
         limit: (size_of::<Idt>() - 1) as u16,
@@ -221,6 +290,16 @@ pub fn initialize() {
     unsafe {
         asm!("lidt [{idtr}]", idtr = in(reg) &idtr, options(readonly, nostack, preserves_flags));
     }
+    
+    init_syscall_msrs(code_selector);
+}
+
+pub fn init_syscall_msrs(code_selector: u16) {
+    // Setting up fast syscall MSRs
+    let star = ((0x28u64 | 3) << 48) | ((code_selector as u64) << 32);
+    crate::arch::x86_64::cpu::write_msr(IA32_STAR, star);
+    crate::arch::x86_64::cpu::write_msr(IA32_LSTAR, hxnu_x86_64_fast_syscall_entry as u64);
+    crate::arch::x86_64::cpu::write_msr(IA32_FMASK, 0x200); // Mask interrupts during syscall entry
 }
 
 pub fn trigger_breakpoint() {
@@ -499,6 +578,18 @@ const fn decode_syscall_abi(selector: u64) -> Option<SyscallAbi> {
         2 => Some(SyscallAbi::HxnuNativeBootstrap),
         _ => None,
     }
+}
+
+extern "x86-interrupt" fn nmi_handler(_stack_frame: InterruptStackFrame) {
+    // A Non-Maskable Interrupt (NMI) implies a critical hardware event.
+    // In Neonix, this is wired via Device Tree as the Power Fail Interrupt (PFI).
+    unsafe {
+        crate::nvmp::emergency_flush_to_hfs();
+    }
+}
+
+extern "x86-interrupt" fn asymmetric_irq_handler(_stack_frame: InterruptStackFrame) {
+    let _ = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::GpuCompute);
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

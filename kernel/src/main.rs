@@ -1,3 +1,4 @@
+#![allow(static_mut_refs)]
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
@@ -12,8 +13,19 @@ mod devfs;
 mod exec;
 mod fat;
 mod init_exec;
-mod fb;
 mod initrd;
+pub mod live_update;
+pub mod nvmp;
+pub mod secinter;
+pub mod module_loader;
+pub mod sxrc_core;
+pub mod supernova;
+pub mod martix;
+pub mod speaker;
+pub mod hsched;
+pub mod hps_bridge;
+pub mod neoio;
+pub mod neoio_bridge;
 #[macro_use]
 mod log;
 mod limine;
@@ -44,6 +56,7 @@ enum SelfTest {
     GeneralProtectionFault,
     Panic,
     PowerReset,
+    Heterexec,
 }
 
 #[unsafe(no_mangle)]
@@ -76,74 +89,18 @@ pub extern "C" fn _start() -> ! {
         }
     };
 
-    match limine::framebuffer() {
-        Some(framebuffer) => match fb::initialize(framebuffer) {
-            Ok(summary) => {
-                let tty = tty::initialize(true);
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Accent,
-                    "HXNU: framebuffer online mode={}x{} pitch={} bpp={}",
-                    summary.width,
-                    summary.height,
-                    summary.pitch,
-                    summary.bpp,
-                );
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Muted,
-                    "HXNU: framebuffer probe background={:#010x} accent={:#010x}",
-                    summary.sample_background,
-                    summary.sample_accent,
-                );
-                if let Some(ink) = fb::console_probe() {
-                    kprintln_style!(
-                        crate::tty::ConsoleStyle::Accent,
-                        "HXNU: framebuffer console probe ink={:#010x}",
-                        ink
-                    );
-                }
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Success,
-                    "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
-                    tty.console_id,
-                    tty.output_count,
-                    yes_no(tty.framebuffer_output),
-                    tty.virtual_console_count,
-                    tty.columns,
-                    tty.rows,
-                );
-            }
-            Err(error) => {
-                let tty = tty::initialize(false);
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Error,
-                    "HXNU: framebuffer offline reason={}",
-                    error.as_str()
-                );
-                kprintln!(
-                    "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
-                    tty.console_id,
-                    tty.output_count,
-                    yes_no(tty.framebuffer_output),
-                    tty.virtual_console_count,
-                    tty.columns,
-                    tty.rows,
-                );
-            }
-        },
-        None => {
-            let tty = tty::initialize(false);
-            kprintln!("HXNU: framebuffer response missing");
-            kprintln!(
-                "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
-                tty.console_id,
-                tty.output_count,
-                yes_no(tty.framebuffer_output),
-                tty.virtual_console_count,
-                tty.columns,
-                tty.rows,
-            );
-        }
-    }
+    
+    let tty = tty::initialize(false);
+    kprintln!("HXNU: framebuffer disabled for initrd minimalism, loading from /boot instead");
+    kprintln!(
+        "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
+        tty.console_id,
+        tty.output_count,
+        yes_no(tty.framebuffer_output),
+        tty.virtual_console_count,
+        tty.columns,
+        tty.rows,
+    );
 
     match limine::memory_map() {
         Some(memory_map) => {
@@ -593,6 +550,7 @@ pub extern "C" fn _start() -> ! {
             halt();
         }
     }
+    module_loader::load_modules();
     match vfs::discover_init_executable() {
         Ok(candidate) => kprintln_style!(
             crate::tty::ConsoleStyle::Accent,
@@ -726,6 +684,24 @@ pub extern "C" fn _start() -> ! {
             SelfTest::Panic => {
                 kprintln!("HXNU: running kernel self-test = panic");
                 panic!("requested kernel panic self-test");
+            }
+            SelfTest::Heterexec => {
+                kprintln!("HXNU: running kernel self-test = heterexec bridge");
+                unsafe {
+                    crate::hsched::HSCHED.init();
+                    let ptr = crate::hps_bridge::hps_get_shared_buffer();
+                    kprintln!("HXNU: heterexec hook shared_buffer ptr={:p}", ptr);
+                    
+                    let id1 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::CpuAvx512).unwrap();
+                    let id2 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::GpuCompute).unwrap();
+                    
+                    kprintln!("HXNU: submitted workloads id1={} id2={}", id1, id2);
+                    
+                    crate::hsched::HSCHED.dispatch_pending();
+                    
+                    kprintln!("HXNU: dispatched workloads");
+                    kprintln!("HXNU: Heterexec bridge self-test PASSED");
+                }
             }
             SelfTest::PowerReset => {
                 let capability = power::reset_capability();
@@ -951,7 +927,7 @@ pub extern "C" fn _start() -> ! {
             initrd_root,
         );
     }
-    if let Some(fat_root) = vfs::preview("/fat", 80) {
+    if let Some(fat_root) = vfs::preview("/boot", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
             "HXNU: fat preview root={}",
@@ -974,6 +950,13 @@ pub extern "C" fn _start() -> ! {
     }
 
     kprintln!("HXNU: Rust kernel skeleton online");
+    
+    hps::init_hxext();
+    crate::sched::register_hps_bridge(test_hps_hook);
+    crate::sched::trigger_hps_bridge(42, true);
+    let val = HPS_HOOK_CALLED.load(core::sync::atomic::Ordering::SeqCst);
+    kprintln!("HXNU: HPS_HOOK_CALLED={}", val);
+    
     sched::idle_loop()
 }
 
@@ -982,6 +965,8 @@ const fn selected_self_test() -> Option<SelfTest> {
         Some(SelfTest::Panic)
     } else if cfg!(feature = "power-reset-self-test") {
         Some(SelfTest::PowerReset)
+    } else if cfg!(feature = "heterexec-self-test") {
+        Some(SelfTest::Heterexec)
     } else if cfg!(feature = "exception-test-page-fault") {
         Some(SelfTest::PageFault)
     } else if cfg!(feature = "exception-test-general-protection") {
@@ -1003,4 +988,12 @@ fn halt() -> ! {
 
 const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+pub static HPS_HOOK_CALLED: AtomicUsize = AtomicUsize::new(0);
+
+pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
+    HPS_HOOK_CALLED.fetch_add(1, Ordering::SeqCst);
+    crate::serial::write_str("HXNU: stress_test_hps_hook triggered!\n");
 }

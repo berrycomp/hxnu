@@ -262,42 +262,95 @@ static FD_TABLE: GlobalFdTable = GlobalFdTable::new();
 
 pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome {
     match abi {
-        SyscallAbi::LinuxBootstrap => dispatch_linux_bootstrap(number, args),
-        SyscallAbi::GhostBootstrap => dispatch_ghost_bootstrap(number, args),
+        SyscallAbi::LinuxBootstrap => posix_compat::dispatch_linux_bootstrap(number, args),
+        SyscallAbi::GhostBootstrap => posix_compat::dispatch_ghost_bootstrap(number, args),
         SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(number, args),
     }
 }
 
-pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
-    match number {
-        LINUX_SYS_READ => read_from_fd(args),
-        LINUX_SYS_WRITE => write_with_fd(args),
-        LINUX_SYS_CLOSE => close_fd(args),
-        LINUX_SYS_OPENAT => linux_openat(args),
-        LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
-        LINUX_SYS_GETPID => process_id(),
-        LINUX_SYS_GETPPID => process_parent_id(),
-        LINUX_SYS_GETTID => thread_id(),
-        LINUX_SYS_CLOCK_GETTIME => linux_clock_gettime(args),
-        LINUX_SYS_UNAME => linux_uname(args),
-        LINUX_SYS_EXIT | LINUX_SYS_EXIT_GROUP => exit_group(args),
-        _ => SyscallOutcome::errno(ENOSYS),
-    }
-}
+pub mod posix_compat {
+    use super::*;
 
-pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
-    match number {
-        GHOST_SYS_WRITE => write_with_fd(args),
-        GHOST_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
-        GHOST_SYS_READ => read_from_fd(args),
-        GHOST_SYS_CLOSE => close_fd(args),
-        GHOST_SYS_YIELD => SyscallOutcome::success(0),
-        GHOST_SYS_GETPID => process_id(),
-        GHOST_SYS_GETTID => thread_id(),
-        GHOST_SYS_UPTIME_NSEC => uptime_ns(),
-        GHOST_SYS_UNAME => ghost_uname(args),
-        GHOST_SYS_EXIT_GROUP => exit_group(args),
-        _ => SyscallOutcome::errno(ENOSYS),
+    pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
+        match number {
+            LINUX_SYS_READ => read_from_fd(args),
+            LINUX_SYS_WRITE => write_with_fd(args),
+            LINUX_SYS_CLOSE => close_fd(args),
+            LINUX_SYS_OPENAT => linux_openat(args),
+            LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
+            LINUX_SYS_GETPID => process_id(),
+            LINUX_SYS_GETPPID => process_parent_id(),
+            LINUX_SYS_GETTID => thread_id(),
+            LINUX_SYS_CLOCK_GETTIME => linux_clock_gettime(args),
+            LINUX_SYS_UNAME => linux_uname(args),
+            LINUX_SYS_EXIT | LINUX_SYS_EXIT_GROUP => exit_group(args),
+
+            _ => SyscallOutcome::errno(ENOSYS),
+        }
+    }
+
+    pub fn dispatch_ghost_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
+        match number {
+            GHOST_SYS_WRITE => write_with_fd(args),
+            GHOST_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
+            GHOST_SYS_READ => read_from_fd(args),
+            GHOST_SYS_CLOSE => close_fd(args),
+            GHOST_SYS_YIELD => SyscallOutcome::success(0),
+            GHOST_SYS_GETPID => process_id(),
+            GHOST_SYS_GETTID => thread_id(),
+            GHOST_SYS_UPTIME_NSEC => uptime_ns(),
+            GHOST_SYS_UNAME => ghost_uname(args),
+            GHOST_SYS_EXIT_GROUP => exit_group(args),
+            _ => SyscallOutcome::errno(ENOSYS),
+        }
+    }
+
+    pub(super) fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
+        let dirfd = args[0] as i64;
+        super::open_path_at(dirfd, args[1] as usize, args[2])
+    }
+
+    pub(super) fn linux_clock_gettime(args: [u64; 6]) -> SyscallOutcome {
+        let clock_id = args[0] as i32;
+        if clock_id != super::LINUX_CLOCK_REALTIME && clock_id != super::LINUX_CLOCK_MONOTONIC {
+            return SyscallOutcome::errno(super::EINVAL);
+        }
+
+        let ptr = args[1] as usize;
+        let uptime_ns = crate::time::uptime_nanoseconds();
+        let timespec = super::LinuxTimespec {
+            tv_sec: (uptime_ns / 1_000_000_000) as i64,
+            tv_nsec: (uptime_ns % 1_000_000_000) as i64,
+        };
+        if let Err(error) = super::copyout_struct(ptr, &timespec) {
+            return SyscallOutcome::errno(error);
+        }
+
+        SyscallOutcome::success(0)
+    }
+
+    pub(super) fn linux_uname(args: [u64; 6]) -> SyscallOutcome {
+        super::write_uname(
+            args[0] as usize,
+            "Linux",
+            "hxnu",
+            "0.1.0-hxnu",
+            "HXNU micro-hybrid kernel bootstrap",
+            "x86_64",
+            "localdomain",
+        )
+    }
+
+    pub(super) fn ghost_uname(args: [u64; 6]) -> SyscallOutcome {
+        super::write_uname(
+            args[0] as usize,
+            "Ghost",
+            "hxnu",
+            "0.1.0-ghost",
+            "HXNU ghost compatibility bootstrap",
+            "x86_64",
+            "legacy",
+        )
     }
 }
 
@@ -534,10 +587,7 @@ pub fn run_hxnu_bootstrap_probe() -> HxnuBootstrapProbe {
     }
 }
 
-fn linux_openat(args: [u64; 6]) -> SyscallOutcome {
-    let dirfd = args[0] as i64;
-    open_path_at(dirfd, args[1] as usize, args[2])
-}
+
 
 fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
     if !is_read_only_open(flags) {
@@ -681,48 +731,9 @@ fn uptime_ns() -> SyscallOutcome {
     }
 }
 
-fn linux_clock_gettime(args: [u64; 6]) -> SyscallOutcome {
-    let clock_id = args[0] as i32;
-    if clock_id != LINUX_CLOCK_REALTIME && clock_id != LINUX_CLOCK_MONOTONIC {
-        return SyscallOutcome::errno(EINVAL);
-    }
 
-    let ptr = args[1] as usize;
-    let uptime_ns = time::uptime_nanoseconds();
-    let timespec = LinuxTimespec {
-        tv_sec: (uptime_ns / 1_000_000_000) as i64,
-        tv_nsec: (uptime_ns % 1_000_000_000) as i64,
-    };
-    if let Err(error) = copyout_struct(ptr, &timespec) {
-        return SyscallOutcome::errno(error);
-    }
 
-    SyscallOutcome::success(0)
-}
 
-fn linux_uname(args: [u64; 6]) -> SyscallOutcome {
-    write_uname(
-        args[0] as usize,
-        "Linux",
-        "hxnu",
-        "0.1.0-hxnu",
-        "HXNU micro-hybrid kernel bootstrap",
-        "x86_64",
-        "localdomain",
-    )
-}
-
-fn ghost_uname(args: [u64; 6]) -> SyscallOutcome {
-    write_uname(
-        args[0] as usize,
-        "Ghost",
-        "hxnu",
-        "0.1.0-ghost",
-        "HXNU ghost compatibility bootstrap",
-        "x86_64",
-        "legacy",
-    )
-}
 
 fn write_uname(
     ptr: usize,

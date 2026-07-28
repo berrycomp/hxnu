@@ -1,9 +1,33 @@
 use core::cell::UnsafeCell;
 
-use crate::fb;
 use crate::serial;
 
-pub use crate::fb::{ConsoleGlyph, ConsoleStyle};
+
+#[derive(Copy, Clone)]
+pub enum ConsoleStyle {
+    Default,
+    Accent,
+    Success,
+    Warning,
+    Error,
+    Fatal,
+    Muted,
+}
+
+#[derive(Copy, Clone)]
+pub struct ConsoleGlyph {
+    pub byte: u8,
+    pub style: ConsoleStyle,
+}
+
+impl ConsoleGlyph {
+    pub const fn empty() -> Self {
+        Self {
+            byte: b" "[0],
+            style: ConsoleStyle::Default,
+        }
+    }
+}
 
 const OUTPUT_SERIAL: u8 = 1 << 0;
 const OUTPUT_FRAMEBUFFER: u8 = 1 << 1;
@@ -205,11 +229,7 @@ impl TtyConsole {
             self.outputs |= OUTPUT_FRAMEBUFFER;
         }
 
-        let (columns, rows) = if framebuffer_output {
-            fb::console_dimensions().unwrap_or((DEFAULT_COLUMNS, DEFAULT_ROWS))
-        } else {
-            (DEFAULT_COLUMNS, DEFAULT_ROWS)
-        };
+        let (columns, rows) = (DEFAULT_COLUMNS, DEFAULT_ROWS);
         self.columns = columns.min(MAX_COLUMNS).max(1);
         self.rows = rows.min(MAX_ROWS).max(1);
         self.bytes_written = 0;
@@ -247,10 +267,7 @@ impl TtyConsole {
         let active = self.active_console_id as usize;
         self.consoles[active].write_style(style, text);
         if outputs & OUTPUT_FRAMEBUFFER != 0 {
-            match style {
-                ConsoleStyle::Default => fb::write_str(text),
-                style => fb::write_style(style, text),
-            }
+            
         }
 
         self.bytes_written = self.bytes_written.saturating_add(text.len() as u64);
@@ -295,14 +312,7 @@ impl TtyConsole {
     fn render_active_console(&self) {
         let active = self.active_console_id as usize;
         let console = &self.consoles[active];
-        fb::render_console(
-            &console.cells[..console.columns * console.rows],
-            console.columns,
-            console.rows,
-            console.cursor_column,
-            console.cursor_row,
-        );
-    }
+            }
 
     fn show_log_console(&mut self) {
         let _ = self.switch_active_console(LOG_CONSOLE_ID);

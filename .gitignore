@@ -2,3 +2,14 @@
 /build/
 /vendor/
 /.DS_Store
+AGENTS.md
+AGENT.md
+.agents/
+prompt_draft.md
+plan_agents_setup.md
+scratch/*.py
+scratch/*.sh
+tmp/*.py
+tmp/*.sh
+.agents/*.py
+.agents/*.sh

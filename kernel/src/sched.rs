@@ -155,6 +155,7 @@ struct Thread {
     name: &'static str,
     role: ThreadRole,
     state: ThreadState,
+    base_priority: u8,
     total_ticks: u64,
     dispatch_count: u64,
     context: arch::x86_64::TaskContext,
@@ -170,6 +171,7 @@ impl Thread {
             name: "",
             role: ThreadRole::None,
             state: ThreadState::Unused,
+            base_priority: 0,
             total_ticks: 0,
             dispatch_count: 0,
             context: arch::x86_64::TaskContext::empty(),
@@ -222,14 +224,18 @@ struct ProcessIdentity {
     thread_group_id: u64,
 }
 
+const MAX_PRIORITIES: usize = 64;
+
 struct Scheduler {
+    pub hps_hook: Option<fn(thread_id: u64, is_gpu: bool)>,
     initialized: bool,
     next_thread_id: u64,
     thread_count: usize,
     threads: [Thread; MAX_THREADS],
-    runqueue: [usize; MAX_THREADS],
-    runqueue_depth: usize,
-    current_runqueue_index: usize,
+    runqueues: [[usize; MAX_THREADS]; MAX_PRIORITIES],
+    runqueue_depths: [usize; MAX_PRIORITIES],
+    runqueue_bitmap: u64,
+    current_slot: Option<usize>,
     context_switches: u64,
     bootstrap_thread_id: u64,
     idle_thread_id: u64,
@@ -242,11 +248,13 @@ impl Scheduler {
             next_thread_id: 1,
             thread_count: 0,
             threads: [Thread::empty(); MAX_THREADS],
-            runqueue: [0; MAX_THREADS],
-            runqueue_depth: 0,
-            current_runqueue_index: 0,
+            runqueues: [[0; MAX_THREADS]; MAX_PRIORITIES],
+            runqueue_depths: [0; MAX_PRIORITIES],
+            runqueue_bitmap: 0,
+            current_slot: None,
             context_switches: 0,
             bootstrap_thread_id: 0,
+            hps_hook: None,
             idle_thread_id: 0,
         }
     }
@@ -290,7 +298,6 @@ impl Scheduler {
             idle_thread_entry,
         );
 
-        self.current_runqueue_index = 0;
         self.initialized = true;
         self.bootstrap_thread_id = self.threads[bootstrap_slot].id;
         self.idle_thread_id = self.threads[idle_slot].id;
@@ -323,6 +330,7 @@ impl Scheduler {
             name,
             role,
             state: ThreadState::Runnable,
+            base_priority: 0,
             total_ticks: 0,
             dispatch_count: 0,
             context,
@@ -331,60 +339,70 @@ impl Scheduler {
         Ok(slot)
     }
 
+    fn priority_for_thread(&self, slot: usize) -> usize {
+        let p = self.threads[slot].base_priority;
+        if p > 63 { 63 } else { p as usize }
+    }
+
     fn enqueue(&mut self, slot: usize) -> Result<(), SchedulerError> {
-        if self.runqueue_depth >= MAX_THREADS {
+        let priority = self.priority_for_thread(slot);
+        let depth = self.runqueue_depths[priority];
+        if depth >= MAX_THREADS {
             return Err(SchedulerError::RunQueueFull);
         }
-
-        self.runqueue[self.runqueue_depth] = slot;
-        self.runqueue_depth += 1;
+        self.runqueues[priority][depth] = slot;
+        self.runqueue_depths[priority] = depth + 1;
+        self.runqueue_bitmap |= 1 << priority;
         Ok(())
     }
 
+    fn dequeue(&mut self, priority: usize) -> Option<usize> {
+        let depth = self.runqueue_depths[priority];
+        if depth == 0 { return None; }
+        let slot = self.runqueues[priority][0];
+        for i in 0..depth - 1 {
+            self.runqueues[priority][i] = self.runqueues[priority][i + 1];
+        }
+        self.runqueue_depths[priority] -= 1;
+        if self.runqueue_depths[priority] == 0 {
+            self.runqueue_bitmap &= !(1 << priority);
+        }
+        Some(slot)
+    }
+
     fn on_timer_tick(&mut self) -> Option<DispatchDecision> {
-        if !self.initialized || self.runqueue_depth == 0 {
+        if !self.initialized || (self.runqueue_bitmap == 0 && self.current_slot.is_none()) {
             return None;
         }
 
-        let current_slot = self.runqueue[self.current_runqueue_index];
-        if self.threads[current_slot].state == ThreadState::Running {
-            self.threads[current_slot].total_ticks = self.threads[current_slot]
-                .total_ticks
-                .saturating_add(1);
+        if let Some(current_slot) = self.current_slot {
+            if self.threads[current_slot].state == ThreadState::Running {
+                self.threads[current_slot].total_ticks = self.threads[current_slot].total_ticks.saturating_add(1);
+                self.threads[current_slot].state = ThreadState::Runnable;
+                let _ = self.enqueue(current_slot);
+            }
         }
 
-        if self.runqueue_depth == 1 {
-            if self.threads[current_slot].state == ThreadState::Exited {
-                return None;
-            }
-            return Some(self.dispatch_snapshot(current_slot));
-        }
-
-        if self.threads[current_slot].state == ThreadState::Running {
-            self.threads[current_slot].state = ThreadState::Runnable;
-        }
-        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
-        let mut found = false;
-        for _ in 0..self.runqueue_depth {
-            let candidate = self.runqueue[next_index];
-            if self.threads[candidate].state != ThreadState::Exited {
-                found = true;
-                break;
-            }
-            next_index = (next_index + 1) % self.runqueue_depth;
-        }
-        if !found {
+        if self.runqueue_bitmap == 0 {
+            self.current_slot = None;
             return None;
         }
 
-        self.current_runqueue_index = next_index;
-        let next_slot = self.runqueue[next_index];
-        self.threads[next_slot].state = ThreadState::Running;
-        self.threads[next_slot].dispatch_count = self.threads[next_slot]
-            .dispatch_count
-            .saturating_add(1);
-        if next_slot != current_slot {
+        let best_priority = self.runqueue_bitmap.trailing_zeros() as usize;
+        if best_priority >= MAX_PRIORITIES { return None; }
+
+        let next_slot = self.dequeue(best_priority)?;
+
+        if Some(next_slot) != self.current_slot {
             self.context_switches = self.context_switches.saturating_add(1);
+        }
+
+        self.current_slot = Some(next_slot);
+        self.threads[next_slot].state = ThreadState::Running;
+        self.threads[next_slot].dispatch_count = self.threads[next_slot].dispatch_count.saturating_add(1);
+        if let Some(hook) = self.hps_hook {
+            let is_gpu = self.threads[next_slot].role == ThreadRole::User;
+            hook(self.threads[next_slot].id, is_gpu);
         }
 
         Some(self.dispatch_snapshot(next_slot))
@@ -401,73 +419,67 @@ impl Scheduler {
     }
 
     fn current_thread(&self) -> Thread {
-        if !self.initialized || self.runqueue_depth == 0 {
-            return Thread::empty();
+        if let Some(slot) = self.current_slot {
+            self.threads[slot]
+        } else {
+            Thread::empty()
         }
-
-        if self.current_runqueue_index >= self.runqueue_depth {
-            return Thread::empty();
-        }
-
-        self.threads[self.runqueue[self.current_runqueue_index]]
     }
 
     fn restore_bootstrap_as_current(&mut self) {
-        let Some(bootstrap_slot) = self.bootstrap_slot() else {
-            return;
-        };
-
+        let Some(bootstrap_slot) = self.bootstrap_slot() else { return; };
         for slot in 0..self.thread_count {
             if self.threads[slot].state == ThreadState::Running {
                 self.threads[slot].state = ThreadState::Runnable;
+                let _ = self.enqueue(slot);
             }
+        }
+        let p = self.priority_for_thread(bootstrap_slot);
+        let mut found = None;
+        for i in 0..self.runqueue_depths[p] {
+            if self.runqueues[p][i] == bootstrap_slot { found = Some(i); break; }
+        }
+        if let Some(idx) = found {
+            for i in idx..self.runqueue_depths[p] - 1 { self.runqueues[p][i] = self.runqueues[p][i + 1]; }
+            self.runqueue_depths[p] -= 1;
+            if self.runqueue_depths[p] == 0 { self.runqueue_bitmap &= !(1 << p); }
         }
 
         self.threads[bootstrap_slot].state = ThreadState::Running;
-        self.threads[bootstrap_slot].dispatch_count = self.threads[bootstrap_slot]
-            .dispatch_count
-            .saturating_add(1);
-
-        for index in 0..self.runqueue_depth {
-            if self.runqueue[index] == bootstrap_slot {
-                self.current_runqueue_index = index;
-                break;
-            }
-        }
+        self.threads[bootstrap_slot].dispatch_count = self.threads[bootstrap_slot].dispatch_count.saturating_add(1);
+        self.current_slot = Some(bootstrap_slot);
     }
 
     fn activate_thread_slot(&mut self, target_slot: usize) -> Result<(), SchedulerError> {
-        if !self.initialized || self.runqueue_depth == 0 || target_slot >= self.thread_count {
+        if !self.initialized || target_slot >= self.thread_count {
             return Err(SchedulerError::MissingIdleThread);
         }
-
-        let current_slot = self.runqueue[self.current_runqueue_index];
-        if current_slot == target_slot {
-            self.threads[target_slot].state = ThreadState::Running;
-            return Ok(());
-        }
-
-        if self.threads[current_slot].state == ThreadState::Running {
-            self.threads[current_slot].state = ThreadState::Runnable;
-        }
-        for index in 0..self.runqueue_depth {
-            let slot = self.runqueue[index];
-            if slot == target_slot {
-                self.current_runqueue_index = index;
-                self.threads[slot].state = ThreadState::Running;
-                self.context_switches = self.context_switches.saturating_add(1);
-                return Ok(());
+        if let Some(current_slot) = self.current_slot {
+            if current_slot == target_slot { return Ok(()); }
+            if self.threads[current_slot].state == ThreadState::Running {
+                self.threads[current_slot].state = ThreadState::Runnable;
+                let _ = self.enqueue(current_slot);
             }
         }
-
-        Err(SchedulerError::MissingIdleThread)
+        let p = self.priority_for_thread(target_slot);
+        let mut found = None;
+        for i in 0..self.runqueue_depths[p] {
+            if self.runqueues[p][i] == target_slot { found = Some(i); break; }
+        }
+        if let Some(idx) = found {
+            for i in idx..self.runqueue_depths[p] - 1 { self.runqueues[p][i] = self.runqueues[p][i + 1]; }
+            self.runqueue_depths[p] -= 1;
+            if self.runqueue_depths[p] == 0 { self.runqueue_bitmap &= !(1 << p); }
+        }
+        self.current_slot = Some(target_slot);
+        self.threads[target_slot].state = ThreadState::Running;
+        self.context_switches = self.context_switches.saturating_add(1);
+        Ok(())
     }
 
     fn first_runnable_user_slot(&self) -> Option<usize> {
         for slot in 0..self.thread_count {
-            if self.threads[slot].role == ThreadRole::User
-                && self.threads[slot].state != ThreadState::Exited
-            {
+            if self.threads[slot].role == ThreadRole::User && self.threads[slot].state != ThreadState::Exited {
                 return Some(slot);
             }
         }
@@ -476,7 +488,7 @@ impl Scheduler {
 
     fn idle_slot(&self) -> Option<usize> {
         for slot in 0..self.thread_count {
-            if self.threads[slot].role == ThreadRole::Idle {
+            if self.threads[slot].id == self.idle_thread_id {
                 return Some(slot);
             }
         }
@@ -485,7 +497,7 @@ impl Scheduler {
 
     fn bootstrap_slot(&self) -> Option<usize> {
         for slot in 0..self.thread_count {
-            if self.threads[slot].role == ThreadRole::Bootstrap {
+            if self.threads[slot].id == self.bootstrap_thread_id {
                 return Some(slot);
             }
         }
@@ -496,12 +508,6 @@ impl Scheduler {
         &mut self,
     ) -> Result<(*mut arch::x86_64::TaskContext, *const arch::x86_64::TaskContext), SchedulerError> {
         let bootstrap_slot = self.bootstrap_slot().ok_or(SchedulerError::MissingIdleThread)?;
-        for index in (0..self.runqueue_depth).rev() {
-            if self.runqueue[index] == bootstrap_slot {
-                self.remove_runqueue_index(index);
-                break;
-            }
-        }
         self.threads[bootstrap_slot].state = ThreadState::Exited;
 
         let target_slot = self.first_runnable_user_slot()
@@ -523,29 +529,21 @@ impl Scheduler {
     }
 
     fn prepare_resume_slot(&self, slot: usize) {
-        if self.threads[slot].context.kind == arch::x86_64::CONTEXT_KIND_USER {
-            arch::x86_64::set_tss_rsp0(self.threads[slot].context.kernel_rsp0);
+        if self.threads[slot].role == ThreadRole::User {
+            crate::arch::x86_64::set_tss_rsp0(USER_STACKS.get() as u64 + (slot * KERNEL_STACK_SIZE) as u64 + KERNEL_STACK_SIZE as u64);
         }
     }
 
     fn next_switch_index(&self) -> Option<usize> {
-        if !self.initialized || self.runqueue_depth < 2 {
-            return None;
+        if !self.initialized || self.runqueue_bitmap == 0 { return None; }
+        let best_p = self.runqueue_bitmap.trailing_zeros() as usize;
+        if best_p >= MAX_PRIORITIES { return None; }
+        if self.runqueue_depths[best_p] > 0 {
+            let next_slot = self.runqueues[best_p][0];
+            if Some(next_slot) != self.current_slot { return Some(next_slot); }
         }
-
-        let current_slot = self.runqueue[self.current_runqueue_index];
-        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
-        for _ in 0..self.runqueue_depth {
-            let candidate = self.runqueue[next_index];
-            if candidate != current_slot && self.threads[candidate].state != ThreadState::Exited {
-                return Some(next_index);
-            }
-            next_index = (next_index + 1) % self.runqueue_depth;
-        }
-
         None
     }
-
 
     fn context_switch_pair(
         &mut self,
@@ -554,38 +552,44 @@ impl Scheduler {
         *const arch::x86_64::TaskContext,
         DispatchDecision,
     )> {
-        let current_slot = self.runqueue[self.current_runqueue_index];
-        let next_index = self.next_switch_index()?;
-        let next_slot = self.runqueue[next_index];
+        let current_slot = self.current_slot?;
+        let next_slot = self.next_switch_index()?;
 
         if self.threads[current_slot].state == ThreadState::Running {
             self.threads[current_slot].state = ThreadState::Runnable;
+            let _ = self.enqueue(current_slot);
         }
-        self.current_runqueue_index = next_index;
-        self.threads[next_slot].state = ThreadState::Running;
-        self.threads[next_slot].dispatch_count = self.threads[next_slot]
+        
+        let best_p = self.priority_for_thread(next_slot);
+        let dequeued_slot = self.dequeue(best_p)?;
+        // dequeued_slot should be next_slot.
+        
+        self.current_slot = Some(dequeued_slot);
+        self.threads[dequeued_slot].state = ThreadState::Running;
+        self.threads[dequeued_slot].dispatch_count = self.threads[dequeued_slot]
             .dispatch_count
             .saturating_add(1);
         self.context_switches = self.context_switches.saturating_add(1);
-        self.prepare_resume_slot(next_slot);
-        let dispatch = self.dispatch_snapshot(next_slot);
+        self.prepare_resume_slot(dequeued_slot);
+        let dispatch = self.dispatch_snapshot(dequeued_slot);
 
-        let (left, right) = self.threads.split_at_mut(current_slot.max(next_slot));
-        if current_slot < next_slot {
+        let (left, right) = self.threads.split_at_mut(current_slot.max(dequeued_slot));
+        if current_slot < dequeued_slot {
             let current = &mut left[current_slot].context as *mut arch::x86_64::TaskContext;
             let next = &right[0].context as *const arch::x86_64::TaskContext;
             Some((current, next, dispatch))
         } else {
-            let next = &left[next_slot].context as *const arch::x86_64::TaskContext;
+            let next = &left[dequeued_slot].context as *const arch::x86_64::TaskContext;
             let current = &mut right[0].context as *mut arch::x86_64::TaskContext;
             Some((current, next, dispatch))
         }
     }
+
     fn stats(&self, total_ticks: u64) -> SchedulerStats {
         let current = self.current_thread();
         SchedulerStats {
             thread_count: self.thread_count,
-            runqueue_depth: self.runqueue_depth,
+            runqueue_depth: self.runqueue_depths.iter().sum(),
             current_thread_id: current.id,
             current_process_id: current.process_id,
             current_parent_process_id: current.parent_process_id,
@@ -599,95 +603,53 @@ impl Scheduler {
         }
     }
 
-    fn remove_runqueue_index(&mut self, index: usize) {
-        if index >= self.runqueue_depth {
-            return;
-        }
-        for cursor in index..self.runqueue_depth.saturating_sub(1) {
-            self.runqueue[cursor] = self.runqueue[cursor + 1];
-        }
-        self.runqueue_depth = self.runqueue_depth.saturating_sub(1);
-        if self.runqueue_depth == 0 {
-            self.current_runqueue_index = 0;
-        } else if self.current_runqueue_index >= self.runqueue_depth {
-            self.current_runqueue_index = 0;
-        }
-    }
-
     fn request_exit_group(&mut self, status: i32) -> Option<ExitGroupRecord> {
-        if !self.initialized || self.runqueue_depth == 0 {
-            return None;
-        }
-
-        let current_index = self.current_runqueue_index;
-        let current_slot = self.runqueue[current_index];
+        if !self.initialized { return None; }
+        let current_slot = self.current_slot?;
         let current = &mut self.threads[current_slot];
-        if current.state == ThreadState::Exited {
-            return None;
-        }
-        if current.thread_group_id == 0 {
-            return None;
-        }
+        if current.state == ThreadState::Exited || current.thread_group_id == 0 { return None; }
 
         let exited_thread_id = current.id;
         let exited_thread_name = current.name;
         let exited_process_id = current.process_id;
         let exited_group_id = current.thread_group_id;
         let mut exited_thread_count = 0usize;
+
         for slot in 0..self.thread_count {
-            if self.threads[slot].thread_group_id == exited_group_id
-                && self.threads[slot].state != ThreadState::Exited
-            {
+            if self.threads[slot].thread_group_id == exited_group_id && self.threads[slot].state != ThreadState::Exited {
                 self.threads[slot].state = ThreadState::Exited;
                 exited_thread_count += 1;
-            }
-        }
-
-        for index in (0..self.runqueue_depth).rev() {
-            let slot = self.runqueue[index];
-            if self.threads[slot].thread_group_id == exited_group_id {
-                self.remove_runqueue_index(index);
-            }
-        }
-
-        let (next_thread_id, next_thread_name, next_process_id) = if self.runqueue_depth > 0 {
-            self.current_runqueue_index %= self.runqueue_depth;
-            let mut selected_index = self.current_runqueue_index;
-            if self.threads[self.runqueue[selected_index]].state == ThreadState::Exited {
+                let p = self.priority_for_thread(slot);
                 let mut found = None;
-                for index in 0..self.runqueue_depth {
-                    let slot = self.runqueue[index];
-                    if self.threads[slot].state != ThreadState::Exited {
-                        found = Some(index);
-                        break;
-                    }
+                for i in 0..self.runqueue_depths[p] {
+                    if self.runqueues[p][i] == slot { found = Some(i); break; }
                 }
-                let found = found?;
-                selected_index = found;
+                if let Some(idx) = found {
+                    for i in idx..self.runqueue_depths[p] - 1 { self.runqueues[p][i] = self.runqueues[p][i + 1]; }
+                    self.runqueue_depths[p] -= 1;
+                    if self.runqueue_depths[p] == 0 { self.runqueue_bitmap &= !(1 << p); }
+                }
             }
-            self.current_runqueue_index = selected_index;
-            let next_slot = self.runqueue[selected_index];
+        }
+        
+        if self.current_slot.map_or(false, |s| self.threads[s].thread_group_id == exited_group_id) {
+            self.current_slot = None;
+        }
+
+        let (next_thread_id, next_thread_name, next_process_id) = if self.runqueue_bitmap != 0 {
+            let best_p = self.runqueue_bitmap.trailing_zeros() as usize;
+            let next_slot = self.dequeue(best_p).unwrap();
+            self.current_slot = Some(next_slot);
             self.threads[next_slot].state = ThreadState::Running;
             self.context_switches = self.context_switches.saturating_add(1);
-            (
-                self.threads[next_slot].id,
-                self.threads[next_slot].name,
-                self.threads[next_slot].process_id,
-            )
+            (self.threads[next_slot].id, self.threads[next_slot].name, self.threads[next_slot].process_id)
         } else {
             (0, "<none>", 0)
         };
 
         Some(ExitGroupRecord {
-            status,
-            exited_thread_id,
-            exited_thread_name,
-            exited_process_id,
-            exited_thread_count,
-            next_thread_id,
-            next_thread_name,
-            next_process_id,
-            runqueue_depth: self.runqueue_depth,
+            status, exited_thread_id, exited_thread_name, exited_process_id, exited_thread_count,
+            next_thread_id, next_thread_name, next_process_id, runqueue_depth: self.runqueue_depths.iter().sum(),
         })
     }
 
@@ -695,54 +657,40 @@ impl Scheduler {
         &mut self,
         saved_user_rsp: u64,
     ) -> Option<*const arch::x86_64::TaskContext> {
-        if !self.initialized || self.runqueue_depth < 2 {
-            return None;
-        }
-
-        let current_slot = self.runqueue[self.current_runqueue_index];
-        if self.threads[current_slot].role != ThreadRole::User
-            || self.threads[current_slot].state == ThreadState::Exited
-        {
+        if !self.initialized { return None; }
+        let current_slot = self.current_slot?;
+        if self.threads[current_slot].role != ThreadRole::User || self.threads[current_slot].state == ThreadState::Exited {
             return None;
         }
 
         self.threads[current_slot].context.rsp = saved_user_rsp;
         self.threads[current_slot].state = ThreadState::Runnable;
+        let _ = self.enqueue(current_slot);
 
-        let mut next_index = (self.current_runqueue_index + 1) % self.runqueue_depth;
-        let mut found = None;
-        for _ in 0..self.runqueue_depth {
-            let candidate = self.runqueue[next_index];
-            if self.threads[candidate].state != ThreadState::Exited {
-                found = Some(next_index);
-                break;
-            }
-            next_index = (next_index + 1) % self.runqueue_depth;
-        }
+        let best_p = self.runqueue_bitmap.trailing_zeros() as usize;
+        if best_p >= MAX_PRIORITIES { return None; }
+        let next_slot = self.dequeue(best_p).unwrap();
 
-        let next_index = found?;
-        let next_slot = self.runqueue[next_index];
         if next_slot == current_slot {
             self.threads[current_slot].state = ThreadState::Running;
             return None;
         }
 
-        self.current_runqueue_index = next_index;
+        self.current_slot = Some(next_slot);
         self.threads[next_slot].state = ThreadState::Running;
-        self.threads[next_slot].dispatch_count = self.threads[next_slot]
-            .dispatch_count
-            .saturating_add(1);
+        self.threads[next_slot].dispatch_count = self.threads[next_slot].dispatch_count.saturating_add(1);
+        if let Some(hook) = self.hps_hook {
+            let is_gpu = self.threads[next_slot].role == ThreadRole::User;
+            hook(self.threads[next_slot].id, is_gpu);
+        }
         self.context_switches = self.context_switches.saturating_add(1);
         self.prepare_resume_slot(next_slot);
         Some(&self.threads[next_slot].context as *const arch::x86_64::TaskContext)
     }
 
     fn current_context_ptr_for_resume(&self) -> Option<*const arch::x86_64::TaskContext> {
-        if !self.initialized || self.runqueue_depth == 0 {
-            return None;
-        }
-
-        let slot = self.runqueue[self.current_runqueue_index];
+        if !self.initialized { return None; }
+        let slot = self.current_slot?;
         self.prepare_resume_slot(slot);
         Some(&self.threads[slot].context as *const arch::x86_64::TaskContext)
     }
@@ -900,12 +848,66 @@ pub fn on_timer_interrupt(_apic_tick: u64) {
     }
 }
 
+pub fn trigger_hps_bridge(thread_id: u64, is_gpu: bool) {
+    unsafe {
+        if let Some(hook) = (*SCHEDULER.get()).hps_hook {
+            hook(thread_id, is_gpu);
+        }
+    }
+}
+
+pub fn register_hps_bridge(hook: fn(thread_id: u64, is_gpu: bool)) {
+    unsafe { (*SCHEDULER.get()).hps_hook = Some(hook); }
+}
+
 pub fn stats() -> SchedulerStats {
     unsafe { (*SCHEDULER.get()).stats(SCHEDULER_TICKS.load(Ordering::Acquire)) }
 }
 
+#[inline(always)]
+pub fn current_thread_id() -> u64 {
+    unsafe {
+        let scheduler = &*SCHEDULER.get();
+        if let Some(slot) = scheduler.current_slot {
+            scheduler.threads[slot].id
+        } else {
+            0
+        }
+    }
+}
+
+#[inline(always)]
+pub fn current_process_id() -> u64 {
+    unsafe {
+        let scheduler = &*SCHEDULER.get();
+        if let Some(slot) = scheduler.current_slot {
+            scheduler.threads[slot].process_id
+        } else {
+            0
+        }
+    }
+}
+
+#[inline(always)]
+pub fn current_parent_process_id() -> u64 {
+    unsafe {
+        let scheduler = &*SCHEDULER.get();
+        if let Some(slot) = scheduler.current_slot {
+            scheduler.threads[slot].parent_process_id
+        } else {
+            0
+        }
+    }
+}
+
 pub fn request_exit_group(status: i32) -> Option<ExitGroupRecord> {
-    unsafe { (*SCHEDULER.get()).request_exit_group(status) }
+    unsafe {
+        let rec = (*SCHEDULER.get()).request_exit_group(status);
+        if let Some(hook) = HPS_POLL_HOOK {
+            hook();
+        }
+        rec
+    }
 }
 
 pub fn idle_loop() -> ! {
@@ -921,11 +923,16 @@ pub fn sched_yield_switch() {
     }
 }
 
+pub static mut HPS_POLL_HOOK: Option<fn()> = None;
+
 pub fn run_idle_cycle() {
     disable_interrupts();
     if NEED_RESCHEDULE.swap(false, Ordering::AcqRel) {
         if let Some((current, next, _dispatch)) = unsafe { (*SCHEDULER.get()).context_switch_pair() } {
             unsafe {
+                if let Some(hook) = HPS_POLL_HOOK {
+                    hook();
+                }
                 arch::x86_64::switch_context_with_cr3(current, next);
             }
         }
@@ -970,6 +977,13 @@ extern "C" fn idle_thread_entry() -> ! {
                 }
             }
         }
+        
+        unsafe {
+            if let Some(hook) = HPS_POLL_HOOK {
+                hook();
+            }
+        }
+        
         run_idle_cycle();
         unsafe {
             asm!("sti; hlt", options(nomem, nostack));

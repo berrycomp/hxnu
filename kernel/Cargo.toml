@@ -11,3 +11,7 @@ exception-test-page-fault = []
 exception-test-general-protection = []
 panic-self-test = []
 power-reset-self-test = []
+heterexec-self-test = []
+
+[dependencies]
+hps = { path = "../../heterexec" }

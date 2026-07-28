@@ -15,7 +15,7 @@ use crate::procfs::ProcfsNodeKind;
 
 const ROOT_PATH: &str = "/";
 const DEV_ROOT_PATH: &str = "/dev";
-const FAT_ROOT_PATH: &str = "/fat";
+const FAT_ROOT_PATH: &str = "/boot";
 const PROC_ROOT_PATH: &str = "/proc";
 const INITRD_ROOT_PATH: &str = "/initrd";
 const INIT_PATH: &str = "/initrd/init";
@@ -504,7 +504,7 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
             executable: false,
         }),
         _ if path == DEV_ROOT_PATH || path.starts_with("/dev/") => resolve_devfs_node(path),
-        _ if path == FAT_ROOT_PATH || path.starts_with("/fat/") => resolve_fat_node(path),
+        _ if path == FAT_ROOT_PATH || path.starts_with("/boot/") => resolve_fat_node(path),
         _ if path == INITRD_ROOT_PATH || path.starts_with("/initrd/") => resolve_initrd_node(path),
         _ if path == PROC_ROOT_PATH || path.starts_with("/proc/") => resolve_procfs_node(path),
         _ => None,
@@ -616,6 +616,13 @@ fn executable_format_from_kind(kind: exec::ImageKind) -> ExecutableFormat {
 fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
     match mount {
         VfsMountKind::Initrd => initrd::read_bytes(path),
+        VfsMountKind::Fat => {
+            if let Some(data) = fat::read_file_bytes(path) {
+                Some(alloc::vec::Vec::leak(data))
+            } else {
+                None
+            }
+        },
         _ => None,
     }
 }
