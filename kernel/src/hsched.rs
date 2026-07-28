@@ -129,17 +129,22 @@ impl HeterogeneousScheduler {
             let index = pos % 16;
             let seq = self.shared_buffer.buffer[index].sequence.load(Ordering::Acquire);
             
-            let dif = seq as isize - pos as isize;
+            let dif = seq.wrapping_sub(pos) as isize;
             
             if dif == 0 {
-                if self.shared_buffer.tail.compare_exchange_weak(
+                match self.shared_buffer.tail.compare_exchange_weak(
                     pos, pos.wrapping_add(1),
                     Ordering::SeqCst, Ordering::Relaxed
-                ).is_ok() {
-                    let payload = hw_task.encode();
-                    self.shared_buffer.buffer[index].data.store(payload, Ordering::Relaxed);
-                    self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(1), Ordering::Release);
-                    break;
+                ) {
+                    Ok(_) => {
+                        let payload = hw_task.encode();
+                        self.shared_buffer.buffer[index].data.store(payload, Ordering::Relaxed);
+                        self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(1), Ordering::Release);
+                        break;
+                    }
+                    Err(actual) => {
+                        pos = actual;
+                    }
                 }
             } else if dif < 0 {
                 return Err("Task queue is full");
@@ -157,22 +162,27 @@ impl HeterogeneousScheduler {
             let index = pos % 16;
             let seq = self.shared_buffer.buffer[index].sequence.load(Ordering::Acquire);
             
-            let dif = seq as isize - pos.wrapping_add(1) as isize;
+            let dif = seq.wrapping_sub(pos.wrapping_add(1)) as isize;
             
             if dif == 0 {
-                if self.shared_buffer.head.compare_exchange_weak(
+                match self.shared_buffer.head.compare_exchange_weak(
                     pos, pos.wrapping_add(1),
                     Ordering::SeqCst, Ordering::Relaxed
-                ).is_ok() {
-                    let val = self.shared_buffer.buffer[index].data.load(Ordering::Relaxed);
-                    self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(16), Ordering::Release);
-                    
-                    if let Some(task) = HardwareTask::decode(val) {
-                        if task.is_gpu_task {
-                            self.supernova.ring_doorbell(task.id);
+                ) {
+                    Ok(_) => {
+                        let val = self.shared_buffer.buffer[index].data.load(Ordering::Relaxed);
+                        self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(16), Ordering::Release);
+                        
+                        if let Some(task) = HardwareTask::decode(val) {
+                            if task.is_gpu_task {
+                                self.supernova.ring_doorbell(task.id);
+                            }
                         }
+                        pos = pos.wrapping_add(1);
                     }
-                    pos = pos.wrapping_add(1);
+                    Err(actual) => {
+                        pos = actual;
+                    }
                 }
             } else if dif < 0 {
                 break;

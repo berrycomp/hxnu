@@ -41,7 +41,7 @@ pub use context::{
     switch_with_cr3 as switch_context_with_cr3,
 };
 pub use cpu::CpuInfo;
-pub use early_map::{MapError, create_user_page_table, map_user_region, map_kernel_page, map_kernel_region, ensure_region_mapped, allocate_page_table_frame, read_cr3, write_cr3, FLAG_USER_ACCESSIBLE, FLAG_WRITE_THROUGH, FLAG_CACHE_DISABLE};
+pub use early_map::{MapError, create_user_page_table, map_user_region, map_kernel_page, map_kernel_region, ensure_region_mapped, allocate_page_table_frame, read_cr3, write_cr3, FLAG_USER_ACCESSIBLE, FLAG_WRITE_THROUGH, FLAG_CACHE_DISABLE, FLAG_WRITABLE};
 pub use gdt::set_tss_rsp0;
 
 pub fn initialize() {

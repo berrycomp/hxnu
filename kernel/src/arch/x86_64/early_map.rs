@@ -6,6 +6,7 @@ use crate::mm;
 pub const FLAG_WRITE_THROUGH: u64 = 1 << 3;
 pub const FLAG_CACHE_DISABLE: u64 = 1 << 4;
 pub const FLAG_USER_ACCESSIBLE: u64 = 1 << 2;
+pub const FLAG_WRITABLE: u64 = 1 << 1;
 
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_WRITABLE: u64 = 1 << 1;

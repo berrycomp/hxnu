@@ -405,7 +405,7 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
 
     for segment in &activation.segments {
         let flags = if segment.writable {
-            arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH
+            arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITABLE
         } else {
             arch::x86_64::FLAG_USER_ACCESSIBLE
         };
@@ -436,7 +436,7 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
         user_stack_top - user_stack_size as u64,
         user_stack_phys,
         user_stack_size,
-        arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH,
+        arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITABLE,
     ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
     let spawned = sched::create_user_thread(
