@@ -76,6 +76,12 @@ impl SupernovaDriver {
     /// the device for operation.
     pub fn init(&self) {
         if let Some(offset) = crate::limine::hhdm_offset() {
+            crate::arch::x86_64::map_kernel_region(
+                0xFE00_0000 + offset,
+                0xFE00_0000,
+                0x2000,
+                crate::arch::x86_64::FLAG_WRITE_THROUGH | crate::arch::x86_64::FLAG_CACHE_DISABLE,
+            ).ok();
             self.mmio.store((0xFE00_0000_u64 + offset) as usize, Ordering::SeqCst);
         }
         self.is_initialized.store(true, Ordering::SeqCst);

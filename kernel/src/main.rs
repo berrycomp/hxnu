@@ -703,6 +703,24 @@ pub extern "C" fn _start() -> ! {
                     kprintln!("HXNU: Heterexec bridge self-test PASSED");
                 }
             }
+            SelfTest::Heterexec => {
+                kprintln!("HXNU: running kernel self-test = heterexec bridge");
+                unsafe {
+                    crate::hsched::HSCHED.init();
+                    let ptr = crate::hps_bridge::hps_get_shared_buffer();
+                    kprintln!("HXNU: heterexec hook shared_buffer ptr={:p}", ptr);
+                    
+                    let id1 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::CpuAvx512).unwrap();
+                    let id2 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::GpuCompute).unwrap();
+                    
+                    kprintln!("HXNU: submitted workloads id1={} id2={}", id1, id2);
+                    
+                    crate::hsched::HSCHED.dispatch_pending();
+                    
+                    kprintln!("HXNU: dispatched workloads");
+                    kprintln!("HXNU: Heterexec bridge self-test PASSED");
+                }
+            }
             SelfTest::PowerReset => {
                 let capability = power::reset_capability();
                 kprintln!(
@@ -965,6 +983,8 @@ const fn selected_self_test() -> Option<SelfTest> {
         Some(SelfTest::Panic)
     } else if cfg!(feature = "power-reset-self-test") {
         Some(SelfTest::PowerReset)
+    } else if cfg!(feature = "heterexec-self-test") {
+        Some(SelfTest::Heterexec)
     } else if cfg!(feature = "heterexec-self-test") {
         Some(SelfTest::Heterexec)
     } else if cfg!(feature = "exception-test-page-fault") {

@@ -9,3 +9,6 @@ fault-page = []
 fault-gp = []
 fault-ud = []
 exit-immediate = []
+
+[workspace]
+

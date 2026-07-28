@@ -183,15 +183,87 @@ pub fn create_user_page_table(hhdm_offset: u64) -> Result<u64, MapError> {
     unsafe {
         for i in KERNEL_HIGHER_HALF_START..ENTRIES_PER_TABLE {
             let entry = read_volatile(kernel_pml4_virt.add(i));
-            if entry & PAGE_PRESENT != 0 {
-                write_volatile(user_pml4_virt.add(i), entry | PAGE_USER);
-            } else {
-                write_volatile(user_pml4_virt.add(i), entry);
-            }
+            write_volatile(user_pml4_virt.add(i), entry);
         }
     }
 
     Ok(user_pml4_phys)
+}
+
+pub unsafe fn map_kernel_page(
+    hhdm_offset: u64,
+    pml4_phys: u64,
+    virtual_address: u64,
+    physical_address: u64,
+    flags: u64,
+) -> Result<(), MapError> {
+    let pml4 = hhdm_offset
+        .checked_add(pml4_phys)
+        .ok_or(MapError::AddressOverflow)? as *mut u64;
+    let pml4_index = page_table_index(virtual_address, 39);
+    let pdpt_index = page_table_index(virtual_address, 30);
+    let pd_index = page_table_index(virtual_address, 21);
+    let pt_index = page_table_index(virtual_address, 12);
+
+    let pdpt = match next_table(pml4, pml4_index, hhdm_offset)? {
+        NextTable::Table(table) => table,
+        NextTable::HugePage => return Ok(()),
+    };
+    let pd = match next_table(pdpt, pdpt_index, hhdm_offset)? {
+        NextTable::Table(table) => table,
+        NextTable::HugePage => return Ok(()),
+    };
+    let pt = match next_table(pd, pd_index, hhdm_offset)? {
+        NextTable::Table(table) => table,
+        NextTable::HugePage => return Ok(()),
+    };
+
+    let pte = unsafe { pt.add(pt_index) };
+    let entry = unsafe { read_volatile(pte) };
+    if entry & PAGE_PRESENT == 0 {
+        unsafe {
+            write_volatile(
+                pte,
+                (physical_address & PAGE_ADDRESS_MASK)
+                    | PAGE_PRESENT
+                    | PAGE_WRITABLE
+                    | flags,
+            );
+        }
+        invalidate_page(virtual_address);
+    }
+
+    Ok(())
+}
+
+pub fn map_kernel_region(
+    virtual_address: u64,
+    physical_address: u64,
+    length: usize,
+    flags: u64,
+) -> Result<(), MapError> {
+    let last_virtual_address = virtual_address
+        .checked_add(length.max(1) as u64 - 1)
+        .ok_or(MapError::AddressOverflow)?;
+
+    let start_page = virtual_address & !0xfff;
+    let end_page = last_virtual_address & !0xfff;
+    let start_phys = physical_address & !0xfff;
+
+    let mut vpage = start_page;
+    let mut ppage = start_phys;
+    let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+    let pml4_phys = read_cr3() & PAGE_ADDRESS_MASK;
+    loop {
+        unsafe { map_kernel_page(hhdm_offset, pml4_phys, vpage, ppage, flags)? };
+        if vpage == end_page {
+            break;
+        }
+        vpage = vpage.checked_add(PAGE_SIZE).ok_or(MapError::AddressOverflow)?;
+        ppage = ppage.checked_add(PAGE_SIZE).ok_or(MapError::AddressOverflow)?;
+    }
+
+    Ok(())
 }
 
 pub fn map_user_page(

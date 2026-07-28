@@ -32,7 +32,7 @@ if [ -f "${UEFI_CODE}" ] && [ -f "${UEFI_VARS_TEMPLATE}" ]; then
         -drive if=pflash,format=raw,readonly=on,file="${UEFI_CODE}" \
         -drive if=pflash,format=raw,file="${UEFI_VARS}" \
         -cdrom "${ISO_PATH}" \
-        -no-reboot \
+        -no-reboot -d int \
         -no-shutdown > "${LOG}" 2>&1 &
 else
     qemu-system-x86_64 \
@@ -41,7 +41,7 @@ else
         -serial stdio \
         -display none \
         -cdrom "${ISO_PATH}" \
-        -no-reboot \
+        -no-reboot -d int \
         -no-shutdown > "${LOG}" 2>&1 &
 fi
 

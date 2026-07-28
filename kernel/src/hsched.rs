@@ -101,34 +101,59 @@ impl HeterogeneousScheduler {
             is_gpu_task: is_gpu,
         };
 
-        let current_tail = self.shared_buffer.tail.load(Ordering::Relaxed);
-        let current_head = self.shared_buffer.head.load(Ordering::Relaxed);
-        let next_tail = (current_tail + 1) % self.shared_buffer.pending_tasks.len();
-        if next_tail == current_head {
-            return Err("Task queue is full");
+        let mut current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
+        loop {
+            let current_head = self.shared_buffer.head.load(Ordering::Acquire);
+            let next_tail = (current_tail + 1) % self.shared_buffer.pending_tasks.len();
+            if next_tail == current_head {
+                return Err("Task queue is full");
+            }
+            match self.shared_buffer.tail.compare_exchange_weak(
+                current_tail,
+                next_tail,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.shared_buffer.pending_tasks[current_tail].store(hw_task.encode(), Ordering::Release);
+                    break;
+                }
+                Err(new_tail) => current_tail = new_tail,
+            }
         }
-        self.shared_buffer.pending_tasks[current_tail].store(hw_task.encode(), Ordering::SeqCst);
-        self.shared_buffer.tail.store(next_tail, Ordering::SeqCst);
         Ok(task_id)
     }
 
     /// Tries to dispatch pending workloads, exposing them to HPS or direct drivers.
     pub fn dispatch_pending(&self) {
-        let mut current_head = self.shared_buffer.head.load(Ordering::Relaxed);
-        let current_tail = self.shared_buffer.tail.load(Ordering::Relaxed);
-        while current_head != current_tail {
-            let val = self.shared_buffer.pending_tasks[current_head].swap(0, Ordering::SeqCst);
-            if let Some(task) = HardwareTask::decode(val) {
-                current_head = (current_head + 1) % self.shared_buffer.pending_tasks.len();
-                self.shared_buffer.head.store(current_head, Ordering::SeqCst);
-                if task.is_gpu_task {
-                    // Dispatch GPU task directly to Supernova using zero-latency doorbell
-                    self.supernova.ring_doorbell(task.id);
-                } else {
-                    // CPU tasks are handled elsewhere (ignored for now)
-                }
-            } else {
+        let mut current_head = self.shared_buffer.head.load(Ordering::Acquire);
+        loop {
+            let current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
+            if current_head == current_tail {
                 break;
+            }
+            let val = self.shared_buffer.pending_tasks[current_head].load(Ordering::Acquire);
+            if val == 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            let next_head = (current_head + 1) % self.shared_buffer.pending_tasks.len();
+            match self.shared_buffer.head.compare_exchange_weak(
+                current_head,
+                next_head,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.shared_buffer.pending_tasks[current_head].store(0, Ordering::Release);
+                    if let Some(task) = HardwareTask::decode(val) {
+                        if task.is_gpu_task {
+                            self.supernova.ring_doorbell(task.id);
+                        }
+                    }
+                    current_head = next_head;
+                }
+                Err(new_head) => current_head = new_head,
             }
         }
     }

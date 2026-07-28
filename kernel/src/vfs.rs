@@ -613,7 +613,7 @@ fn executable_format_from_kind(kind: exec::ImageKind) -> ExecutableFormat {
     }
 }
 
-fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
+pub fn read_executable_bytes(mount: VfsMountKind, path: &str) -> Option<&'static [u8]> {
     match mount {
         VfsMountKind::Initrd => initrd::read_bytes(path),
         VfsMountKind::Fat => {

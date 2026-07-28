@@ -1,43 +1,31 @@
 # Empirical Challenger Report & Handoff
 
 ## 1. Observation
-- Modified `kernel/src/main.rs` to include a `Heterexec` self-test (`SelfTest::Heterexec`) which initializes the `HSCHED`, submits two workloads (one CPU, one GPU), and calls `HSCHED.dispatch_pending()`.
-- Built the HXNU kernel with `--features heterexec-self-test` and ran it under QEMU using a modified `scripts/test-heterexec.sh` script.
-- The QEMU output (`qemu-heterexec.log`) abruptly stopped immediately after logging the submission:
-  ```
-  [0.144768975] HXNU: running kernel self-test = heterexec bridge
-  [0.145560849] HXNU: heterexec hook shared_buffer ptr=0xffffffff800411e0
-  [0.146700116] HXNU: submitted workloads id1=1 id2=2
-  ```
-- The expected continuation (`HXNU: dispatched workloads` and `HXNU: Heterexec bridge self-test PASSED`) was never printed, indicating a fatal fault (likely a Page Fault causing a triple fault because the exception handler might not have caught it properly, or QEMU stopped).
-- Code inspection of `kernel/src/supernova.rs` shows that `SUPERNOVA_MMIO_BASE` is hardcoded as `0xFE00_0000 as *mut SupernovaHardware;`.
-- `SupernovaDriver::ring_doorbell` writes directly to this address via `write_volatile(&mut (*self.mmio).doorbell, task_id);`.
-- The boot logs show `HXNU: HHDM offset = 0xffff800000000000`, meaning physical memory is mapped in the higher half.
+- Modified `scripts/test-heterexec.sh` to include `-d int` in QEMU arguments. Running it produced a QEMU log (`build/qemu-heterexec.log`) showing a kernel-mode Exception 14 (Page Fault) with `CR2=ffff8000fe000000` immediately after `HXNU: submitted workloads id1=1 id2=2`.
+- Inspected `kernel/src/supernova.rs` and found the Iteration 2 fix added `hhdm_offset()` to `SUPERNOVA_MMIO_BASE` (`0xFE00_0000 + 0xffff800000000000`), but did not explicitly map this physical address in the page tables.
+- Ran `./scripts/run-test.sh`. The `test.log` output shows `user-init` crashing repeatedly with: `user fault kind=page fault current=user-init#3 pid=3 rip=0xffffffff80001090 error=0x15 addr=0xffffffff80001090 action=kill-group`.
+- Ran `objdump -d initrd/init` and verified the ELF is linked at a base address of `0xffffffff80000000` (`<_start>` is at `0xffffffff80000000`).
+- Disassembly of `_start` shows indirect calls like `call *0x2ff7(%rip)`, which load absolute addresses (e.g., `0xffffffff80001090` for `memset`) stored in the static binary by the linker.
 
 ## 2. Logic Chain
-1. The `Heterexec` self-test submits a `GpuCompute` task.
-2. `HSCHED.dispatch_pending()` pulls this task and calls `self.supernova.ring_doorbell(task.id)`.
-3. `ring_doorbell` attempts a raw memory write to the unmapped physical address `0xFE00_0000`.
-4. Because the kernel operates with virtual memory enabled (using the Limine boot protocol and an HHDM offset), `0xFE00_0000` is an invalid virtual address in kernel space.
-5. This invalid memory access triggers a Page Fault. Since the hardware at `0xFE00_0000` is not mapped via the HHDM offset (e.g., `0xffff800000000000 + 0xFE00_0000`) nor explicitly mapped in the page tables, the kernel crashes during the GPU task dispatch.
+1. The developer applied `hhdm_offset()` to `SUPERNOVA_MMIO_BASE`, generating the virtual address `0xffff8000fe000000`. However, Limine's Higher Half Direct Map (HHDM) exclusively maps physical RAM. `0xFE00_0000` is an MMIO region and remains unmapped. Dereferencing it during `ring_doorbell` results in a kernel-mode Page Fault.
+2. The `user-init` executable is a static ELF linked with a kernel-space base address (`0xffffffff80000000`). The kernel's ELF loader (`kernel/src/init_exec.rs`) forces the load base to `USER_SPACE_BASE` (`0x400000`) but does not apply any dynamic relocations.
+3. During execution at `0x400000`, `user-init` executes an indirect call (e.g., to `memset`) via an absolute pointer stored in the binary. This pointer points to `0xffffffff80001090`.
+4. The CPU attempts an instruction fetch at `0xffffffff80001090` while in ring 3 (user mode). Since this address is in the kernel's higher half, the page table entry lacks the User-Accessible (`U/S`) flag, triggering a Page Fault (`error=0x15` meaning Present, User-mode, Instruction Fetch).
 
 ## 3. Caveats
-- The test relies on QEMU's TCG execution. A real physical machine would still Page Fault because the physical address is not mapped into the virtual address space.
-- CPU tasks are correctly queued but ignored in `dispatch_pending`, which is documented in the code (`// CPU tasks are handled elsewhere (ignored for now)`), so this behavior was not challenged.
-- POSIX compatibility probes run by default during the bootstrap (`linux_probe`, `ghost_probe`) report successes in the logs (e.g. `linux_write=0`, `hxnu_abi_version=0x1`). The bug strictly lies in the MMIO dispatching bridge.
+- We assume Limine does not map MMIO in the HHDM, which aligns with standard Limine behavior (it only maps usable RAM and bootloader-reclaimable memory).
+- The `user-init` executable might have been compiled by a custom toolchain (`x86_64-unknown-hxnu`), which currently defaults to a kernel-space load address (`0xffffffff80000000`) instead of a user-space PIE or `0x400000` base address.
 
 ## 4. Conclusion
 **Verdict: FAIL**
 
-The `heterexec` hook and `HSCHED` bridge fail when dispatching GPU workloads because the `SupernovaDriver` attempts to write to an unmapped physical MMIO address (`0xFE00_0000`) instead of translating it into the kernel's virtual address space using the HHDM offset. This crashes the kernel.
-
-**Blast radius**: HIGH. Any attempt by the `heterexec` layer to dispatch a GPU or SXRC task to the hardware via the `hps_bridge` will cause an immediate kernel panic or triple fault.
-
-**Mitigation**: The `SupernovaDriver::new()` method must apply the HHDM offset to `SUPERNOVA_MMIO_BASE` (e.g., `SUPERNOVA_MMIO_BASE as u64 + hhdm_offset`) or the memory manager must explicitly map the `0xFE00_0000` MMIO region into the kernel's page tables before any doorbell rings are permitted.
+The Iteration 2 fixes are inadequate. 
+1. The `SUPERNOVA_MMIO_BASE` requires explicit page table mapping (e.g., using `crate::arch::x86_64::ensure_physical_region_mapped`) because the HHDM does not cover MMIO regions. Ringing the doorbell still crashes the kernel.
+2. The `user-init` Page Fault persists because a higher-half linked static ELF is being loaded into lower-half user space without relocations. This causes absolute indirect jumps to branch into unexecutable supervisor memory.
 
 ## 5. Verification Method
 To independently verify this bug:
-1. Review the test harness in `/home/eilhanzy/Projects/hxnu/scripts/test-heterexec.sh` and the patched `kernel/src/main.rs`.
-2. Run `./scripts/test-heterexec.sh`.
-3. Check `/home/eilhanzy/Projects/hxnu/build/qemu-heterexec.log` and observe that execution halts abruptly during `dispatch_pending`.
-4. Inspect `kernel/src/supernova.rs:10` to confirm the hardcoded unmapped physical address is used directly as a virtual pointer.
+1. Run `sed -i 's/-no-reboot \\/-no-reboot -d int \\/g' scripts/test-heterexec.sh && ./scripts/test-heterexec.sh` to observe the `CR2=ffff8000fe000000` Page Fault in `build/qemu-heterexec.log`.
+2. Run `./scripts/run-test.sh` and `cat test.log | grep -ia "user fault"` to observe the user-mode instruction fetch page fault (`rip=0xffffffff80001090`, `error=0x15`).
+3. Run `objdump -d initrd/init` to confirm it is linked at `0xffffffff80000000` and contains indirect calls to absolute higher-half addresses.
