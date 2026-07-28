@@ -108,17 +108,29 @@ impl HeterogeneousScheduler {
             if next_tail == current_head {
                 return Err("Task queue is full");
             }
-            match self.shared_buffer.tail.compare_exchange_weak(
-                current_tail,
-                next_tail,
+            match self.shared_buffer.pending_tasks[current_tail].compare_exchange_weak(
+                0,
+                hw_task.encode(),
                 Ordering::SeqCst,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    self.shared_buffer.pending_tasks[current_tail].store(hw_task.encode(), Ordering::Release);
+                    let _ = self.shared_buffer.tail.compare_exchange_weak(
+                        current_tail,
+                        next_tail,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    );
                     break;
                 }
-                Err(new_tail) => current_tail = new_tail,
+                Err(_) => {
+                    let global_tail = self.shared_buffer.tail.load(Ordering::Acquire);
+                    current_tail = if global_tail != current_tail {
+                        global_tail
+                    } else {
+                        next_tail
+                    };
+                }
             }
         }
         Ok(task_id)
@@ -134,18 +146,28 @@ impl HeterogeneousScheduler {
             }
             let val = self.shared_buffer.pending_tasks[current_head].load(Ordering::Acquire);
             if val == 0 {
-                core::hint::spin_loop();
+                let global_head = self.shared_buffer.head.load(Ordering::Acquire);
+                current_head = if global_head != current_head {
+                    global_head
+                } else {
+                    (current_head + 1) % self.shared_buffer.pending_tasks.len()
+                };
                 continue;
             }
             let next_head = (current_head + 1) % self.shared_buffer.pending_tasks.len();
-            match self.shared_buffer.head.compare_exchange_weak(
-                current_head,
-                next_head,
+            match self.shared_buffer.pending_tasks[current_head].compare_exchange_weak(
+                val,
+                0,
                 Ordering::SeqCst,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    self.shared_buffer.pending_tasks[current_head].store(0, Ordering::Release);
+                    let _ = self.shared_buffer.head.compare_exchange_weak(
+                        current_head,
+                        next_head,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    );
                     if let Some(task) = HardwareTask::decode(val) {
                         if task.is_gpu_task {
                             self.supernova.ring_doorbell(task.id);
@@ -153,7 +175,14 @@ impl HeterogeneousScheduler {
                     }
                     current_head = next_head;
                 }
-                Err(new_head) => current_head = new_head,
+                Err(_) => {
+                    let global_head = self.shared_buffer.head.load(Ordering::Acquire);
+                    current_head = if global_head != current_head {
+                        global_head
+                    } else {
+                        next_head
+                    };
+                }
             }
         }
     }
