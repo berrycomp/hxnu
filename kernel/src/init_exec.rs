@@ -519,16 +519,7 @@ fn map_segment_pages(
     let mut page = segment.map_start;
     while page < segment.map_end {
         let phys = if Some(page) == *last_mapped_page {
-            let existing_phys = last_mapped_phys.unwrap();
-            arch::x86_64::map_user_region(
-                user_pml4,
-                hhdm_offset,
-                page,
-                existing_phys,
-                mm::frame::PAGE_SIZE as usize,
-                flags,
-            ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
-            existing_phys
+            last_mapped_phys.unwrap()
         } else {
             let frame = mm::frame::allocate_frame()
                 .ok_or(InitExecActivateError::InvalidSegmentMap)?;
@@ -541,20 +532,20 @@ fn map_segment_pages(
                 core::ptr::write_bytes(virt as *mut u8, 0, mm::frame::PAGE_SIZE as usize);
             }
             
-            arch::x86_64::map_user_region(
-                user_pml4,
-                hhdm_offset,
-                page,
-                new_phys,
-                mm::frame::PAGE_SIZE as usize,
-                flags,
-            ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
-            
             *last_mapped_page = Some(page);
             *last_mapped_phys = Some(new_phys);
             
             new_phys
         };
+
+        arch::x86_64::map_user_region(
+            user_pml4,
+            hhdm_offset,
+            page,
+            phys,
+            mm::frame::PAGE_SIZE as usize,
+            flags,
+        ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
         let virt = hhdm_offset
             .checked_add(phys)

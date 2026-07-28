@@ -49,9 +49,14 @@ pub enum WorkloadType {
 }
 
 #[repr(C)]
+pub struct Node {
+    pub sequence: AtomicUsize,
+    pub data: AtomicU64,
+}
+
+#[repr(C)]
 pub struct SharedRingBuffer {
-    pub pending_tasks: [AtomicU64; 16],
-    pub sequence: [AtomicUsize; 16],
+    pub buffer: [Node; 16],
     pub head: AtomicUsize,
     pub tail: AtomicUsize,
 }
@@ -68,17 +73,28 @@ pub struct HeterogeneousScheduler {
 impl HeterogeneousScheduler {
     /// Initializes a new HeterogeneousScheduler.
     pub const fn new() -> Self {
-        const INIT_TASK: AtomicU64 = AtomicU64::new(0);
+        const INIT_NODE: Node = Node { sequence: AtomicUsize::new(0), data: AtomicU64::new(0) };
         HeterogeneousScheduler {
             supernova: SupernovaDriver::new(),
             next_id: AtomicU32::new(1),
             shared_buffer: SharedRingBuffer {
-                pending_tasks: [INIT_TASK; 16],
-                sequence: [
-                    AtomicUsize::new(0), AtomicUsize::new(1), AtomicUsize::new(2), AtomicUsize::new(3),
-                    AtomicUsize::new(4), AtomicUsize::new(5), AtomicUsize::new(6), AtomicUsize::new(7),
-                    AtomicUsize::new(8), AtomicUsize::new(9), AtomicUsize::new(10), AtomicUsize::new(11),
-                    AtomicUsize::new(12), AtomicUsize::new(13), AtomicUsize::new(14), AtomicUsize::new(15),
+                buffer: [
+                    Node { sequence: AtomicUsize::new(0), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(1), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(2), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(3), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(4), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(5), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(6), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(7), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(8), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(9), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(10), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(11), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(12), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(13), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(14), data: AtomicU64::new(0) },
+                    Node { sequence: AtomicUsize::new(15), data: AtomicU64::new(0) },
                 ],
                 head: AtomicUsize::new(0),
                 tail: AtomicUsize::new(0),
@@ -111,24 +127,24 @@ impl HeterogeneousScheduler {
         let mut pos = self.shared_buffer.tail.load(Ordering::Relaxed);
         loop {
             let index = pos % 16;
-            let seq = self.shared_buffer.sequence[index].load(Ordering::Acquire);
+            let seq = self.shared_buffer.buffer[index].sequence.load(Ordering::Acquire);
             
-            if seq == pos {
+            let dif = seq as isize - pos as isize;
+            
+            if dif == 0 {
                 if self.shared_buffer.tail.compare_exchange_weak(
                     pos, pos.wrapping_add(1),
                     Ordering::SeqCst, Ordering::Relaxed
                 ).is_ok() {
                     let payload = hw_task.encode();
-                    self.shared_buffer.pending_tasks[index].store(payload, Ordering::Relaxed);
-                    self.shared_buffer.sequence[index].store(pos.wrapping_add(1), Ordering::Release);
+                    self.shared_buffer.buffer[index].data.store(payload, Ordering::Relaxed);
+                    self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(1), Ordering::Release);
                     break;
                 }
+            } else if dif < 0 {
+                return Err("Task queue is full");
             } else {
-                let next_pos = self.shared_buffer.tail.load(Ordering::Relaxed);
-                if pos == next_pos {
-                    return Err("Task queue is full");
-                }
-                pos = next_pos;
+                pos = self.shared_buffer.tail.load(Ordering::Relaxed);
             }
         }
         Ok(task_id)
@@ -139,15 +155,17 @@ impl HeterogeneousScheduler {
         let mut pos = self.shared_buffer.head.load(Ordering::Relaxed);
         loop {
             let index = pos % 16;
-            let seq = self.shared_buffer.sequence[index].load(Ordering::Acquire);
+            let seq = self.shared_buffer.buffer[index].sequence.load(Ordering::Acquire);
             
-            if seq == pos.wrapping_add(1) {
+            let dif = seq as isize - pos.wrapping_add(1) as isize;
+            
+            if dif == 0 {
                 if self.shared_buffer.head.compare_exchange_weak(
                     pos, pos.wrapping_add(1),
                     Ordering::SeqCst, Ordering::Relaxed
                 ).is_ok() {
-                    let val = self.shared_buffer.pending_tasks[index].load(Ordering::Relaxed);
-                    self.shared_buffer.sequence[index].store(pos.wrapping_add(16), Ordering::Release);
+                    let val = self.shared_buffer.buffer[index].data.load(Ordering::Relaxed);
+                    self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(16), Ordering::Release);
                     
                     if let Some(task) = HardwareTask::decode(val) {
                         if task.is_gpu_task {
@@ -156,12 +174,10 @@ impl HeterogeneousScheduler {
                     }
                     pos = pos.wrapping_add(1);
                 }
+            } else if dif < 0 {
+                break;
             } else {
-                let next_pos = self.shared_buffer.head.load(Ordering::Relaxed);
-                if pos == next_pos {
-                    break;
-                }
-                pos = next_pos;
+                pos = self.shared_buffer.head.load(Ordering::Relaxed);
             }
         }
     }

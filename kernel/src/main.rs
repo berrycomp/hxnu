@@ -699,13 +699,13 @@ pub extern "C" fn _start() -> ! {
                     
                     let tail = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::SeqCst);
                     let head = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::SeqCst);
-                    if tail.wrapping_sub(head) != 2 {
-                        panic!("HXNU: Expected 2 pending workloads");
-                    }
+                    assert_eq!(tail.wrapping_sub(head), 2, "HXNU: Expected 2 pending workloads");
                     
                     crate::hsched::HSCHED.dispatch_pending();
                     
-                    let tail2 = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::SeqCst); let head2 = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::SeqCst); if tail2 != head2 { panic!("HXNU: Expected all workloads to be dispatched"); }
+                    let tail2 = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::SeqCst);
+                    let head2 = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(tail2, head2, "HXNU: Expected all workloads to be dispatched");
                     
                     kprintln!("HXNU: dispatched workloads");
                     kprintln!("HXNU: Heterexec bridge self-test PASSED");
@@ -973,8 +973,6 @@ const fn selected_self_test() -> Option<SelfTest> {
         Some(SelfTest::Panic)
     } else if cfg!(feature = "power-reset-self-test") {
         Some(SelfTest::PowerReset)
-    } else if cfg!(feature = "heterexec-self-test") {
-        Some(SelfTest::Heterexec)
     } else if cfg!(feature = "heterexec-self-test") {
         Some(SelfTest::Heterexec)
     } else if cfg!(feature = "exception-test-page-fault") {

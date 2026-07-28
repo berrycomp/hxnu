@@ -302,10 +302,14 @@ pub fn map_user_page(
                 pte,
                 (physical_address & PAGE_ADDRESS_MASK)
                     | PAGE_PRESENT
-                    | PAGE_WRITABLE
                     | PAGE_USER
                     | flags,
             );
+        }
+        invalidate_page(virtual_address);
+    } else {
+        unsafe {
+            write_volatile(pte, entry | flags);
         }
         invalidate_page(virtual_address);
     }
