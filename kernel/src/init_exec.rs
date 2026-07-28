@@ -400,6 +400,9 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
     let user_pml4 = arch::x86_64::create_user_page_table(hhdm_offset)
         .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
+    let mut last_mapped_page: Option<u64> = None;
+    let mut last_mapped_phys: Option<u64> = None;
+
     for segment in &activation.segments {
         let flags = if segment.writable {
             arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITE_THROUGH
@@ -412,6 +415,8 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
             user_pml4,
             hhdm_offset,
             flags,
+            &mut last_mapped_page,
+            &mut last_mapped_phys,
         )?;
     }
 
@@ -420,6 +425,10 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
     let user_stack_phys = mm::frame::allocate_frame()
         .ok_or(InitExecActivateError::InvalidSegmentMap)?
         .start_address();
+
+    unsafe {
+        core::ptr::write_bytes((hhdm_offset + user_stack_phys) as *mut u8, 0, user_stack_size);
+    }
 
     arch::x86_64::map_user_region(
         user_pml4,
@@ -432,7 +441,7 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
 
     let spawned = sched::create_user_thread(
         activation.entry_point,
-        user_stack_top,
+        user_stack_top - 16,
         user_pml4,
     ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
@@ -499,6 +508,8 @@ fn map_segment_pages(
     user_pml4: u64,
     hhdm_offset: u64,
     flags: u64,
+    last_mapped_page: &mut Option<u64>,
+    last_mapped_phys: &mut Option<u64>,
 ) -> Result<(), InitExecActivateError> {
     let file_start = segment.virtual_start;
     let file_end = file_start
@@ -507,16 +518,38 @@ fn map_segment_pages(
 
     let mut page = segment.map_start;
     while page < segment.map_end {
-        let frame = mm::frame::allocate_frame()
-            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
-        let phys = frame.start_address();
+        let phys = if Some(page) == *last_mapped_page {
+            last_mapped_phys.unwrap()
+        } else {
+            let frame = mm::frame::allocate_frame()
+                .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+            let new_phys = frame.start_address();
+            let virt = hhdm_offset
+                .checked_add(new_phys)
+                .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+
+            unsafe {
+                core::ptr::write_bytes(virt as *mut u8, 0, mm::frame::PAGE_SIZE as usize);
+            }
+            
+            arch::x86_64::map_user_region(
+                user_pml4,
+                hhdm_offset,
+                page,
+                new_phys,
+                mm::frame::PAGE_SIZE as usize,
+                flags,
+            ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+            
+            *last_mapped_page = Some(page);
+            *last_mapped_phys = Some(new_phys);
+            
+            new_phys
+        };
+
         let virt = hhdm_offset
             .checked_add(phys)
             .ok_or(InitExecActivateError::InvalidSegmentMap)?;
-
-        unsafe {
-            core::ptr::write_bytes(virt as *mut u8, 0, mm::frame::PAGE_SIZE as usize);
-        }
 
         let page_end = page
             .checked_add(mm::frame::PAGE_SIZE)
@@ -539,15 +572,6 @@ fn map_segment_pages(
                 );
             }
         }
-
-        arch::x86_64::map_user_region(
-            user_pml4,
-            hhdm_offset,
-            page,
-            phys,
-            mm::frame::PAGE_SIZE as usize,
-            flags,
-        ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 
         page = page_end;
     }

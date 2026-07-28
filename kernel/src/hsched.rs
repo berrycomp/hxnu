@@ -101,36 +101,33 @@ impl HeterogeneousScheduler {
             is_gpu_task: is_gpu,
         };
 
-        let mut current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
         loop {
+            let current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
             let current_head = self.shared_buffer.head.load(Ordering::Acquire);
-            let next_tail = (current_tail + 1) % self.shared_buffer.pending_tasks.len();
-            if next_tail == current_head {
+            
+            if current_tail.wrapping_sub(current_head) >= 16 {
                 return Err("Task queue is full");
             }
-            match self.shared_buffer.pending_tasks[current_tail].compare_exchange_weak(
-                0,
-                hw_task.encode(),
+            
+            if self.shared_buffer.tail.compare_exchange_weak(
+                current_tail,
+                current_tail.wrapping_add(1),
                 Ordering::SeqCst,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    let _ = self.shared_buffer.tail.compare_exchange_weak(
-                        current_tail,
-                        next_tail,
-                        Ordering::SeqCst,
-                        Ordering::Relaxed,
-                    );
-                    break;
+                Ordering::Relaxed,
+            ).is_ok() {
+                let index = current_tail % 16;
+                let payload = hw_task.encode();
+                
+                while self.shared_buffer.pending_tasks[index].compare_exchange_weak(
+                    0,
+                    payload,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed
+                ).is_err() {
+                    core::hint::spin_loop();
                 }
-                Err(_) => {
-                    let global_tail = self.shared_buffer.tail.load(Ordering::Acquire);
-                    current_tail = if global_tail != current_tail {
-                        global_tail
-                    } else {
-                        next_tail
-                    };
-                }
+                
+                break;
             }
         }
         Ok(task_id)
@@ -138,50 +135,34 @@ impl HeterogeneousScheduler {
 
     /// Tries to dispatch pending workloads, exposing them to HPS or direct drivers.
     pub fn dispatch_pending(&self) {
-        let mut current_head = self.shared_buffer.head.load(Ordering::Acquire);
         loop {
+            let current_head = self.shared_buffer.head.load(Ordering::Acquire);
             let current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
+            
             if current_head == current_tail {
                 break;
             }
-            let val = self.shared_buffer.pending_tasks[current_head].load(Ordering::Acquire);
-            if val == 0 {
-                let global_head = self.shared_buffer.head.load(Ordering::Acquire);
-                current_head = if global_head != current_head {
-                    global_head
-                } else {
-                    (current_head + 1) % self.shared_buffer.pending_tasks.len()
-                };
-                continue;
-            }
-            let next_head = (current_head + 1) % self.shared_buffer.pending_tasks.len();
-            match self.shared_buffer.pending_tasks[current_head].compare_exchange_weak(
-                val,
-                0,
+            
+            if self.shared_buffer.head.compare_exchange_weak(
+                current_head,
+                current_head.wrapping_add(1),
                 Ordering::SeqCst,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    let _ = self.shared_buffer.head.compare_exchange_weak(
-                        current_head,
-                        next_head,
-                        Ordering::SeqCst,
-                        Ordering::Relaxed,
-                    );
-                    if let Some(task) = HardwareTask::decode(val) {
-                        if task.is_gpu_task {
-                            self.supernova.ring_doorbell(task.id);
-                        }
+                Ordering::Relaxed,
+            ).is_ok() {
+                let index = current_head % 16;
+                let mut val = 0;
+                
+                while val == 0 {
+                    val = self.shared_buffer.pending_tasks[index].swap(0, Ordering::SeqCst);
+                    if val == 0 {
+                        core::hint::spin_loop();
                     }
-                    current_head = next_head;
                 }
-                Err(_) => {
-                    let global_head = self.shared_buffer.head.load(Ordering::Acquire);
-                    current_head = if global_head != current_head {
-                        global_head
-                    } else {
-                        next_head
-                    };
+                
+                if let Some(task) = HardwareTask::decode(val) {
+                    if task.is_gpu_task {
+                        self.supernova.ring_doorbell(task.id);
+                    }
                 }
             }
         }
