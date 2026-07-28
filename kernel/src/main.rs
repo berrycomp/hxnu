@@ -697,25 +697,15 @@ pub extern "C" fn _start() -> ! {
                     
                     kprintln!("HXNU: submitted workloads id1={} id2={}", id1, id2);
                     
-                    crate::hsched::HSCHED.dispatch_pending();
-                    
-                    kprintln!("HXNU: dispatched workloads");
-                    kprintln!("HXNU: Heterexec bridge self-test PASSED");
-                }
-            }
-            SelfTest::Heterexec => {
-                kprintln!("HXNU: running kernel self-test = heterexec bridge");
-                unsafe {
-                    crate::hsched::HSCHED.init();
-                    let ptr = crate::hps_bridge::hps_get_shared_buffer();
-                    kprintln!("HXNU: heterexec hook shared_buffer ptr={:p}", ptr);
-                    
-                    let id1 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::CpuAvx512).unwrap();
-                    let id2 = crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::GpuCompute).unwrap();
-                    
-                    kprintln!("HXNU: submitted workloads id1={} id2={}", id1, id2);
+                    let tail = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::SeqCst);
+                    let head = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::SeqCst);
+                    if tail.wrapping_sub(head) != 2 {
+                        panic!("HXNU: Expected 2 pending workloads");
+                    }
                     
                     crate::hsched::HSCHED.dispatch_pending();
+                    
+                    let tail2 = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::SeqCst); let head2 = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::SeqCst); if tail2 != head2 { panic!("HXNU: Expected all workloads to be dispatched"); }
                     
                     kprintln!("HXNU: dispatched workloads");
                     kprintln!("HXNU: Heterexec bridge self-test PASSED");

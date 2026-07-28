@@ -51,6 +51,7 @@ pub enum WorkloadType {
 #[repr(C)]
 pub struct SharedRingBuffer {
     pub pending_tasks: [AtomicU64; 16],
+    pub sequence: [AtomicUsize; 16],
     pub head: AtomicUsize,
     pub tail: AtomicUsize,
 }
@@ -73,6 +74,12 @@ impl HeterogeneousScheduler {
             next_id: AtomicU32::new(1),
             shared_buffer: SharedRingBuffer {
                 pending_tasks: [INIT_TASK; 16],
+                sequence: [
+                    AtomicUsize::new(0), AtomicUsize::new(1), AtomicUsize::new(2), AtomicUsize::new(3),
+                    AtomicUsize::new(4), AtomicUsize::new(5), AtomicUsize::new(6), AtomicUsize::new(7),
+                    AtomicUsize::new(8), AtomicUsize::new(9), AtomicUsize::new(10), AtomicUsize::new(11),
+                    AtomicUsize::new(12), AtomicUsize::new(13), AtomicUsize::new(14), AtomicUsize::new(15),
+                ],
                 head: AtomicUsize::new(0),
                 tail: AtomicUsize::new(0),
             },
@@ -101,33 +108,27 @@ impl HeterogeneousScheduler {
             is_gpu_task: is_gpu,
         };
 
+        let mut pos = self.shared_buffer.tail.load(Ordering::Relaxed);
         loop {
-            let current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
-            let current_head = self.shared_buffer.head.load(Ordering::Acquire);
+            let index = pos % 16;
+            let seq = self.shared_buffer.sequence[index].load(Ordering::Acquire);
             
-            if current_tail.wrapping_sub(current_head) >= 16 {
-                return Err("Task queue is full");
-            }
-            
-            if self.shared_buffer.tail.compare_exchange_weak(
-                current_tail,
-                current_tail.wrapping_add(1),
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ).is_ok() {
-                let index = current_tail % 16;
-                let payload = hw_task.encode();
-                
-                while self.shared_buffer.pending_tasks[index].compare_exchange_weak(
-                    0,
-                    payload,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed
-                ).is_err() {
-                    core::hint::spin_loop();
+            if seq == pos {
+                if self.shared_buffer.tail.compare_exchange_weak(
+                    pos, pos.wrapping_add(1),
+                    Ordering::SeqCst, Ordering::Relaxed
+                ).is_ok() {
+                    let payload = hw_task.encode();
+                    self.shared_buffer.pending_tasks[index].store(payload, Ordering::Relaxed);
+                    self.shared_buffer.sequence[index].store(pos.wrapping_add(1), Ordering::Release);
+                    break;
                 }
-                
-                break;
+            } else {
+                let next_pos = self.shared_buffer.tail.load(Ordering::Relaxed);
+                if pos == next_pos {
+                    return Err("Task queue is full");
+                }
+                pos = next_pos;
             }
         }
         Ok(task_id)
@@ -135,35 +136,32 @@ impl HeterogeneousScheduler {
 
     /// Tries to dispatch pending workloads, exposing them to HPS or direct drivers.
     pub fn dispatch_pending(&self) {
+        let mut pos = self.shared_buffer.head.load(Ordering::Relaxed);
         loop {
-            let current_head = self.shared_buffer.head.load(Ordering::Acquire);
-            let current_tail = self.shared_buffer.tail.load(Ordering::Acquire);
+            let index = pos % 16;
+            let seq = self.shared_buffer.sequence[index].load(Ordering::Acquire);
             
-            if current_head == current_tail {
-                break;
-            }
-            
-            if self.shared_buffer.head.compare_exchange_weak(
-                current_head,
-                current_head.wrapping_add(1),
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ).is_ok() {
-                let index = current_head % 16;
-                let mut val = 0;
-                
-                while val == 0 {
-                    val = self.shared_buffer.pending_tasks[index].swap(0, Ordering::SeqCst);
-                    if val == 0 {
-                        core::hint::spin_loop();
+            if seq == pos.wrapping_add(1) {
+                if self.shared_buffer.head.compare_exchange_weak(
+                    pos, pos.wrapping_add(1),
+                    Ordering::SeqCst, Ordering::Relaxed
+                ).is_ok() {
+                    let val = self.shared_buffer.pending_tasks[index].load(Ordering::Relaxed);
+                    self.shared_buffer.sequence[index].store(pos.wrapping_add(16), Ordering::Release);
+                    
+                    if let Some(task) = HardwareTask::decode(val) {
+                        if task.is_gpu_task {
+                            self.supernova.ring_doorbell(task.id);
+                        }
                     }
+                    pos = pos.wrapping_add(1);
                 }
-                
-                if let Some(task) = HardwareTask::decode(val) {
-                    if task.is_gpu_task {
-                        self.supernova.ring_doorbell(task.id);
-                    }
+            } else {
+                let next_pos = self.shared_buffer.head.load(Ordering::Relaxed);
+                if pos == next_pos {
+                    break;
                 }
+                pos = next_pos;
             }
         }
     }
