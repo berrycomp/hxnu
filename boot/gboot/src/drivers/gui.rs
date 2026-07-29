@@ -1,30 +1,50 @@
+/// The VOP2 Display Controller Registers
 #[repr(C)]
 pub struct Vop2Regs {
+    /// System control register for enabling the display
     pub sys_ctrl: u32,
+    /// System status register for polling readiness
     pub sys_status: u32,
+    /// Background color register
     pub bg_color: u32,
+    /// Display control register
     pub dsp_ctrl: u32,
 }
 
+#[cfg(target_arch = "aarch64")]
 static mut GUI_ADDR: u32 = 0xFDD90000;
 
+/// Initializes the GUI driver depending on the architecture.
+/// On aarch64, configures the VOP2 display controller.
+#[cfg(target_arch = "aarch64")]
 pub fn init() {
     let regs = unsafe { core::ptr::read_volatile(&GUI_ADDR) as *mut Vop2Regs };
     unsafe {
         // Write enable to sys_ctrl
         core::ptr::write_volatile(&mut (*regs).sys_ctrl, 0x00000001);
-        
+
         // Bounded-poll sys_status for ready bit (e.g. bit 0)
         for _ in 0..100 {
             if (core::ptr::read_volatile(&(*regs).sys_status) & 0x1) != 0 {
                 break;
             }
         }
-        
+
         // Set bg_color to 0xFF000000 (black)
         core::ptr::write_volatile(&mut (*regs).bg_color, 0xFF000000);
-        
+
         // Set dsp_ctrl to active
         core::ptr::write_volatile(&mut (*regs).dsp_ctrl, 0x00000001);
+    }
+}
+
+/// Initializes the GUI driver for x86_64 architecture.
+/// Bypasses ARM MMIO by directly interacting with the physical VGA text buffer.
+#[cfg(target_arch = "x86_64")]
+pub fn init() {
+    unsafe {
+        let vga = 0xB8000 as *mut u16;
+        // Write a green 'G' to the first cell of VGA
+        core::ptr::write_volatile(vga, 0x0200 | b'G' as u16);
     }
 }
