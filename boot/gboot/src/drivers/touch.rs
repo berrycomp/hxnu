@@ -1,5 +1,6 @@
 /// I2C Registers for the Touch Controller
 #[repr(C)]
+#[cfg(target_arch = "aarch64")]
 pub struct I2cRegs {
     /// I2C control register
     pub i2c_con: u32,
@@ -40,9 +41,17 @@ pub fn init() {
 
 /// Initializes the Touch Controller on x86_64.
 /// Reads from the PS/2 keyboard port directly to avoid unmapped MMIO errors.
+/// Implements a bounded-poll FSM on the Status Register (0x64) before reading from 0x60.
 #[cfg(target_arch = "x86_64")]
 pub fn init() {
     unsafe {
+        for _ in 0..100 {
+            let status: u8;
+            core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
+            if (status & 0x01) != 0 {
+                break;
+            }
+        }
         let _data: u8;
         core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
     }

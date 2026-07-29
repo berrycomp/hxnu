@@ -29,4 +29,14 @@ else
     exit 1
 fi
 
+echo "[+] Verifying hardware MMIO/Port writes via QEMU trace..."
+for addr in b8000 3f8 60 3fd 64 3da; do
+    if grep -iq "$addr" qemu_trace.log; then
+        echo "[PASS] QEMU trace logged access for $addr."
+    else
+        echo "[FAIL] QEMU trace missing access for $addr."
+        exit 1
+    fi
+done
+
 echo "[SUCCESS] All G-Boot validations passed!"

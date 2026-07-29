@@ -21,6 +21,11 @@ mkdir -p "${ISO_ROOT}/boot/limine"
 mkdir -p "${ISO_ROOT}/EFI/BOOT"
 cp "${KERNEL_PATH}" "${ISO_ROOT}/boot/kernel"
 cp "${ROOT}/build/initrd.cpio" "${ISO_ROOT}/boot/initrd.cpio"
+
+# Build heterexec and copy to ISO
+(cd /home/eilhanzy/Projects/heterexec && cargo build --release --target x86_64-unknown-none)
+cp /home/eilhanzy/Projects/heterexec/target/x86_64-unknown-none/release/heterexec "${ISO_ROOT}/boot/heterexec.hxext"
+
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/limine.conf"
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/boot/limine/limine.conf"
 cp "${LIMINE_DIR}/limine-bios.sys" "${ISO_ROOT}/limine-bios.sys"

@@ -5,7 +5,7 @@ export PATH=$HOME/.local/bin:$PATH
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${ROOT}/build"
 
-export HXNU_CARGO_ARGS="--features heterexec-self-test"
+export HXNU_CARGO_ARGS=""
 "${ROOT}/scripts/build-iso.sh"
 
 QEMU_PREFIX="$(brew --prefix qemu 2>/dev/null || true)"

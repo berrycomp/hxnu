@@ -1,5 +1,6 @@
 /// UART Registers for the Alveo 5G Modem
 #[repr(C)]
+#[cfg(target_arch = "aarch64")]
 pub struct UartRegs {
     /// Receive Buffer / Transmit Holding Register / Divisor Latch Low
     pub rbr_thr_dll: u32,
@@ -55,10 +56,25 @@ pub fn init() {
 
 /// Initializes the Alveo 5G Modem on x86_64.
 /// Writes directly to COM1 port (0x3F8) using outb.
+/// Implements a bounded-poll FSM on the Line Status Register (0x3FD) before writing.
 #[cfg(target_arch = "x86_64")]
 pub fn init() {
     unsafe {
+        for _ in 0..100 {
+            let status: u8;
+            core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3FDu16);
+            if (status & 0x20) != 0 {
+                break;
+            }
+        }
         core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'A');
+        for _ in 0..100 {
+            let status: u8;
+            core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3FDu16);
+            if (status & 0x20) != 0 {
+                break;
+            }
+        }
         core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'T');
     }
 }

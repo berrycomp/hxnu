@@ -1,5 +1,6 @@
 /// The VOP2 Display Controller Registers
 #[repr(C)]
+#[cfg(target_arch = "aarch64")]
 pub struct Vop2Regs {
     /// System control register for enabling the display
     pub sys_ctrl: u32,
@@ -40,9 +41,17 @@ pub fn init() {
 
 /// Initializes the GUI driver for x86_64 architecture.
 /// Bypasses ARM MMIO by directly interacting with the physical VGA text buffer.
+/// Implements a bounded-poll FSM on the VGA Input Status Register (0x3DA) before writing.
 #[cfg(target_arch = "x86_64")]
 pub fn init() {
     unsafe {
+        for _ in 0..100 {
+            let status: u8;
+            core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3DAu16);
+            if (status & 0x08) != 0 {
+                break;
+            }
+        }
         let vga = 0xB8000 as *mut u16;
         // Write a green 'G' to the first cell of VGA
         core::ptr::write_volatile(vga, 0x0200 | b'G' as u16);

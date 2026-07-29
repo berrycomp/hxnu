@@ -14,6 +14,14 @@ mkdir -p "${STAGE_DIR}"
 
 cp -R "${SOURCE_DIR}/." "${STAGE_DIR}/"
 
+
+# Build heterexec and copy to initrd
+(cd /home/eilhanzy/Projects/heterexec && cargo build --release --target x86_64-unknown-none)
+mkdir -p "${STAGE_DIR}/boot"
+cp /home/eilhanzy/Projects/heterexec/target/x86_64-unknown-none/release/heterexec "${STAGE_DIR}/boot/heterexec.hxext"
+
+
+
 if "${ROOT}/scripts/build-init-payload.sh"; then
     cp "$("${ROOT}/scripts/build-init-payload.sh" --print-path)" "${STAGE_DIR}/init"
 else
