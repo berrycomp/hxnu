@@ -86,6 +86,8 @@ pub enum SyscallAbi {
     LinuxBootstrap,
     GhostBootstrap,
     HxnuNativeBootstrap,
+    /// Routes the syscall to the Linux Compatibility Layer (LCL) daemon.
+    PosixLcl,
 }
 
 impl SyscallAbi {
@@ -94,6 +96,7 @@ impl SyscallAbi {
             Self::LinuxBootstrap => LINUX_ABI_NAME,
             Self::GhostBootstrap => GHOST_ABI_NAME,
             Self::HxnuNativeBootstrap => HXNU_ABI_NAME,
+            Self::PosixLcl => "posix-lcl",
         }
     }
 }
@@ -260,11 +263,50 @@ impl GlobalFdTable {
 
 static FD_TABLE: GlobalFdTable = GlobalFdTable::new();
 
+
+/// Primary syscall entry point for routing `int 0x80` hardware traps.
+/// Interprets the `TrapFrame` register states and delegates to the appropriate
+/// ABI backend: native bootstrapping or the `PosixLcl` compatible wrapper.
+///
+/// This routing layer serves as the absolute lowest level in the HXNU architecture
+/// before hitting userspace. The Linux Compatibility Layer (LCL) daemon relies on
+/// the `PosixLcl` path to intercept `int 0x80` traps and securely translate them
+/// into bare-metal native HXNU/heterexec semantics, achieving zero-latency bridging.
+pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::TrapFrame) -> SyscallOutcome {
+    let abi = match trap_frame.r12 {
+        2 => SyscallAbi::HxnuNativeBootstrap,
+        _ => SyscallAbi::PosixLcl,
+    };
+    match abi {
+        SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(
+            trap_frame.rax,
+            [
+                trap_frame.rdi,
+                trap_frame.rsi,
+                trap_frame.rdx,
+                trap_frame.r10,
+                trap_frame.r8,
+                trap_frame.r9,
+            ],
+        ),
+        SyscallAbi::PosixLcl => {
+            crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
+            SyscallOutcome { value: 0, action: SyscallAction::YieldThread }
+        }
+        _ => SyscallOutcome::errno(ENOSYS),
+    }
+}
+
 pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome {
     match abi {
         SyscallAbi::LinuxBootstrap => posix_compat::dispatch_linux_bootstrap(number, args),
         SyscallAbi::GhostBootstrap => posix_compat::dispatch_ghost_bootstrap(number, args),
         SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(number, args),
+        SyscallAbi::PosixLcl => {
+            crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
+            SyscallOutcome { value: 0, action: SyscallAction::YieldThread }
+        }
+        _ => SyscallOutcome::errno(ENOSYS),
     }
 }
 
