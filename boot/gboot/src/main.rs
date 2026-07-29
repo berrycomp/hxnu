@@ -4,6 +4,19 @@ use core::panic::PanicInfo;
 use core::arch::global_asm;
 use core::arch::asm;
 
+macro_rules! panic {
+    () => {{
+        uart_print("PANIC!\n");
+        loop {}
+    }};
+    ($msg:expr) => {{
+        uart_print("PANIC: ");
+        uart_print($msg);
+        uart_print("\n");
+        loop {}
+    }};
+}
+
 mod drivers;
 
 global_asm!(r#"
@@ -130,17 +143,17 @@ pub extern "C" fn _start() -> ! {
     uart_print("G-Boot starting...\n");
     let mut gui = drivers::gui::GuiDriver::new();
     if gui.init() != drivers::gui::FsmState::Ready {
-        panic!();
+        panic!("GUI");
     }
     
     let mut touch = drivers::touch::TouchDriver::new();
     if touch.init() != drivers::touch::FsmState::Ready {
-        panic!();
+        panic!("TOUCH");
     }
 
     let mut alveo = drivers::alveo_sim::AlveoDriver::new();
     if alveo.init() != drivers::alveo_sim::FsmState::Ready {
-        panic!();
+        panic!("ALVEO");
     }
     uart_print("Driver initialization complete.\n");
 

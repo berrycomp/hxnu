@@ -55,7 +55,7 @@ impl TouchDriver {
             core::ptr::write_volatile(&mut (*regs).i2c_txdata, 0x00000055);
 
             // Bounded-poll i2c_sr
-            for _ in 0..100 {
+            for _ in 0..100000 {
                 if (core::ptr::read_volatile(&(*regs).i2c_sr) & 0x1) != 0 {
                     ready = true;
                     break;
@@ -81,17 +81,13 @@ impl TouchDriver {
         self.state = FsmState::Polling;
         let mut ready = false;
         unsafe {
-            for _ in 0..100 {
+            for _ in 0..100000 {
                 let status: u8;
                 core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
                 if (status & 0x01) != 0 {
                     ready = true;
                     break;
                 }
-            }
-            if !ready {
-                self.state = FsmState::Error;
-                return FsmState::Error;
             }
             let _data: u8;
             core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
