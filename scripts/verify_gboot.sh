@@ -16,9 +16,9 @@ echo "[+] Running QEMU test..."
 
 echo "[+] Verifying MMIO state changes in QEMU trace..."
 # We verify the memory write attempts occur in the trace.
-if grep -iqE "fdd90000|fdd9" qemu_trace.log && \
-   grep -iqE "feab0000|feab" qemu_trace.log && \
-   grep -iqE "fdab0000|fdab" qemu_trace.log; then
+if grep -iq "fdd90000" qemu_trace.log && \
+   grep -iq "feab0000" qemu_trace.log && \
+   grep -iq "fdab0000" qemu_trace.log; then
     echo "[PASS] Driver MMIO registers and payloads verified in trace."
 else
     echo "[FAIL] Could not verify MMIO writes in QEMU trace."
