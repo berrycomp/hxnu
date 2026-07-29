@@ -79,8 +79,27 @@ impl TouchDriver {
     #[cfg(target_arch = "x86_64")]
     pub fn init(&mut self) -> FsmState {
         self.state = FsmState::Polling;
-        let mut ready = false;
         unsafe {
+            // Wait for Input Buffer Empty (bit 1 is 0)
+            let mut ready = false;
+            for _ in 0..100000 {
+                let status: u8;
+                core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
+                if (status & 0x02) == 0 {
+                    ready = true;
+                    break;
+                }
+            }
+            if !ready {
+                self.state = FsmState::Error;
+                return FsmState::Error;
+            }
+
+            // Send Self-Test command (0xAA)
+            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xAAu8);
+
+            // Wait for Output Buffer Full (bit 0 is 1)
+            ready = false;
             for _ in 0..100000 {
                 let status: u8;
                 core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
@@ -93,8 +112,14 @@ impl TouchDriver {
                 self.state = FsmState::Error;
                 return FsmState::Error;
             }
-            let _data: u8;
-            core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
+
+            // Read the response (0x55 expected)
+            let response: u8;
+            core::arch::asm!("in al, dx", out("al") response, in("dx") 0x60u16);
+            if response != 0x55 {
+                self.state = FsmState::Error;
+                return FsmState::Error;
+            }
         }
         self.state = FsmState::Ready;
         FsmState::Ready
