@@ -89,6 +89,10 @@ impl TouchDriver {
                     break;
                 }
             }
+            if !ready {
+                self.state = FsmState::Error;
+                return FsmState::Error;
+            }
             let _data: u8;
             core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
         }
