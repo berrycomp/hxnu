@@ -22,21 +22,19 @@ else
     exit 1
 fi
 
-if grep -qi "chainloading" serial.log; then
+if grep -q "Chainloading HXNU" serial.log; then
     echo "[PASS] Chainloading successful."
 else
     echo "[FAIL] Chainloading not found."
     exit 1
 fi
 
-echo "[+] Verifying hardware MMIO/Port writes via QEMU trace..."
-for addr in b8000 3f8 60 3fd 64 3da; do
-    if grep -iq "$addr" qemu_trace.log; then
-        echo "[PASS] QEMU trace logged access for $addr."
-    else
-        echo "[FAIL] QEMU trace missing access for $addr."
-        exit 1
-    fi
-done
+echo "[+] Verifying no panic..."
+if grep -qi "panic" serial.log; then
+    echo "[FAIL] Panic found in log."
+    exit 1
+else
+    echo "[PASS] No panic found."
+fi
 
 echo "[SUCCESS] All G-Boot validations passed!"

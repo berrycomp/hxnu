@@ -1,3 +1,16 @@
+/// The FSM State for hardware drivers
+#[derive(PartialEq)]
+pub enum FsmState {
+    /// Initializing state
+    Init,
+    /// Polling state
+    Polling,
+    /// Ready state
+    Ready,
+    /// Error state
+    Error,
+}
+
 /// I2C Registers for the Touch Controller
 #[repr(C)]
 #[cfg(target_arch = "aarch64")]
@@ -15,44 +28,75 @@ pub struct I2cRegs {
 #[cfg(target_arch = "aarch64")]
 static mut TOUCH_ADDR: u32 = 0xFEAB0000;
 
-/// Initializes the Touch Controller.
-/// On aarch64, performs an I2C transaction to query the touch controller.
-#[cfg(target_arch = "aarch64")]
-pub fn init() {
-    let regs = unsafe { core::ptr::read_volatile(&TOUCH_ADDR) as *mut I2cRegs };
-    unsafe {
-        // Set i2c_con to enable
-        core::ptr::write_volatile(&mut (*regs).i2c_con, 0x00000001);
-
-        // Write a touch query command (0x55) to txdata
-        core::ptr::write_volatile(&mut (*regs).i2c_txdata, 0x00000055);
-
-        // Bounded-poll i2c_sr
-        for _ in 0..100 {
-            if (core::ptr::read_volatile(&(*regs).i2c_sr) & 0x1) != 0 {
-                break;
-            }
-        }
-
-        // Read rxdata
-        let _data = core::ptr::read_volatile(&(*regs).i2c_rxdata);
-    }
+/// Touch Controller Driver Struct
+pub struct TouchDriver {
+    /// The current FSM state of the driver
+    pub state: FsmState,
 }
 
-/// Initializes the Touch Controller on x86_64.
-/// Reads from the PS/2 keyboard port directly to avoid unmapped MMIO errors.
-/// Implements a bounded-poll FSM on the Status Register (0x64) before reading from 0x60.
-#[cfg(target_arch = "x86_64")]
-pub fn init() {
-    unsafe {
-        for _ in 0..100 {
-            let status: u8;
-            core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
-            if (status & 0x01) != 0 {
-                break;
+impl TouchDriver {
+    /// Creates a new TouchDriver instance
+    pub fn new() -> Self {
+        Self { state: FsmState::Init }
+    }
+
+    /// Initializes the Touch Controller.
+    /// On aarch64, performs an I2C transaction to query the touch controller.
+    #[cfg(target_arch = "aarch64")]
+    pub fn init(&mut self) -> FsmState {
+        self.state = FsmState::Polling;
+        let regs = unsafe { core::ptr::read_volatile(&TOUCH_ADDR) as *mut I2cRegs };
+        let mut ready = false;
+        unsafe {
+            // Set i2c_con to enable
+            core::ptr::write_volatile(&mut (*regs).i2c_con, 0x00000001);
+
+            // Write a touch query command (0x55) to txdata
+            core::ptr::write_volatile(&mut (*regs).i2c_txdata, 0x00000055);
+
+            // Bounded-poll i2c_sr
+            for _ in 0..100 {
+                if (core::ptr::read_volatile(&(*regs).i2c_sr) & 0x1) != 0 {
+                    ready = true;
+                    break;
+                }
             }
+            if !ready {
+                self.state = FsmState::Error;
+                return FsmState::Error;
+            }
+
+            // Read rxdata
+            let _data = core::ptr::read_volatile(&(*regs).i2c_rxdata);
         }
-        let _data: u8;
-        core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
+        self.state = FsmState::Ready;
+        FsmState::Ready
+    }
+
+    /// Initializes the Touch Controller on x86_64.
+    /// Reads from the PS/2 keyboard port directly to avoid unmapped MMIO errors.
+    /// Implements a bounded-poll FSM on the Status Register (0x64) before reading from 0x60.
+    #[cfg(target_arch = "x86_64")]
+    pub fn init(&mut self) -> FsmState {
+        self.state = FsmState::Polling;
+        let mut ready = false;
+        unsafe {
+            for _ in 0..100 {
+                let status: u8;
+                core::arch::asm!("in al, dx", out("al") status, in("dx") 0x64u16);
+                if (status & 0x01) != 0 {
+                    ready = true;
+                    break;
+                }
+            }
+            if !ready {
+                self.state = FsmState::Error;
+                return FsmState::Error;
+            }
+            let _data: u8;
+            core::arch::asm!("in al, dx", out("al") _data, in("dx") 0x60u16);
+        }
+        self.state = FsmState::Ready;
+        FsmState::Ready
     }
 }

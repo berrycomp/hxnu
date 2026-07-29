@@ -128,9 +128,20 @@ pub fn uart_print(s: &str) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     uart_print("G-Boot starting...\n");
-    drivers::gui::init();
-    drivers::touch::init();
-    drivers::alveo_sim::init();
+    let mut gui = drivers::gui::GuiDriver::new();
+    if gui.init() != drivers::gui::FsmState::Ready {
+        panic!();
+    }
+    
+    let mut touch = drivers::touch::TouchDriver::new();
+    if touch.init() != drivers::touch::FsmState::Ready {
+        panic!();
+    }
+
+    let mut alveo = drivers::alveo_sim::AlveoDriver::new();
+    if alveo.init() != drivers::alveo_sim::FsmState::Ready {
+        panic!();
+    }
     uart_print("Driver initialization complete.\n");
 
     #[cfg(feature = "load_linux")]
