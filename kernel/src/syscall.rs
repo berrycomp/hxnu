@@ -1,3 +1,4 @@
+// HXNU Public License (HPL)
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -225,43 +226,32 @@ impl LinuxUtsName {
     }
 }
 
-struct OpenFile {
-    fd: i32,
-    owner_process_id: u64,
-    path: String,
-    offset: usize,
-    content: Vec<u8>,
+const MAX_SYSTEM_FILES: usize = 1024;
+
+#[derive(Clone)]
+pub struct OpenFile {
+    pub ref_count: usize,
+    pub path: String,
+    pub offset: usize,
+    pub content: Vec<u8>,
 }
 
-struct FdTable {
-    next_fd: i32,
-    files: Vec<OpenFile>,
-}
+struct GlobalOpenFileTable(UnsafeCell<[Option<OpenFile>; MAX_SYSTEM_FILES]>);
 
-impl FdTable {
-    fn new() -> Self {
-        Self {
-            next_fd: 3,
-            files: Vec::new(),
-        }
-    }
-}
+unsafe impl Sync for GlobalOpenFileTable {}
 
-struct GlobalFdTable(UnsafeCell<Option<FdTable>>);
-
-unsafe impl Sync for GlobalFdTable {}
-
-impl GlobalFdTable {
+impl GlobalOpenFileTable {
     const fn new() -> Self {
-        Self(UnsafeCell::new(None))
+        const INIT_OPT: Option<OpenFile> = None;
+        Self(UnsafeCell::new([INIT_OPT; MAX_SYSTEM_FILES]))
     }
 
-    fn get(&self) -> *mut Option<FdTable> {
+    fn get(&self) -> *mut [Option<OpenFile>; MAX_SYSTEM_FILES] {
         self.0.get()
     }
 }
 
-static FD_TABLE: GlobalFdTable = GlobalFdTable::new();
+static FILE_TABLE: GlobalOpenFileTable = GlobalOpenFileTable::new();
 
 
 /// Primary syscall entry point for routing `int 0x80` hardware traps.
@@ -272,7 +262,7 @@ static FD_TABLE: GlobalFdTable = GlobalFdTable::new();
 /// before hitting userspace. The Linux Compatibility Layer (LCL) daemon relies on
 /// the `PosixLcl` path to intercept `int 0x80` traps and securely translate them
 /// into bare-metal native HXNU/heterexec semantics, achieving zero-latency bridging.
-pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::TrapFrame) -> SyscallOutcome {
+pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::SyscallRegisterFrame) -> SyscallOutcome {
     let abi = match trap_frame.r12 {
         2 => SyscallAbi::HxnuNativeBootstrap,
         _ => SyscallAbi::PosixLcl,
@@ -311,6 +301,28 @@ pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome 
 }
 
 pub mod posix_compat {
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct stat {
+        pub st_dev: u64,
+        pub st_ino: u64,
+        pub st_nlink: u64,
+        pub st_mode: u32,
+        pub st_uid: u32,
+        pub st_gid: u32,
+        pub __pad0: u32,
+        pub st_rdev: u64,
+        pub st_size: i64,
+        pub st_blksize: i64,
+        pub st_blocks: i64,
+        pub st_atime: u64,
+        pub st_atime_nsec: u64,
+        pub st_mtime: u64,
+        pub st_mtime_nsec: u64,
+        pub st_ctime: u64,
+        pub st_ctime_nsec: u64,
+        pub __unused: [i64; 3],
+    }
     use super::*;
 
     pub fn dispatch_linux_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
@@ -328,6 +340,250 @@ pub mod posix_compat {
             LINUX_SYS_EXIT | LINUX_SYS_EXIT_GROUP => exit_group(args),
 
             _ => SyscallOutcome::errno(ENOSYS),
+        }
+    }
+
+    pub fn sys_stat(args: [u64; 6]) -> SyscallOutcome {
+        let ptr = args[0] as usize;
+        let statbuf = args[1] as usize;
+        let raw_path = match super::copyin_c_string(ptr, super::MAX_PATH_BYTES) {
+            Ok(p) => p,
+            Err(e) => return SyscallOutcome::errno(e),
+        };
+        let node = match crate::vfs::lookup(&raw_path) {
+            Some(n) => n,
+            None => return SyscallOutcome::errno(super::ENOENT),
+        };
+
+        let mut st_mode = 0o100644;
+        if node.kind == crate::vfs::VfsNodeKind::Directory {
+            st_mode = 0o040755;
+        }
+
+        let s = stat {
+            st_dev: 0, st_ino: 1, st_nlink: 1,
+            st_mode, st_uid: 0, st_gid: 0, __pad0: 0, st_rdev: 0,
+            st_size: node.size as i64, st_blksize: 4096, st_blocks: ((node.size + 4095) / 4096) as i64,
+            st_atime: 0, st_atime_nsec: 0, st_mtime: 0, st_mtime_nsec: 0, st_ctime: 0, st_ctime_nsec: 0,
+            __unused: [0; 3],
+        };
+
+        match super::copyout_struct(statbuf, &s) {
+            Ok(_) => SyscallOutcome::success(0),
+            Err(e) => SyscallOutcome::errno(e),
+        }
+    }
+
+    pub fn sys_lseek(args: [u64; 6]) -> SyscallOutcome {
+        let fd = args[0] as i32;
+        let offset = args[1] as i64;
+        let whence = args[2] as i32;
+
+        if fd < 0 || fd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        let table = crate::sched::process_fd_table();
+        let global_idx = match table[fd as usize] {
+            Some(idx) => idx,
+            None => return SyscallOutcome::errno(super::EBADF),
+        };
+        let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+        let open = match &mut global_table[global_idx] {
+            Some(f) => f,
+            None => return SyscallOutcome::errno(super::EBADF),
+        };
+
+        let new_offset = match whence {
+            0 => offset, // SEEK_SET
+            1 => open.offset as i64 + offset, // SEEK_CUR
+            2 => open.content.len() as i64 + offset, // SEEK_END
+            _ => return SyscallOutcome::errno(super::EINVAL),
+        };
+
+        if new_offset < 0 {
+            return SyscallOutcome::errno(super::EINVAL);
+        }
+
+        open.offset = new_offset as usize;
+        SyscallOutcome::success(new_offset)
+    }
+
+    pub fn sys_ioctl(args: [u64; 6]) -> SyscallOutcome {
+        let fd = args[0] as i32;
+        if fd < 0 || fd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        let table = crate::sched::process_fd_table();
+        if table[fd as usize].is_none() {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        SyscallOutcome::success(0)
+    }
+
+    pub fn sys_pipe(args: [u64; 6]) -> SyscallOutcome {
+        let ptr = args[0] as usize;
+        let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+
+        let mut r_idx = -1;
+        let mut w_idx = -1;
+        
+        let mut r_fd = -1;
+        let mut w_fd = -1;
+
+        for i in 0..super::MAX_SYSTEM_FILES {
+            if global_table[i].is_none() {
+                if r_idx == -1 {
+                    r_idx = i as i32;
+                } else if w_idx == -1 {
+                    w_idx = i as i32;
+                    break;
+                }
+            }
+        }
+
+        if w_idx == -1 {
+            return SyscallOutcome::errno(super::EMFILE);
+        }
+
+        let mut table = crate::sched::process_fd_table();
+        for i in 3..crate::sched::MAX_PROCESS_FDS {
+            if table[i].is_none() {
+                if r_fd == -1 {
+                    r_fd = i as i32;
+                } else if w_fd == -1 {
+                    w_fd = i as i32;
+                    break;
+                }
+            }
+        }
+
+        if w_fd == -1 {
+            return SyscallOutcome::errno(super::EMFILE);
+        }
+
+        global_table[r_idx as usize] = Some(super::OpenFile {
+            ref_count: 1, path: alloc::string::String::from("pipe:read"), offset: 0, content: alloc::vec::Vec::new()
+        });
+        global_table[w_idx as usize] = Some(super::OpenFile {
+            ref_count: 1, path: alloc::string::String::from("pipe:write"), offset: 0, content: alloc::vec::Vec::new()
+        });
+
+        table[r_fd as usize] = Some(r_idx as usize);
+        table[w_fd as usize] = Some(w_idx as usize);
+        crate::sched::set_process_fd_table(table);
+
+        let fds = [r_fd, w_fd];
+        match super::copyout_struct(ptr, &fds) {
+            Ok(_) => SyscallOutcome::success(0),
+            Err(e) => SyscallOutcome::errno(e),
+        }
+    }
+
+    pub fn sys_dup(args: [u64; 6]) -> SyscallOutcome {
+        let oldfd = args[0] as i32;
+        if oldfd < 0 || oldfd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        let mut table = crate::sched::process_fd_table();
+        let global_idx = match table[oldfd as usize] {
+            Some(idx) => idx,
+            None => return SyscallOutcome::errno(super::EBADF),
+        };
+
+        let mut newfd = -1;
+        for i in 3..crate::sched::MAX_PROCESS_FDS {
+            if table[i].is_none() {
+                newfd = i as i32;
+                break;
+            }
+        }
+        if newfd == -1 {
+            return SyscallOutcome::errno(super::EMFILE);
+        }
+
+        table[newfd as usize] = Some(global_idx);
+        let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+        if let Some(open) = &mut global_table[global_idx] {
+            open.ref_count += 1;
+        }
+        crate::sched::set_process_fd_table(table);
+
+        SyscallOutcome::success(newfd as i64)
+    }
+
+    pub fn sys_dup2(args: [u64; 6]) -> SyscallOutcome {
+        let oldfd = args[0] as i32;
+        let newfd = args[1] as i32;
+        if oldfd < 0 || oldfd as usize >= crate::sched::MAX_PROCESS_FDS || newfd < 0 || newfd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        if oldfd == newfd {
+            return SyscallOutcome::success(newfd as i64);
+        }
+
+        let mut table = crate::sched::process_fd_table();
+        let global_idx = match table[oldfd as usize] {
+            Some(idx) => idx,
+            None => return SyscallOutcome::errno(super::EBADF),
+        };
+
+        if let Some(old_g_idx) = table[newfd as usize] {
+            let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+            if let Some(open) = &mut global_table[old_g_idx] {
+                if open.ref_count > 1 {
+                    open.ref_count -= 1;
+                } else {
+                    global_table[old_g_idx] = None;
+                }
+            }
+        }
+
+        table[newfd as usize] = Some(global_idx);
+        let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+        if let Some(open) = &mut global_table[global_idx] {
+            open.ref_count += 1;
+        }
+        crate::sched::set_process_fd_table(table);
+
+        SyscallOutcome::success(newfd as i64)
+    }
+
+    pub fn sys_fork(_args: [u64; 6]) -> SyscallOutcome {
+        match crate::sched::sys_fork_current_thread() {
+            Ok(pid) => SyscallOutcome::success(pid as i64),
+            Err(_) => SyscallOutcome::errno(super::ENOSYS),
+        }
+    }
+
+    pub fn sys_wait4(args: [u64; 6]) -> SyscallOutcome {
+        let pid = args[0] as i64;
+        let status_ptr = args[1] as usize;
+        let options = args[2] as u32;
+
+        let parent_pid = crate::sched::current_process_id();
+        if pid == -1 {
+            loop {
+                match crate::sched::sys_reap_child(parent_pid) {
+                    Ok((reaped_pid, status)) => {
+                        if status_ptr != 0 {
+                            let raw_status = status << 8;
+                            let _ = super::copyout_struct(status_ptr, &raw_status);
+                        }
+                        return SyscallOutcome::success(reaped_pid as i64);
+                    }
+                    Err(has_children) => {
+                        if !has_children {
+                            return SyscallOutcome::errno(super::ENOENT);
+                        }
+                        if (options & 1) != 0 {
+                            return SyscallOutcome::success(0);
+                        }
+                        return super::SyscallOutcome { value: 0, action: super::SyscallAction::YieldThread };
+                    }
+                }
+            }
+        } else {
+            return SyscallOutcome::errno(super::ENOSYS);
         }
     }
 
@@ -841,72 +1097,102 @@ fn current_process_id_value() -> u64 {
 }
 
 fn alloc_open_file(path: String, content: Vec<u8>) -> Result<i64, i64> {
-    let owner_process_id = current_process_id_value();
-    let table = fd_table_mut();
-    if table.files.len() >= MAX_OPEN_FILES {
+    let mut table = sched::process_fd_table();
+    let mut fd = -1;
+    for i in 3..sched::MAX_PROCESS_FDS {
+        if table[i].is_none() {
+            fd = i as i32;
+            break;
+        }
+    }
+    if fd == -1 {
         return Err(EMFILE);
     }
-
-    let fd = table.next_fd;
-    table.next_fd = table.next_fd.checked_add(1).ok_or(ERANGE)?;
-    table.files.push(OpenFile {
-        fd,
-        owner_process_id,
-        path,
-        offset: 0,
-        content,
-    });
+    
+    let global_table = unsafe { &mut *FILE_TABLE.get() };
+    let mut global_idx = -1;
+    for i in 0..MAX_SYSTEM_FILES {
+        if global_table[i].is_none() {
+            global_table[i] = Some(OpenFile {
+                ref_count: 1,
+                path: path.clone(),
+                offset: 0,
+                content: content.clone(),
+            });
+            global_idx = i as i32;
+            break;
+        }
+    }
+    if global_idx == -1 {
+        return Err(EMFILE);
+    }
+    
+    table[fd as usize] = Some(global_idx as usize);
+    sched::set_process_fd_table(table);
     Ok(fd as i64)
 }
 
 fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, i64> {
-    let owner_process_id = current_process_id_value();
-    let table = fd_table_mut();
-    let open = table
-        .files
-        .iter_mut()
-        .find(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-        .ok_or(EBADF)?;
-    let _ = &open.path;
-
+    if fd < 0 || fd as usize >= sched::MAX_PROCESS_FDS {
+        return Err(EBADF);
+    }
+    let table = sched::process_fd_table();
+    let global_idx = table[fd as usize].ok_or(EBADF)?;
+    
+    let global_table = unsafe { &mut *FILE_TABLE.get() };
+    let open = global_table[global_idx].as_mut().ok_or(EBADF)?;
+    
     if count == 0 {
         return Ok(0);
     }
 
     let available = open.content.len().saturating_sub(open.offset);
     let read_len = min(count, available);
-    let bytes = &open.content[open.offset..open.offset + read_len];
-    uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
-    open.offset = open.offset.saturating_add(read_len);
-
+    if read_len > 0 {
+        let bytes = &open.content[open.offset..open.offset + read_len];
+        uaccess::copyout(bytes, destination_ptr).map_err(map_uaccess_error)?;
+        open.offset = open.offset.saturating_add(read_len);
+    }
     i64::try_from(read_len).map_err(|_| ERANGE)
 }
 
 fn close_open_file(fd: i32) -> Result<i64, i64> {
-    let owner_process_id = current_process_id_value();
-    let table = fd_table_mut();
-    if let Some(position) = table
-        .files
-        .iter()
-        .position(|file| file.fd == fd && file.owner_process_id == owner_process_id)
-    {
-        table.files.remove(position);
-        return Ok(0);
+    if fd < 0 || fd as usize >= sched::MAX_PROCESS_FDS {
+        return Err(EBADF);
     }
-    Err(EBADF)
+    let mut table = sched::process_fd_table();
+    let global_idx = table[fd as usize].ok_or(EBADF)?;
+    
+    table[fd as usize] = None;
+    sched::set_process_fd_table(table);
+    
+    let global_table = unsafe { &mut *FILE_TABLE.get() };
+    if let Some(open) = &mut global_table[global_idx] {
+        if open.ref_count > 1 {
+            open.ref_count -= 1;
+        } else {
+            global_table[global_idx] = None;
+        }
+    }
+    Ok(0)
 }
 
-fn purge_open_files_for_process(process_id: u64) {
-    let table = fd_table_mut();
-    table.files.retain(|file| file.owner_process_id != process_id);
-}
-
-fn fd_table_mut() -> &'static mut FdTable {
-    let slot = unsafe { &mut *FD_TABLE.get() };
-    if slot.is_none() {
-        *slot = Some(FdTable::new());
+fn purge_open_files_for_process(_process_id: u64) {
+    let mut table = sched::process_fd_table();
+    for fd in 3..sched::MAX_PROCESS_FDS {
+        if let Some(global_idx) = table[fd] {
+            let global_table = unsafe { &mut *FILE_TABLE.get() };
+            if let Some(open) = &mut global_table[global_idx] {
+                if open.ref_count > 1 {
+                    open.ref_count -= 1;
+                } else {
+                    global_table[global_idx] = None;
+                }
+            }
+            table[fd] = None;
+        }
     }
-    slot.as_mut().expect("fd table initialized")
+    sched::set_process_fd_table(table);
 }
 
 fn copyin_c_string(ptr: usize, max_len: usize) -> Result<String, i64> {

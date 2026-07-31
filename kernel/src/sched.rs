@@ -1,3 +1,4 @@
+// HXNU Public License (HPL)
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -908,6 +909,22 @@ pub fn request_exit_group(status: i32) -> Option<ExitGroupRecord> {
         }
         rec
     }
+}
+
+pub fn process_fd_table() -> [Option<usize>; MAX_PROCESS_FDS] {
+    unsafe { (*SCHEDULER.get()).get_fd_table() }
+}
+
+pub fn set_process_fd_table(table: [Option<usize>; MAX_PROCESS_FDS]) {
+    unsafe { (*SCHEDULER.get()).set_fd_table(table) }
+}
+
+pub fn sys_fork_current_thread() -> Result<u64, SchedulerError> {
+    unsafe { (*SCHEDULER.get()).fork_current_thread() }
+}
+
+pub fn sys_reap_child(parent_pid: u64) -> Result<(u64, i32), bool> {
+    unsafe { (*SCHEDULER.get()).reap_child(parent_pid) }
 }
 
 pub fn idle_loop() -> ! {
