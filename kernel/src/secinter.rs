@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 //! Security Interceptor (SECinter) Subsystem
 //!
 //! This module computes an Entropy-Inclusive Syscall ID based on the payload of each

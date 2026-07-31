@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use super::checksum;
 use super::header::{EncodedHeader, HEADER_BYTES};
 use super::profile_generated;

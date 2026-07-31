@@ -4,6 +4,7 @@ pub const ENOSYS: i64 = -38;
 pub const EPERM: i64 = -1;
 
 #[derive(Debug)]
+#[repr(C)]
 pub struct SyscallOutcome {
     pub value: i64,
 }
@@ -16,6 +17,7 @@ impl SyscallOutcome {
 
 /// Linux Compatibility Layer (LCL) Entrypoint for Syscalls
 /// This handles Linux ELF standard POSIX syscalls mapped to HPS zero-latency hardware.
+#[allow(improper_ctypes_definitions)]
 #[unsafe(no_mangle)]
 pub extern "C" fn hxnu_module_dispatch_lcl(number: u64, args: [u64; 6], entropy_id: u64) -> SyscallOutcome {
     if entropy_id == 0 {

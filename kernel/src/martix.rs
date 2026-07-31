@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 //! MaRTix structures for GMS routing.
 //!
 //! This module defines the compute backend, routing commands, and the

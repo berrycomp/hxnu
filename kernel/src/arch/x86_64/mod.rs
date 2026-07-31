@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 mod apic;
 mod context;
 mod cpuid;
@@ -130,3 +132,5 @@ pub fn run_syscall_self_test() -> SyscallSelfTest {
         hxnu_abi_version_result: result.hxnu_abi_version_result,
     }
 }
+
+pub use interrupts::SyscallRegisterFrame;

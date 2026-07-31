@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::ffi::{c_char, c_int, c_void};
 
 // Provide the C memory/string entry points expected by freestanding builds.

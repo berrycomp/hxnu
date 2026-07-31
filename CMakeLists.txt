@@ -22,29 +22,28 @@ set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/linker.ld")
 
 # Compiling the Core Kernel (Bypassing Cargo)
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libhxnu_kernel.a ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
     COMMAND ${RUST_COMPILER} 
         --edition 2021 
         --target ${KERNEL_TARGET} 
-        --emit obj 
+        --crate-type staticlib 
         -C opt-level=3 
         -C panic=abort
         -C relocation-model=static
-        -C link-arg=-T${LINKER_SCRIPT}
-        -C link-arg=-nostdlib
         ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs 
-        -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
+        -o ${CMAKE_CURRENT_BINARY_DIR}/libhxnu_kernel.a
+    COMMAND cp ${CMAKE_CURRENT_BINARY_DIR}/libhxnu_kernel.a ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs
     COMMENT "Compiling: HXNU Kernel (Cargo bypassed, absolute memory linker active)."
 )
 
-add_custom_target(hxnu_kernel DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o)
+add_custom_target(hxnu_kernel DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libhxnu_kernel.a ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o)
 
 # Post-Build Hex / ELF Generation for G-Boot
 # (This step links the object into the final immutable executable)
 add_custom_command(
     TARGET hxnu_kernel POST_BUILD
-    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu.elf ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
+    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu.elf --whole-archive ${CMAKE_CURRENT_BINARY_DIR}/libhxnu_kernel.a --no-whole-archive
     COMMENT "Linking: G-Boot Kexec Sequential Memory Layout Applied."
 )
 
@@ -57,27 +56,45 @@ else()
 endif()
 
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libgboot.a ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
     COMMAND ${RUST_COMPILER} 
         --edition 2021 
         --target ${KERNEL_TARGET} 
-        --emit obj 
+        --crate-type staticlib 
         -C opt-level=3 
         -C panic=abort
         -C relocation-model=static
-        -C link-arg=-nostdlib
         ${GBOOT_CFG}
         ${CMAKE_CURRENT_SOURCE_DIR}/boot/gboot/src/main.rs 
-        -o ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
+        -o ${CMAKE_CURRENT_BINARY_DIR}/libgboot.a
+    COMMAND cp ${CMAKE_CURRENT_BINARY_DIR}/libgboot.a ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/boot/gboot/src/main.rs
     COMMENT "Compiling: G-Boot Bootloader (Target: ${GBOOT_TARGET_KERNEL})"
     VERBATIM
 )
 
-add_custom_target(gboot ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/gboot.o)
+add_custom_target(gboot ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libgboot.a ${CMAKE_CURRENT_BINARY_DIR}/gboot.o)
 
 add_custom_command(
     TARGET gboot POST_BUILD
-    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/gboot.elf ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
+    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/gboot.elf --whole-archive ${CMAKE_CURRENT_BINARY_DIR}/libgboot.a --no-whole-archive
     COMMENT "Linking: G-Boot ELF Generated."
 )
+
+# Linux Compatibility Layer (LCL) Module
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/liblcl.rlib
+    COMMAND ${RUST_COMPILER} 
+        --edition 2021 
+        --target ${KERNEL_TARGET} 
+        --crate-type lib 
+        -C opt-level=3 
+        -C panic=abort
+        -C relocation-model=static
+        ${CMAKE_CURRENT_SOURCE_DIR}/modules/lcl/src/lib.rs 
+        -o ${CMAKE_CURRENT_BINARY_DIR}/liblcl.rlib
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/lcl/src/lib.rs
+    COMMENT "Compiling: Linux Compatibility Layer (LCL)"
+)
+
+add_custom_target(lcl DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/liblcl.rlib)

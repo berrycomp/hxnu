@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::arch::x86_64::_rdtsc;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 

@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 // HXNU Public License (HPL)
 use core::arch::asm;
 use core::cell::UnsafeCell;
@@ -160,6 +162,8 @@ struct Thread {
     total_ticks: u64,
     dispatch_count: u64,
     context: arch::x86_64::TaskContext,
+    pub fd_table: [Option<usize>; MAX_PROCESS_FDS],
+    pub exit_status: i32,
 }
 
 impl Thread {
@@ -176,6 +180,8 @@ impl Thread {
             total_ticks: 0,
             dispatch_count: 0,
             context: arch::x86_64::TaskContext::empty(),
+            fd_table: [None; MAX_PROCESS_FDS],
+            exit_status: 0,
         }
     }
 }
@@ -225,6 +231,7 @@ struct ProcessIdentity {
     thread_group_id: u64,
 }
 
+pub const MAX_PROCESS_FDS: usize = 64;
 const MAX_PRIORITIES: usize = 64;
 
 struct Scheduler {
@@ -335,6 +342,8 @@ impl Scheduler {
             total_ticks: 0,
             dispatch_count: 0,
             context,
+            fd_table: [None; MAX_PROCESS_FDS],
+            exit_status: 0,
         };
         self.thread_count += 1;
         Ok(slot)
@@ -694,6 +703,84 @@ impl Scheduler {
         let slot = self.current_slot?;
         self.prepare_resume_slot(slot);
         Some(&self.threads[slot].context as *const arch::x86_64::TaskContext)
+    }
+
+    pub fn get_fd_table(&self) -> [Option<usize>; MAX_PROCESS_FDS] {
+        if let Some(slot) = self.current_slot {
+            self.threads[slot].fd_table
+        } else {
+            [None; MAX_PROCESS_FDS]
+        }
+    }
+
+    pub fn set_fd_table(&mut self, table: [Option<usize>; MAX_PROCESS_FDS]) {
+        if let Some(slot) = self.current_slot {
+            self.threads[slot].fd_table = table;
+        }
+    }
+
+    pub fn fork_current_thread(&mut self) -> Result<u64, SchedulerError> {
+        if !self.initialized || self.current_slot.is_none() {
+            return Err(SchedulerError::ThreadTableFull);
+        }
+        
+        let parent_slot = self.current_slot.unwrap();
+        let mut child_slot = None;
+        for i in 0..MAX_THREADS {
+            if let ThreadState::Unused = self.threads[i].state {
+                child_slot = Some(i);
+                break;
+            }
+        }
+        
+        let child_slot = child_slot.ok_or(SchedulerError::ThreadTableFull)?;
+        let child_id = self.next_thread_id;
+        self.next_thread_id = self.next_thread_id.saturating_add(1);
+        self.thread_count += 1;
+        
+        let parent_cr3 = crate::arch::x86_64::read_cr3();
+        let new_cr3 = crate::mm::vmm::clone_space(parent_cr3);
+        if new_cr3 == 0 {
+            return Err(SchedulerError::ThreadTableFull);
+        }
+        
+        let mut child_thread = Thread::empty();
+        {
+            let parent_thread = &self.threads[parent_slot];
+            child_thread.id = child_id;
+            child_thread.process_id = child_id;
+            child_thread.parent_process_id = parent_thread.process_id;
+            child_thread.thread_group_id = child_id;
+            child_thread.name = parent_thread.name;
+            child_thread.role = parent_thread.role;
+            child_thread.state = ThreadState::Runnable;
+            child_thread.base_priority = parent_thread.base_priority;
+            child_thread.fd_table = parent_thread.fd_table;
+            child_thread.context = parent_thread.context.clone();
+            child_thread.context.cr3 = new_cr3;
+        }
+        
+        self.threads[child_slot] = child_thread;
+        let _ = self.enqueue(child_slot);
+        
+        Ok(child_id)
+    }
+
+    pub fn reap_child(&mut self, parent_pid: u64) -> Result<(u64, i32), bool> {
+        let mut has_children = false;
+        for i in 0..MAX_THREADS {
+            if self.threads[i].parent_process_id == parent_pid {
+                has_children = true;
+                if let ThreadState::Exited = self.threads[i].state {
+                    let child_id = self.threads[i].id;
+                    let status = self.threads[i].exit_status;
+                    self.threads[i].state = ThreadState::Unused;
+                    self.thread_count -= 1;
+                    return Ok((child_id, status));
+                }
+            }
+        }
+        Err(has_children)
     }
 }
 

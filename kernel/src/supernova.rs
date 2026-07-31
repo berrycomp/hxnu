@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 //! Supernova Driver Module
 //!
 //! This module implements the `no_std` driver for the Supernova hardware.
@@ -48,7 +50,7 @@ pub struct SupernovaGuard<'a> {
 impl<'a> Drop for SupernovaGuard<'a> {
     fn drop(&mut self) {
         self.lock.store(false, Ordering::Release);
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(test)))]
         unsafe {
             core::arch::asm!("sti", options(nomem, nostack));
         }
@@ -145,7 +147,7 @@ impl SupernovaDriver {
 
     /// Acquires the driver lock
     pub fn lock(&self) -> SupernovaGuard<'_> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(test)))]
         unsafe {
             core::arch::asm!("cli", options(nomem, nostack));
         }

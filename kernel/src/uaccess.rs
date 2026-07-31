@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::ptr;
 
 const LOW_CANONICAL_MAX: usize = (1usize << 47) - 1;

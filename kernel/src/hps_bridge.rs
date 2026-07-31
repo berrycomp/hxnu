@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 /// HPS Bridge (Bare-Metal)
 /// Provides a zero-copy FFI interface for .hxext kernel modules (like HPS)
 /// to access the internal hardware scheduler's SharedRingBuffer.

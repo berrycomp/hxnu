@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 const IA32_APIC_BASE_MSR: u32 = 0x1b;
 
 use super::cpuid;

@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 #![no_std]
 
 use crate::neoio::{NEOIO_MANAGER, iommu::reconfigure_iommu_group};

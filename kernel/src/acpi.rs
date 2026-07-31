@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr;

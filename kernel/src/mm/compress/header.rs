@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use super::{CompressionClass, CompressionError, PAGE_BYTES};
 
 pub const HEADER_BYTES: usize = 16;

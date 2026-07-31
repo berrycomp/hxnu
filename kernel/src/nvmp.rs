@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 // hxnu/kernel/src/nvmp.rs
 // Holographic Flash Storage - Non-Volatile Memory Protection (NVMP)
 

@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub static HPS_HOOK_CALLED: AtomicUsize = AtomicUsize::new(0);

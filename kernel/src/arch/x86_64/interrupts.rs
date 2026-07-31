@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::mem::size_of;
@@ -128,22 +130,22 @@ hxnu_x86_64_syscall_entry:
 );
 
 #[repr(C)]
-struct SyscallRegisterFrame {
-    rax: u64,
-    rbp: u64,
-    rbx: u64,
-    rcx: u64,
-    rdx: u64,
-    rsi: u64,
-    rdi: u64,
-    r8: u64,
-    r9: u64,
-    r10: u64,
-    r11: u64,
-    r12: u64,
-    r13: u64,
-    r14: u64,
-    r15: u64,
+pub struct SyscallRegisterFrame {
+    pub rax: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
 }
 
 const SYSCALL_REGISTER_QWORDS: usize = size_of::<SyscallRegisterFrame>() / size_of::<u64>();
@@ -568,6 +570,7 @@ const fn syscall_abi_selector(abi: SyscallAbi) -> u64 {
         SyscallAbi::LinuxBootstrap => 0,
         SyscallAbi::GhostBootstrap => 1,
         SyscallAbi::HxnuNativeBootstrap => 2,
+        SyscallAbi::PosixLcl => 3,
     }
 }
 

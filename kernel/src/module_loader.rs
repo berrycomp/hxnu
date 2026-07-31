@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use crate::vfs;
 use crate::tty::ConsoleStyle;
 

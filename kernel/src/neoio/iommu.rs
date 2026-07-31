@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 /// NeoIO IOMMU & ACS Isolation Logic
 
 /// Re-configures the Access Control Services (ACS) for a specific PCIe lane

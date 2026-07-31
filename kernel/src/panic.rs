@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::alloc::Layout;
 use core::arch::asm;
 use core::fmt;
@@ -7,6 +9,7 @@ use core::panic::PanicInfo;
 use crate::serial;
 use crate::tty;
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     serial::init();
@@ -33,6 +36,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     crate::speaker::play_md80_altitude_warning();
 }
 
+#[cfg(not(test))]
 #[alloc_error_handler]
 fn alloc_error(layout: Layout) -> ! {
     serial::init();

@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 ///! Heterogeneous Scheduler (HXNU)
 ///! Capable of managing asymmetric workloads across CPU (AVX-512) and GPU (RT/Tensor Cores).
 ///! Relies on the bare-metal HPS for zero-latency dispatching to prevent driver timeouts.

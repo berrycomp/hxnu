@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 /// AARCH64 (ARMv8.2-A / ARMv9) Architecture specific module
 /// Targeting Orange Pi 5 (Rockchip RK3588)
 

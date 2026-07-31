@@ -1,8 +1,11 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 #![allow(static_mut_refs)]
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
 #![feature(abi_x86_interrupt)]
+#![feature(linkage)]
 
 extern crate alloc;
 
@@ -23,6 +26,10 @@ pub mod supernova;
 pub mod martix;
 pub mod speaker;
 pub mod hsched;
+
+#[path = "../../../heterexec/src/lib.rs"]
+pub mod hps;
+
 pub mod hps_bridge;
 pub mod neoio;
 pub mod neoio_bridge;
@@ -959,7 +966,13 @@ pub extern "C" fn _start() -> ! {
 
     kprintln!("HXNU: Rust kernel skeleton online");
     
-    hps::init_hxext();
+    unsafe {
+        hps::init_hxext(
+            core::mem::transmute(crate::hps_bridge::hps_get_shared_buffer as *const ()),
+            core::mem::transmute(crate::neoio_bridge::hps_get_topology_tree as *const ()),
+        );
+    }
+
     crate::sched::register_hps_bridge(test_hps_hook);
     crate::sched::trigger_hps_bridge(42, true);
     let val = HPS_HOOK_CALLED.load(core::sync::atomic::Ordering::SeqCst);

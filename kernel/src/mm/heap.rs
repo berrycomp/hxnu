@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use core::ptr::null_mut;
@@ -81,6 +83,7 @@ pub enum HeapInitError {
     OutOfFrames,
 }
 
+#[cfg(not(test))]
 #[global_allocator]
 static GLOBAL_ALLOCATOR: LockedBumpAllocator = LockedBumpAllocator;
 

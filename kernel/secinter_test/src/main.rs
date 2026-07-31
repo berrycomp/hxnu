@@ -1,3 +1,5 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
 const C_LOG_C_LUT: [u32; 65] = [
     0, 0, 2048, 4869, 8192, 11888, 15882, 20123, 24576, 29214, 34017, 38967, 44052,
     49260, 54582, 60010, 65536, 71155, 76860, 82648, 88513, 94452, 100462, 106539,
