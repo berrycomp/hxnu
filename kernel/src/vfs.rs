@@ -20,6 +20,7 @@ const DEV_ROOT_PATH: &str = "/dev";
 const FAT_ROOT_PATH: &str = "/boot";
 const PROC_ROOT_PATH: &str = "/proc";
 const INITRD_ROOT_PATH: &str = "/initrd";
+const HFS_ROOT_PATH: &str = "/hfs";
 const INIT_PATH: &str = "/initrd/init";
 
 struct GlobalVfs(UnsafeCell<Option<VfsState>>);
@@ -50,6 +51,7 @@ pub enum VfsMountKind {
     Fat,
     Initrd,
     Procfs,
+    Hfs,
 }
 
 impl VfsMountKind {
@@ -60,6 +62,7 @@ impl VfsMountKind {
             Self::Fat => "fat",
             Self::Initrd => "initrd",
             Self::Procfs => "procfs",
+            Self::Hfs => "hfs",
         }
     }
 }
@@ -230,8 +233,8 @@ pub fn summary() -> VfsSummary {
 
     let initrd_online = initrd::is_initialized();
     let fat_online = fat::is_initialized();
-    let mount_count = 2 + usize::from(initrd_online) + usize::from(fat_online);
-    let directory_count = 3
+    let mount_count = 3 + usize::from(initrd_online) + usize::from(fat_online);
+    let directory_count = 4
         + if initrd_online {
             initrd::summary().directory_count
         } else {
@@ -264,6 +267,7 @@ pub fn read(path: &str) -> Option<String> {
         VfsMountKind::Fat => fat::read(&node.path),
         VfsMountKind::Initrd => initrd::read(&node.path),
         VfsMountKind::Procfs => procfs::read(&node.path),
+        VfsMountKind::Hfs => read_hfs(&node.path),
     }
 }
 
@@ -509,7 +513,15 @@ fn resolve_node(path: &str) -> Option<VfsNode> {
         _ if path == FAT_ROOT_PATH || path.starts_with("/boot/") => resolve_fat_node(path),
         _ if path == INITRD_ROOT_PATH || path.starts_with("/initrd/") => resolve_initrd_node(path),
         _ if path == PROC_ROOT_PATH || path.starts_with("/proc/") => resolve_procfs_node(path),
-        _ => None,
+        _ if path == HFS_ROOT_PATH || path.starts_with("/hfs/") => resolve_hfs_node(path),
+        _ => {
+            let mut initrd_path = String::from("/initrd");
+            if !path.starts_with('/') {
+                initrd_path.push('/');
+            }
+            initrd_path.push_str(path);
+            resolve_initrd_node(&initrd_path)
+        }
     }
 }
 
@@ -593,12 +605,68 @@ fn resolve_runtime_path(path: &str) -> Option<String> {
     lookup(&initrd_path).map(|node| node.path)
 }
 
+fn resolve_hfs_node(path: &str) -> Option<VfsNode> {
+    if path == HFS_ROOT_PATH {
+        return Some(VfsNode {
+            path: String::from(HFS_ROOT_PATH),
+            mount: VfsMountKind::Hfs,
+            kind: VfsNodeKind::Directory,
+            size: render_hfs_root().len(),
+            executable: false,
+        });
+    }
+
+    let content = read_hfs(path);
+    Some(VfsNode {
+        path: String::from(path),
+        mount: VfsMountKind::Hfs,
+        kind: VfsNodeKind::File,
+        size: content.map_or(0, |c| c.len()),
+        executable: false,
+    })
+}
+
+fn read_hfs(path: &str) -> Option<String> {
+    if path == HFS_ROOT_PATH {
+        return Some(render_hfs_root());
+    }
+
+    let mut text = String::new();
+    let _ = writeln!(text, "HFS Subsystem Node: {}", path);
+    let _ = writeln!(text, "Status: Online");
+    let _ = writeln!(
+        text,
+        "Active LUT Entries: {}",
+        crate::hps::hfs::UnifiedNamespace::active_count()
+    );
+    let _ = writeln!(
+        text,
+        "DMA Shadowed Entries: {}",
+        crate::hps::hfs::PowerLossPrevention::shadow_count()
+    );
+    let _ = writeln!(
+        text,
+        "HPS Halted State: {}",
+        crate::hps::hfs::PowerLossPrevention::is_hps_halted()
+    );
+    Some(text)
+}
+
+fn render_hfs_root() -> String {
+    let mut text = String::new();
+    let _ = writeln!(text, "namespace");
+    let _ = writeln!(text, "outage");
+    let _ = writeln!(text, "status");
+    text
+}
+
 fn render_root() -> String {
     let mut text = String::new();
     let _ = writeln!(text, "dev");
     if fat::is_initialized() {
         let _ = writeln!(text, "fat");
     }
+    let _ = writeln!(text, "hfs");
     if initrd::is_initialized() {
         let _ = writeln!(text, "initrd");
     }
@@ -715,4 +783,15 @@ fn normalize_path(path: &str) -> Option<String> {
     }
 
     Some(normalized)
+}
+
+#[allow(dead_code)]
+pub fn mmap_device(path: &str) -> Option<(u64, usize)> {
+    let node = lookup(path)?;
+    if node.mount == VfsMountKind::Devfs {
+        let info = devfs::mmap(&node.path)?;
+        Some((info.physical_address, info.size))
+    } else {
+        None
+    }
 }

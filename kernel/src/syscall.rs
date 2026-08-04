@@ -1,10 +1,56 @@
 // TCOL / HPL (HXNU Public License)
 // This file is strictly governed by the HXNU Public License (HPL).
 // HXNU Public License (HPL)
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
 use core::cell::UnsafeCell;
+
+pub struct LclMessage {
+    pub pid: u64,
+    pub tid: u64,
+    pub number: u64,
+    pub args: [u64; 6],
+}
+pub struct LclQueue {
+    pub messages: [Option<LclMessage>; 64],
+    pub head: usize,
+    pub tail: usize,
+}
+pub static mut LCL_QUEUE: LclQueue = LclQueue {
+    messages: [
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+    ],
+    head: 0,
+    tail: 0,
+};
+
+pub fn enqueue_lcl_message(msg: LclMessage) {
+    unsafe {
+        LCL_QUEUE.messages[LCL_QUEUE.head] = Some(msg);
+        LCL_QUEUE.head = (LCL_QUEUE.head + 1) % 64;
+    }
+}
+
+pub fn dequeue_lcl_message() -> Option<LclMessage> {
+    unsafe {
+        if LCL_QUEUE.head == LCL_QUEUE.tail {
+            if LCL_QUEUE.messages[LCL_QUEUE.tail].is_none() {
+                return None;
+            }
+        }
+        let msg = LCL_QUEUE.messages[LCL_QUEUE.tail].take();
+        if msg.is_some() {
+            LCL_QUEUE.tail = (LCL_QUEUE.tail + 1) % 64;
+        }
+        msg
+    }
+}
+
 use core::cmp::min;
 use core::mem::size_of_val;
 use core::slice;
@@ -23,16 +69,43 @@ pub const HXNU_ABI_NAME: &str = "hxnu-native-bootstrap";
 
 pub const LINUX_SYS_READ: u64 = 0;
 pub const LINUX_SYS_WRITE: u64 = 1;
+pub const LINUX_SYS_OPEN: u64 = 2;
 pub const LINUX_SYS_CLOSE: u64 = 3;
+pub const LINUX_SYS_STAT: u64 = 4;
+pub const LINUX_SYS_FSTAT: u64 = 5;
+pub const LINUX_SYS_MMAP: u64 = 9;
+pub const LINUX_SYS_MUNMAP: u64 = 11;
+pub const LINUX_SYS_BRK: u64 = 12;
+pub const LINUX_SYS_IOCTL: u64 = 16;
 pub const LINUX_SYS_SCHED_YIELD: u64 = 24;
+pub const LINUX_SYS_POLL: u64 = 7;
+pub const LINUX_SYS_LSEEK: u64 = 8;
+pub const LINUX_SYS_MPROTECT: u64 = 10;
+pub const LINUX_SYS_RT_SIGACTION: u64 = 13;
+pub const LINUX_SYS_RT_SIGPROCMASK: u64 = 14;
+pub const LINUX_SYS_MADVISE: u64 = 28;
 pub const LINUX_SYS_GETPID: u64 = 39;
 pub const LINUX_SYS_EXIT: u64 = 60;
 pub const LINUX_SYS_UNAME: u64 = 63;
 pub const LINUX_SYS_GETPPID: u64 = 110;
+pub const LINUX_SYS_SIGALTSTACK: u64 = 131;
+pub const LINUX_SYS_ARCH_PRCTL: u64 = 158;
 pub const LINUX_SYS_GETTID: u64 = 186;
+pub const LINUX_SYS_TKILL: u64 = 200;
+pub const LINUX_SYS_GETDENTS64: u64 = 217;
+pub const LINUX_SYS_SET_TID_ADDRESS: u64 = 218;
 pub const LINUX_SYS_CLOCK_GETTIME: u64 = 228;
 pub const LINUX_SYS_EXIT_GROUP: u64 = 231;
+pub const LINUX_SYS_TGKILL: u64 = 234;
 pub const LINUX_SYS_OPENAT: u64 = 257;
+pub const LINUX_SYS_NEWFSTATAT: u64 = 262;
+pub const LINUX_SYS_PRLIMIT64: u64 = 302;
+pub const LINUX_SYS_GETRANDOM: u64 = 318;
+pub const LINUX_SYS_RSEQ: u64 = 334;
+
+pub const ARCH_SET_FS: u64 = 0x1002;
+pub const ARCH_GET_FS: u64 = 0x1003;
+const EFAULT: i64 = 14;
 
 pub const GHOST_SYS_WRITE: u64 = 1;
 pub const GHOST_SYS_YIELD: u64 = 2;
@@ -54,6 +127,11 @@ pub const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
 pub const HXNU_SYS_OPEN: u64 = 0x484e_0007;
 pub const HXNU_SYS_READ: u64 = 0x484e_0008;
 pub const HXNU_SYS_CLOSE: u64 = 0x484e_0009;
+pub const HXNU_SYS_LCL_RECEIVE: u64 = 0x484e_000a;
+pub const HXNU_SYS_LCL_RETURN: u64 = 0x484e_000b;
+pub const HXNU_SYS_SPAWN: u64 = 0x484e_000c;
+pub const HXNU_SYS_HETEREXEC_SUBMIT: u64 = 0x484e_0010;
+pub const HXNU_SYS_HETEREXEC_POLL: u64 = 0x484e_0011;
 pub const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
 const HXNU_NATIVE_ABI_VERSION: i64 = 0x0001_0000;
@@ -228,14 +306,16 @@ impl LinuxUtsName {
     }
 }
 
-const MAX_SYSTEM_FILES: usize = 1024;
+const MAX_SYSTEM_FILES: usize = 128;
 
 #[derive(Clone)]
 pub struct OpenFile {
     pub ref_count: usize,
-    pub path: String,
+    pub path: [u8; 128],
+    pub path_len: usize,
     pub offset: usize,
-    pub content: Vec<u8>,
+    pub content: [u8; 4096],
+    pub content_len: usize,
 }
 
 struct GlobalOpenFileTable(UnsafeCell<[Option<OpenFile>; MAX_SYSTEM_FILES]>);
@@ -283,6 +363,12 @@ pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::SyscallRegisterFram
         ),
         SyscallAbi::PosixLcl => {
             crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
+            let pid = sched::current_process_id();
+            let tid = sched::current_thread_id();
+            enqueue_lcl_message(LclMessage { pid, tid, number: trap_frame.rax, args: [trap_frame.rdi, trap_frame.rsi, trap_frame.rdx, trap_frame.r10, trap_frame.r8, trap_frame.r9] });
+            
+            // Suspend thread and wait for LCL return
+            sched::block_current_thread();
             SyscallOutcome { value: 0, action: SyscallAction::YieldThread }
         }
         _ => SyscallOutcome::errno(ENOSYS),
@@ -296,6 +382,10 @@ pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome 
         SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(number, args),
         SyscallAbi::PosixLcl => {
             crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
+            let pid = sched::current_process_id();
+            let tid = sched::current_thread_id();
+            enqueue_lcl_message(LclMessage { pid, tid, number, args });
+            sched::block_current_thread();
             SyscallOutcome { value: 0, action: SyscallAction::YieldThread }
         }
         _ => SyscallOutcome::errno(ENOSYS),
@@ -331,28 +421,263 @@ pub mod posix_compat {
         match number {
             LINUX_SYS_READ => read_from_fd(args),
             LINUX_SYS_WRITE => write_with_fd(args),
+            LINUX_SYS_OPEN => open_path_at(AT_FDCWD, args[0] as usize, args[1]),
             LINUX_SYS_CLOSE => close_fd(args),
-            LINUX_SYS_OPENAT => linux_openat(args),
+            LINUX_SYS_STAT | LINUX_SYS_NEWFSTATAT => sys_stat(args),
+            LINUX_SYS_FSTAT => sys_fstat(args),
+            LINUX_SYS_POLL => SyscallOutcome::success(0),
+            LINUX_SYS_LSEEK => SyscallOutcome::success(0),
+            LINUX_SYS_MMAP => sys_mmap(args),
+            LINUX_SYS_MPROTECT => SyscallOutcome::success(0),
+            LINUX_SYS_MUNMAP => SyscallOutcome::success(0),
+            LINUX_SYS_BRK => sys_brk(args),
+            LINUX_SYS_RT_SIGACTION => SyscallOutcome::success(0),
+            LINUX_SYS_RT_SIGPROCMASK => SyscallOutcome::success(0),
+            LINUX_SYS_IOCTL => sys_ioctl(args),
             LINUX_SYS_SCHED_YIELD => SyscallOutcome::success(0),
+            LINUX_SYS_MADVISE => SyscallOutcome::success(0),
             LINUX_SYS_GETPID => process_id(),
             LINUX_SYS_GETPPID => process_parent_id(),
+            LINUX_SYS_SIGALTSTACK => SyscallOutcome::success(0),
+            LINUX_SYS_ARCH_PRCTL => sys_arch_prctl(args),
             LINUX_SYS_GETTID => thread_id(),
+            LINUX_SYS_TKILL => SyscallOutcome::success(0),
+            LINUX_SYS_GETDENTS64 => sys_getdents64(args),
+            LINUX_SYS_SET_TID_ADDRESS => SyscallOutcome::success(process_id().value),
             LINUX_SYS_CLOCK_GETTIME => linux_clock_gettime(args),
             LINUX_SYS_UNAME => linux_uname(args),
             LINUX_SYS_EXIT | LINUX_SYS_EXIT_GROUP => exit_group(args),
+            LINUX_SYS_TGKILL => SyscallOutcome::success(0),
+            LINUX_SYS_OPENAT => linux_openat(args),
+            LINUX_SYS_PRLIMIT64 => SyscallOutcome::success(0),
+            LINUX_SYS_GETRANDOM => sys_getrandom(args),
+            LINUX_SYS_RSEQ => SyscallOutcome::errno(ENOSYS),
 
             _ => SyscallOutcome::errno(ENOSYS),
         }
     }
 
+    fn sys_getrandom(args: [u64; 6]) -> SyscallOutcome {
+        let ptr = args[0] as usize;
+        let len = args[1] as usize;
+        let mut buf = [0u8; 256];
+        let copy_len = core::cmp::min(len, buf.len());
+        for i in 0..copy_len {
+            buf[i] = ((i as u8).wrapping_mul(37)).wrapping_add(13);
+        }
+        if let Err(e) = copyout_bytes(ptr, &buf[..copy_len]) {
+            return SyscallOutcome::errno(e);
+        }
+        SyscallOutcome::success(copy_len as i64)
+    }
+
+    pub fn sys_arch_prctl(args: [u64; 6]) -> SyscallOutcome {
+        let code = args[0];
+        let addr = args[1];
+        match code {
+            ARCH_SET_FS => {
+                crate::arch::x86_64::cpu::write_msr(0xC000_0100, addr);
+                SyscallOutcome::success(0)
+            }
+            _ => SyscallOutcome::errno(EINVAL),
+        }
+    }
+
+    pub fn sys_brk(args: [u64; 6]) -> SyscallOutcome {
+        static mut CURRENT_BRK: u64 = 0x0000_6000_0000_0000;
+        let new_brk = args[0];
+        unsafe {
+            if new_brk == 0 || new_brk <= CURRENT_BRK {
+                SyscallOutcome::success(CURRENT_BRK as i64)
+            } else {
+                let old_brk = CURRENT_BRK;
+                let old_page = (old_brk + 4095) & !4095;
+                let new_page = (new_brk + 4095) & !4095;
+
+                if new_page > old_page {
+                    let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+                    let current_pml4 = crate::arch::x86_64::read_cr3();
+                    let mut page = old_page;
+                    while page < new_page {
+                        if let Some(frame) = crate::mm::frame::allocate_frame() {
+                            let phys = frame.start_address();
+                            core::ptr::write_bytes((hhdm_offset + phys) as *mut u8, 0, 4096);
+                            let _ = crate::arch::x86_64::map_user_region(
+                                current_pml4,
+                                hhdm_offset,
+                                page,
+                                phys,
+                                4096,
+                                crate::arch::x86_64::FLAG_USER_ACCESSIBLE | crate::arch::x86_64::FLAG_WRITABLE,
+                            );
+                        }
+                        page += 4096;
+                    }
+                }
+                CURRENT_BRK = new_brk;
+                SyscallOutcome::success(CURRENT_BRK as i64)
+            }
+        }
+    }
+
+    pub fn sys_mmap(args: [u64; 6]) -> SyscallOutcome {
+        static mut NEXT_MMAP_VADDR: u64 = 0x0000_7000_0000_0000;
+        let hint_addr = args[0];
+        let length = args[1] as usize;
+        if length == 0 {
+            return SyscallOutcome::errno(EINVAL);
+        }
+        let aligned_len = (length + 4095) & !4095;
+        unsafe {
+            let virt_addr = if hint_addr >= 0x0000_0001_0000_0000 && (hint_addr & 4095) == 0 {
+                hint_addr
+            } else {
+                let v = NEXT_MMAP_VADDR;
+                NEXT_MMAP_VADDR += aligned_len as u64;
+                v
+            };
+
+            let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+            let current_pml4 = crate::arch::x86_64::read_cr3();
+
+            let num_pages = aligned_len / 4096;
+            for i in 0..num_pages {
+                if let Some(frame) = crate::mm::frame::allocate_frame() {
+                    let phys = frame.start_address();
+                    core::ptr::write_bytes((hhdm_offset + phys) as *mut u8, 0, 4096);
+                    let _ = crate::arch::x86_64::map_user_region(
+                        current_pml4,
+                        hhdm_offset,
+                        virt_addr + (i * 4096) as u64,
+                        phys,
+                        4096,
+                        crate::arch::x86_64::FLAG_USER_ACCESSIBLE | crate::arch::x86_64::FLAG_WRITABLE,
+                    );
+                }
+            }
+            SyscallOutcome::success(virt_addr as i64)
+        }
+    }
+
+    pub fn sys_fstat(args: [u64; 6]) -> SyscallOutcome {
+        let fd = args[0] as i32;
+        let statbuf = args[1] as usize;
+        if fd < 0 || fd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(super::EBADF);
+        }
+        let s = stat {
+            st_dev: 0, st_ino: 1, st_nlink: 1,
+            st_mode: 0o100644, st_uid: 0, st_gid: 0, __pad0: 0, st_rdev: 0,
+            st_size: 4096, st_blksize: 4096, st_blocks: 1,
+            st_atime: 0, st_atime_nsec: 0, st_mtime: 0, st_mtime_nsec: 0, st_ctime: 0, st_ctime_nsec: 0,
+            __unused: [0; 3],
+        };
+        match copyout_struct(statbuf, &s) {
+            Ok(_) => SyscallOutcome::success(0),
+            Err(e) => SyscallOutcome::errno(e),
+        }
+    }
+
+    #[repr(C, packed)]
+    #[derive(Copy, Clone)]
+    struct LinuxDirent64Header {
+        d_ino: u64,
+        d_off: i64,
+        d_reclen: u16,
+        d_type: u8,
+    }
+
+    pub fn sys_getdents64(args: [u64; 6]) -> SyscallOutcome {
+        let fd = args[0] as i32;
+        let dirp = args[1] as usize;
+        let count = args[2] as usize;
+
+        if fd < 0 || fd as usize >= crate::sched::MAX_PROCESS_FDS {
+            return SyscallOutcome::errno(EBADF);
+        }
+        let table = crate::sched::process_fd_table();
+        let global_idx = match table[fd as usize] {
+            Some(idx) => idx,
+            None => return SyscallOutcome::errno(EBADF),
+        };
+
+        let global_table = unsafe { &mut *FILE_TABLE.get() };
+        let open = match &mut global_table[global_idx] {
+            Some(f) => f,
+            None => return SyscallOutcome::errno(EBADF),
+        };
+
+        if open.offset >= open.content_len {
+            return SyscallOutcome::success(0);
+        }
+
+        let content_slice = &open.content[open.offset..open.content_len];
+        let content_str = match core::str::from_utf8(content_slice) {
+            Ok(s) => s,
+            Err(_) => return SyscallOutcome::errno(EIO),
+        };
+
+        let mut user_written = 0usize;
+        let mut current_offset_in_content = open.offset;
+
+        for line in content_str.lines() {
+            let name = line.trim();
+            if name.is_empty() {
+                continue;
+            }
+
+            let raw_len = core::mem::size_of::<LinuxDirent64Header>() + name.len() + 1;
+            let reclen = (raw_len + 7) & !7;
+
+            if user_written + reclen > count {
+                break;
+            }
+
+            let next_offset = (current_offset_in_content + line.len() + 1) as i64;
+            let header = LinuxDirent64Header {
+                d_ino: 1,
+                d_off: next_offset,
+                d_reclen: reclen as u16,
+                d_type: 8,
+            };
+
+            let dst_ptr = dirp + user_written;
+            if copyout_struct(dst_ptr, &header).is_err() {
+                return SyscallOutcome::errno(super::EFAULT);
+            }
+
+            let name_dst_ptr = dst_ptr + core::mem::size_of::<LinuxDirent64Header>();
+            if crate::uaccess::copyout(name.as_bytes(), name_dst_ptr).is_err() {
+                return SyscallOutcome::errno(super::EFAULT);
+            }
+
+            let null_byte = [0u8; 1];
+            let null_dst_ptr = name_dst_ptr + name.len();
+            if crate::uaccess::copyout(&null_byte, null_dst_ptr).is_err() {
+                return SyscallOutcome::errno(super::EFAULT);
+            }
+
+            user_written += reclen;
+            current_offset_in_content += line.len() + 1;
+            open.offset = current_offset_in_content;
+        }
+
+        SyscallOutcome::success(user_written as i64)
+    }
+
     pub fn sys_stat(args: [u64; 6]) -> SyscallOutcome {
         let ptr = args[0] as usize;
         let statbuf = args[1] as usize;
-        let raw_path = match super::copyin_c_string(ptr, super::MAX_PATH_BYTES) {
-            Ok(p) => p,
+        let mut path_buf = [0u8; super::MAX_PATH_BYTES];
+        let path_len = match super::copyin_c_string(ptr, &mut path_buf) {
+            Ok(len) => len,
             Err(e) => return SyscallOutcome::errno(e),
         };
-        let node = match crate::vfs::lookup(&raw_path) {
+        let raw_path = match core::str::from_utf8(&path_buf[..path_len]) {
+            Ok(s) => s,
+            Err(_) => return SyscallOutcome::errno(super::EINVAL),
+        };
+        let node = match crate::vfs::lookup(raw_path) {
             Some(n) => n,
             None => return SyscallOutcome::errno(super::ENOENT),
         };
@@ -464,10 +789,10 @@ pub mod posix_compat {
         }
 
         global_table[r_idx as usize] = Some(super::OpenFile {
-            ref_count: 1, path: alloc::string::String::from("pipe:read"), offset: 0, content: alloc::vec::Vec::new()
+            ref_count: 1, path: { let mut p = [0u8; 128]; let s = b"pipe:read"; p[..s.len()].copy_from_slice(s); p }, path_len: 9, offset: 0, content: [0u8; 4096], content_len: 0
         });
         global_table[w_idx as usize] = Some(super::OpenFile {
-            ref_count: 1, path: alloc::string::String::from("pipe:write"), offset: 0, content: alloc::vec::Vec::new()
+            ref_count: 1, path: { let mut p = [0u8; 128]; let s = b"pipe:write"; p[..s.len()].copy_from_slice(s); p }, path_len: 10, offset: 0, content: [0u8; 4096], content_len: 0
         });
 
         table[r_fd as usize] = Some(r_idx as usize);
@@ -565,7 +890,7 @@ pub mod posix_compat {
         let parent_pid = crate::sched::current_process_id();
         if pid == -1 {
             loop {
-                match crate::sched::sys_reap_child(parent_pid) {
+                match crate::sched::sys_reap_child(parent_pid, -1) {
                     Ok((reaped_pid, status)) => {
                         if status_ptr != 0 {
                             let raw_status = status << 8;
@@ -668,8 +993,80 @@ pub fn dispatch_hxnu_bootstrap(number: u64, args: [u64; 6]) -> SyscallOutcome {
             action: SyscallAction::YieldThread,
         },
         HXNU_SYS_ABI_VERSION => SyscallOutcome::success(HXNU_NATIVE_ABI_VERSION),
+        HXNU_SYS_LCL_RECEIVE => lcl_receive(args),
+        HXNU_SYS_LCL_RETURN => lcl_return(args),
+        HXNU_SYS_SPAWN => hxnu_spawn(args),
+        HXNU_SYS_HETEREXEC_SUBMIT => sys_heterexec_submit(args),
+        HXNU_SYS_HETEREXEC_POLL => sys_heterexec_poll(args),
         HXNU_SYS_EXIT_GROUP => exit_group(args),
         _ => SyscallOutcome::errno(ENOSYS),
+    }
+}
+
+fn sys_heterexec_submit(args: [u64; 6]) -> SyscallOutcome {
+    let target = (args[0] & 0xFF) as u8;
+    match crate::hsched::HSCHED.submit_workload(crate::hsched::WorkloadType::DirectTarget(target)) {
+        Ok(task_id) => SyscallOutcome::success(task_id as i64),
+        Err(_) => SyscallOutcome::errno(EIO),
+    }
+}
+
+fn sys_heterexec_poll(args: [u64; 6]) -> SyscallOutcome {
+    let task_id = args[0] as u32;
+    if task_id == 0 {
+        let head = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::Relaxed);
+        let tail = crate::hsched::HSCHED.shared_buffer.tail.load(core::sync::atomic::Ordering::Relaxed);
+        SyscallOutcome::success(((head as i64) << 32) | (tail as i64 & 0xFFFF_FFFF))
+    } else {
+        let head = crate::hsched::HSCHED.shared_buffer.head.load(core::sync::atomic::Ordering::Relaxed);
+        let completed = if (task_id as usize) <= head { 1 } else { 0 };
+        SyscallOutcome::success(completed)
+    }
+}
+
+fn hxnu_spawn(args: [u64; 6]) -> SyscallOutcome {
+    let path_ptr = args[0] as usize;
+    let argv_ptrs_ptr = args[1] as usize;
+    let argc = args[2] as usize;
+
+    let mut path_buf = [0u8; MAX_PATH_BYTES];
+    let path_len = match copyin_c_string(path_ptr, &mut path_buf) {
+        Ok(len) => len,
+        Err(e) => return SyscallOutcome::errno(e),
+    };
+    let path_str = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+
+    let mut argv_strings: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+    if argv_ptrs_ptr != 0 && argc > 0 && argc <= 16 {
+        let mut ptr_buf = [0u64; 16];
+        let bytes_to_copy = argc * core::mem::size_of::<u64>();
+        let ptr_slice = unsafe {
+            core::slice::from_raw_parts_mut(ptr_buf.as_mut_ptr() as *mut u8, bytes_to_copy)
+        };
+        if let Err(e) = copyin_bytes(argv_ptrs_ptr, ptr_slice) {
+            return SyscallOutcome::errno(e);
+        }
+        for i in 0..argc {
+            let str_ptr = ptr_buf[i] as usize;
+            let mut arg_buf = [0u8; 256];
+            let arg_len = match copyin_c_string(str_ptr, &mut arg_buf) {
+                Ok(len) => len,
+                Err(e) => return SyscallOutcome::errno(e),
+            };
+            if let Ok(arg_str) = core::str::from_utf8(&arg_buf[..arg_len]) {
+                argv_strings.push(alloc::string::String::from(arg_str));
+            }
+        }
+    }
+
+    let argv_refs: alloc::vec::Vec<&str> = argv_strings.iter().map(|s| s.as_str()).collect();
+
+    match crate::init_exec::spawn_executable(path_str, &argv_refs, &[]) {
+        Ok(spawned) => SyscallOutcome::success(spawned.process_id as i64),
+        Err(_) => SyscallOutcome::errno(ENOENT),
     }
 }
 
@@ -894,37 +1291,52 @@ fn open_path_at(dirfd: i64, path_ptr: usize, flags: u64) -> SyscallOutcome {
         return SyscallOutcome::errno(EINVAL);
     }
 
-    let raw_path = match copyin_c_string(path_ptr, MAX_PATH_BYTES) {
-        Ok(path) => path,
+    let mut buf = [0u8; MAX_PATH_BYTES];
+    let len = match copyin_c_string(path_ptr, &mut buf) {
+        Ok(len) => len,
         Err(error) => return SyscallOutcome::errno(error),
     };
+    
+    let raw_path = match core::str::from_utf8(&buf[..len]) {
+        Ok(path) => path,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+
     if raw_path.is_empty() {
         return SyscallOutcome::errno(EINVAL);
     }
 
-    let resolved_path = if raw_path.starts_with('/') {
-        raw_path
+    let mut resolved_buf = [0u8; MAX_PATH_BYTES];
+    let resolved_len;
+    
+    if raw_path.starts_with('/') {
+        let copy_len = core::cmp::min(raw_path.len(), MAX_PATH_BYTES);
+        resolved_buf[..copy_len].copy_from_slice(raw_path.as_bytes());
+        resolved_len = copy_len;
     } else if dirfd == AT_FDCWD {
-        let mut absolute = String::from("/");
-        absolute.push_str(&raw_path);
-        absolute
+        resolved_buf[0] = b'/';
+        let copy_len = core::cmp::min(raw_path.len(), MAX_PATH_BYTES - 1);
+        resolved_buf[1..1 + copy_len].copy_from_slice(raw_path.as_bytes());
+        resolved_len = 1 + copy_len;
     } else {
         return SyscallOutcome::errno(ENOSYS);
     };
 
-    let node = match vfs::lookup(&resolved_path) {
+    let resolved_path = match core::str::from_utf8(&resolved_buf[..resolved_len]) {
+        Ok(path) => path,
+        Err(_) => return SyscallOutcome::errno(EINVAL),
+    };
+
+    let node = match vfs::lookup(resolved_path) {
         Some(node) => node,
         None => return SyscallOutcome::errno(ENOENT),
     };
-    if node.kind == VfsNodeKind::Directory {
-        return SyscallOutcome::errno(EISDIR);
-    }
 
     let content = match vfs::read(&node.path) {
-        Some(content) => content.into_bytes(),
+        Some(content) => content,
         None => return SyscallOutcome::errno(EIO),
     };
-    match alloc_open_file(node.path, content) {
+    match alloc_open_file(&node.path, content.as_bytes()) {
         Ok(fd) => SyscallOutcome::success(fd),
         Err(error) => SyscallOutcome::errno(error),
     }
@@ -986,15 +1398,17 @@ fn write_text(ptr: usize, len: u64) -> SyscallOutcome {
         return SyscallOutcome::success(0);
     }
 
-    let bytes = match copyin_bytes(ptr, count) {
-        Ok(bytes) => bytes,
+    let mut buf = [0u8; 1024];
+    let copy_len = core::cmp::min(count, buf.len());
+    match copyin_bytes(ptr, &mut buf[..copy_len]) {
+        Ok(_) => {},
         Err(error) => return SyscallOutcome::errno(error),
-    };
+    }
 
-    let text = sanitize_for_console(&bytes);
-    tty::write_str(&text);
+    let text = sanitize_for_console(&buf[..copy_len]);
+    tty::write_str(text);
 
-    match i64::try_from(count) {
+    match i64::try_from(copy_len) {
         Ok(written) => SyscallOutcome::success(written),
         Err(_) => SyscallOutcome::errno(ERANGE),
     }
@@ -1075,15 +1489,8 @@ fn exit_status(outcome: SyscallOutcome) -> (bool, i32) {
     }
 }
 
-fn sanitize_for_console(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len());
-    for &byte in bytes {
-        match byte {
-            b'\n' | b'\r' | b'\t' | 0x20..=0x7e => text.push(byte as char),
-            _ => text.push('?'),
-        }
-    }
-    text
+fn sanitize_for_console(bytes: &[u8]) -> &str {
+    core::str::from_utf8(bytes).unwrap_or("")
 }
 
 fn is_read_only_open(flags: u64) -> bool {
@@ -1098,7 +1505,7 @@ fn current_process_id_value() -> u64 {
     sched::stats().current_process_id
 }
 
-fn alloc_open_file(path: String, content: Vec<u8>) -> Result<i64, i64> {
+fn alloc_open_file(path: &str, content: &[u8]) -> Result<i64, i64> {
     let mut table = sched::process_fd_table();
     let mut fd = -1;
     for i in 3..sched::MAX_PROCESS_FDS {
@@ -1117,9 +1524,11 @@ fn alloc_open_file(path: String, content: Vec<u8>) -> Result<i64, i64> {
         if global_table[i].is_none() {
             global_table[i] = Some(OpenFile {
                 ref_count: 1,
-                path: path.clone(),
+                path: { let mut b = [0u8; 128]; let l = core::cmp::min(path.len(), 128); b[..l].copy_from_slice(&path.as_bytes()[..l]); b },
+                path_len: core::cmp::min(path.len(), 128),
                 offset: 0,
-                content: content.clone(),
+                content: { let mut b = [0u8; 4096]; let l = core::cmp::min(content.len(), 4096); b[..l].copy_from_slice(&content[..l]); b },
+                content_len: core::cmp::min(content.len(), 4096),
             });
             global_idx = i as i32;
             break;
@@ -1148,7 +1557,7 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
         return Ok(0);
     }
 
-    let available = open.content.len().saturating_sub(open.offset);
+    let available = open.content_len.saturating_sub(open.offset);
     let read_len = min(count, available);
     if read_len > 0 {
         let bytes = &open.content[open.offset..open.offset + read_len];
@@ -1197,26 +1606,26 @@ fn purge_open_files_for_process(_process_id: u64) {
     sched::set_process_fd_table(table);
 }
 
-fn copyin_c_string(ptr: usize, max_len: usize) -> Result<String, i64> {
-    let mut bytes = Vec::new();
-    for index in 0..max_len {
+fn copyin_c_string(ptr: usize, buf: &mut [u8]) -> Result<usize, i64> {
+    for index in 0..buf.len() {
         let address = ptr.checked_add(index).ok_or(ERANGE)?;
         let mut byte = [0u8; 1];
         uaccess::copyin(address, &mut byte).map_err(map_uaccess_error)?;
         if byte[0] == 0 {
-            let text = str::from_utf8(&bytes).map_err(|_| EINVAL)?;
-            return Ok(String::from(text));
+            return Ok(index);
         }
-        bytes.push(byte[0]);
+        buf[index] = byte[0];
     }
-
     Err(ERANGE)
 }
 
-fn copyin_bytes(ptr: usize, len: usize) -> Result<Vec<u8>, i64> {
-    let mut bytes = vec![0u8; len];
-    uaccess::copyin(ptr, &mut bytes).map_err(map_uaccess_error)?;
-    Ok(bytes)
+fn copyin_bytes(ptr: usize, buf: &mut [u8]) -> Result<(), i64> {
+    uaccess::copyin(ptr, buf).map_err(map_uaccess_error)?;
+    Ok(())
+}
+
+fn copyout_bytes(ptr: usize, buf: &[u8]) -> Result<(), i64> {
+    uaccess::copyout(buf, ptr).map_err(map_uaccess_error)
 }
 
 fn copyout_struct<T: Copy>(ptr: usize, value: &T) -> Result<(), i64> {
@@ -1252,5 +1661,38 @@ fn machine_str(machine_bytes: &[u8], machine_len: usize) -> &str {
     match str::from_utf8(&machine_bytes[..machine_len]) {
         Ok(machine) => machine,
         Err(_) => "<invalid>",
+    }
+}
+
+fn lcl_receive(args: [u64; 6]) -> SyscallOutcome {
+    let ptr = args[0] as usize;
+    if let Some(msg) = dequeue_lcl_message() {
+        let mut data = [0u64; 9];
+        data[0] = msg.number;
+        data[1] = msg.args[0];
+        data[2] = msg.args[1];
+        data[3] = msg.args[2];
+        data[4] = msg.args[3];
+        data[5] = msg.args[4];
+        data[6] = msg.args[5];
+        data[7] = msg.pid;
+        data[8] = msg.tid;
+        let data_bytes = unsafe { core::slice::from_raw_parts(&data as *const _ as *const u8, core::mem::size_of_val(&data)) };
+        if crate::uaccess::copyout(data_bytes, ptr).is_ok() {
+            return SyscallOutcome::success(1);
+        }
+    }
+    SyscallOutcome::success(0)
+}
+
+fn lcl_return(args: [u64; 6]) -> SyscallOutcome {
+    let result = args[0];
+    let target_pid = args[1];
+    let target_tid = args[2];
+
+    if crate::sched::unblock_thread_with_result(target_pid, target_tid, result).is_ok() {
+        SyscallOutcome::success(0)
+    } else {
+        SyscallOutcome::errno(EINVAL)
     }
 }

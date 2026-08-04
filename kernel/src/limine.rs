@@ -320,15 +320,15 @@ impl Iterator for ModuleIter {
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut LIMINE_BASE_REVISION: [u64; 3] = [
+pub static mut LIMINE_BASE_REVISION: [u64; 3] = [
     0xf956_2b2d_5c95_a6c8,
     0x6a7b_3849_4453_6bdc,
-    3,
+    0,
 ];
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
+pub static mut MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
     id: [
         0xc7b1_dd30_df4c_8b88,
         0x0a82_e883_a194_f07b,
@@ -341,7 +341,7 @@ static mut MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+pub static mut HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: [
         0xc7b1_dd30_df4c_8b88,
         0x0a82_e883_a194_f07b,
@@ -354,7 +354,7 @@ static mut HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
+pub static mut FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
     id: [
         0xc7b1_dd30_df4c_8b88,
         0x0a82_e883_a194_f07b,
@@ -367,7 +367,7 @@ static mut FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequ
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
+pub static mut MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
     id: [
         0xc7b1_dd30_df4c_8b88,
         0x0a82_e883_a194_f07b,
@@ -382,7 +382,7 @@ static mut MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static mut RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
+pub static mut RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
     id: [
         0xc7b1_dd30_df4c_8b88,
         0x0a82_e883_a194_f07b,

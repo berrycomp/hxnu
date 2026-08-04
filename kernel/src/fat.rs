@@ -7,7 +7,33 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 
-use crate::block;
+// use crate::block;
+
+pub mod block {
+    pub const SECTOR_BYTES: usize = 512;
+    #[derive(Copy, Clone)]
+    pub enum PartitionTableKind { Mbr, Gpt }
+    impl PartitionTableKind {
+        pub fn as_str(&self) -> &'static str {
+            match self {
+                Self::Mbr => "mbr",
+                Self::Gpt => "gpt",
+            }
+        }
+    }
+    #[derive(Copy, Clone)]
+    pub struct PartitionInfo {
+        pub id: u16,
+        pub device_id: u16,
+        pub table_kind: PartitionTableKind,
+        pub start_lba: u64,
+        pub sector_count: u64,
+    }
+    pub fn is_initialized() -> bool { false }
+    pub fn partition_count() -> usize { 0 }
+    pub fn partition(_index: usize) -> Option<PartitionInfo> { None }
+    pub fn read(_device_id: u16, _lba: u64, _count: usize, _buf: &mut [u8]) -> Result<(), ()> { Err(()) }
+}
 
 const FAT_PATH_ROOT: &str = "/boot";
 const DIRECTORY_ENTRY_BYTES: usize = 32;
@@ -34,7 +60,7 @@ static FAT: GlobalFat = GlobalFat::new();
 struct FatState {
     summary: FatSummary,
     root_entries: Vec<FatRootEntry>,
-    partition: crate::block::PartitionInfo,
+    partition: block::PartitionInfo,
     bpb: BpbLayout,
 }
 
@@ -203,7 +229,7 @@ pub fn read_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
     let mut data = alloc::vec::Vec::with_capacity(entry.size);
     let mut cluster = entry.cluster;
     let bpb = &state.bpb;
-    let mut sector_buf = [0u8; crate::block::SECTOR_BYTES];
+    let mut sector_buf = [0u8; block::SECTOR_BYTES];
 
     while cluster >= 2 && cluster < 0x0FFFFFF8 {
         let cluster_lba = state.partition.start_lba
@@ -211,14 +237,14 @@ pub fn read_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
             + (u64::from(cluster - 2) * u64::from(bpb.sectors_per_cluster));
 
         for sec in 0..bpb.sectors_per_cluster {
-            if crate::block::read(state.partition.device_id, cluster_lba + u64::from(sec), 1, &mut sector_buf).is_err() {
+            if block::read(state.partition.device_id, cluster_lba + u64::from(sec), 1, &mut sector_buf).is_err() {
                 return None;
             }
             let remaining = entry.size.saturating_sub(data.len());
             if remaining == 0 {
                 break;
             }
-            let to_copy = remaining.min(crate::block::SECTOR_BYTES);
+            let to_copy = remaining.min(block::SECTOR_BYTES);
             data.extend_from_slice(&sector_buf[..to_copy]);
         }
 

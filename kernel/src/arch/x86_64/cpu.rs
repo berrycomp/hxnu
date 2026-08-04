@@ -87,7 +87,7 @@ pub fn probe() -> CpuInfo {
     }
 }
 
-fn read_msr(msr: u32) -> u64 {
+pub fn read_msr(msr: u32) -> u64 {
     let low: u32;
     let high: u32;
     unsafe {
@@ -113,5 +113,20 @@ pub fn write_msr(msr: u32, value: u64) {
             in("edx") high,
             options(nomem, nostack, preserves_flags),
         );
+    }
+}
+
+pub fn enable_sse() {
+    unsafe {
+        let mut cr0: u64;
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0);
+        cr0 &= !(1 << 2); // Clear EM (Emulation)
+        cr0 |= 1 << 1;   // Set MP (Monitor Coprocessor)
+        core::arch::asm!("mov cr0, {}", in(reg) cr0);
+
+        core::arch::asm!("mov {}, cr4", out(reg) cr4);
+        cr4 |= (1 << 9) | (1 << 10); // Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
+        core::arch::asm!("mov cr4, {}", in(reg) cr4);
     }
 }

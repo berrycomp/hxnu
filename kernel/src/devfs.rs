@@ -7,7 +7,7 @@ use core::fmt::Write;
 use crate::tty;
 
 const DEVFS_DIRECTORIES: [&str; 2] = ["/", "/dev"];
-const DEVFS_NODES: [&str; 8] = [
+const DEVFS_NODES: [&str; 9] = [
     "/dev/console",
     "/dev/tty0",
     "/dev/tty1",
@@ -16,6 +16,7 @@ const DEVFS_NODES: [&str; 8] = [
     "/dev/null",
     "/dev/zero",
     "/dev/kmsg",
+    "/dev/fb0",
 ];
 
 struct GlobalDevfs(UnsafeCell<Option<DevfsState>>);
@@ -51,6 +52,12 @@ pub struct DevfsSummary {
     pub directory_count: usize,
     pub node_count: usize,
     pub entry_count: usize,
+}
+
+#[derive(Copy, Clone)]
+pub struct DevfsMmapInfo {
+    pub physical_address: u64,
+    pub size: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -97,6 +104,22 @@ pub fn node_kind(path: &str) -> Option<DevfsNodeKind> {
     }
 }
 
+#[allow(dead_code)]
+pub fn mmap(path: &str) -> Option<DevfsMmapInfo> {
+    match path {
+        "/dev/fb0" => {
+            let fb = crate::fb::summary()?;
+            let physical_address = crate::fb::physical_address()?;
+            let size = (fb.pitch * fb.height) as usize;
+            Some(DevfsMmapInfo {
+                physical_address,
+                size,
+            })
+        }
+        _ => None,
+    }
+}
+
 pub fn read(path: &str) -> Option<String> {
     let state = unsafe { (&*DEVFS.get()).as_ref()? };
     match path {
@@ -109,6 +132,7 @@ pub fn read(path: &str) -> Option<String> {
         "/dev/null" => Some(render_null()),
         "/dev/zero" => Some(render_zero()),
         "/dev/kmsg" => Some(render_kmsg()),
+        "/dev/fb0" => Some(render_fb0()),
         _ => None,
     }
 }
@@ -159,5 +183,21 @@ fn render_kmsg() -> String {
     let _ = writeln!(text, "kind kernel-log");
     let _ = writeln!(text, "writes append");
     let _ = writeln!(text, "reads snapshot-unavailable");
+    text
+}
+
+fn render_fb0() -> String {
+    let mut text = String::new();
+    let _ = writeln!(text, "path /dev/fb0");
+    let _ = writeln!(text, "kind framebuffer");
+    if let Some(fb) = crate::fb::summary() {
+        let _ = writeln!(text, "width {}", fb.width);
+        let _ = writeln!(text, "height {}", fb.height);
+        let _ = writeln!(text, "pitch {}", fb.pitch);
+        let _ = writeln!(text, "bpp {}", fb.bpp);
+    }
+    if let Some(phys) = crate::fb::physical_address() {
+        let _ = writeln!(text, "phys_addr {:#x}", phys);
+    }
     text
 }

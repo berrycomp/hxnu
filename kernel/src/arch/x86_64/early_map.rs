@@ -9,6 +9,7 @@ pub const FLAG_WRITE_THROUGH: u64 = 1 << 3;
 pub const FLAG_CACHE_DISABLE: u64 = 1 << 4;
 pub const FLAG_USER_ACCESSIBLE: u64 = 1 << 2;
 pub const FLAG_WRITABLE: u64 = 1 << 1;
+pub const FLAG_GLOBAL: u64 = 1 << 8;
 
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_WRITABLE: u64 = 1 << 1;
@@ -91,7 +92,8 @@ fn ensure_page_mapping(
                 (physical_address & PAGE_ADDRESS_MASK)
                     | PAGE_PRESENT
                     | PAGE_WRITABLE
-                    | extra_flags,
+                    | extra_flags
+                    | FLAG_GLOBAL,
             );
         }
         invalidate_page(virtual_address);
@@ -230,7 +232,8 @@ pub unsafe fn map_kernel_page(
                 (physical_address & PAGE_ADDRESS_MASK)
                     | PAGE_PRESENT
                     | PAGE_WRITABLE
-                    | flags,
+                    | flags
+                    | FLAG_GLOBAL,
             );
         }
         invalidate_page(virtual_address);

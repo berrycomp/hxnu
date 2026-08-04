@@ -26,19 +26,26 @@ unsafe extern "C" {
 
 global_asm!(
     r#"
+    .section .bss
+    .align 16
+hxnu_syscall_user_rsp:
+    .quad 0
+hxnu_fast_syscall_stack:
+    .space 65536
+hxnu_fast_syscall_stack_top:
+
+    .text
     .global hxnu_x86_64_fast_syscall_entry
     .type hxnu_x86_64_fast_syscall_entry,@function
 hxnu_x86_64_fast_syscall_entry:
-    swapgs
-    mov gs:16, rsp # Save user RSP to per-cpu scratch
-    mov rsp, gs:8  # Load kernel RSP from per-cpu structure
+    mov [rip + hxnu_syscall_user_rsp], rsp
+    lea rsp, [rip + hxnu_fast_syscall_stack_top]
 
-    # Construct IRETQ frame on kernel stack to match int 0x80
-    push 0x2B      # User SS
-    push gs:16     # User RSP
-    push r11       # User RFLAGS (saved by syscall)
-    push 0x33      # User CS
-    push rcx       # User RIP (saved by syscall)
+    push 0x3B
+    push [rip + hxnu_syscall_user_rsp]
+    push r11
+    push 0x43
+    push rcx
 
     push r15
     push r14
@@ -62,7 +69,7 @@ hxnu_x86_64_fast_syscall_entry:
     add rsp, 8
 
     mov [rsp], rax
-    
+
     pop rax
     pop rbp
     pop rbx
@@ -79,9 +86,10 @@ hxnu_x86_64_fast_syscall_entry:
     pop r14
     pop r15
 
-    add rsp, 40 # skip IRETQ frame
-    mov rsp, gs:16 # Restore user RSP
-    swapgs
+    pop rcx
+    add rsp, 8
+    pop r11
+    mov rsp, [rip + hxnu_syscall_user_rsp]
     sysretq
 
     .global hxnu_x86_64_syscall_entry
@@ -297,10 +305,18 @@ pub fn initialize() {
 }
 
 pub fn init_syscall_msrs(code_selector: u16) {
+    // Enable SCE (System Call Enable) in IA32_EFER MSR (0xC000_0080)
+    let efer = crate::arch::x86_64::cpu::read_msr(0xC000_0080);
+    crate::arch::x86_64::cpu::write_msr(0xC000_0080, efer | 1);
+
     // Setting up fast syscall MSRs
-    let star = ((0x28u64 | 3) << 48) | ((code_selector as u64) << 32);
+    // STAR[63:48] for SYSRET needs to be (USER_DATA_SELECTOR - 8)
+    // CS = STAR[63:48] + 16 = USER_CODE_SELECTOR
+    // SS = STAR[63:48] + 8 = USER_DATA_SELECTOR
+    let sysret_base = super::gdt::USER_DATA_SELECTOR - 8;
+    let star = ((sysret_base as u64 | 3) << 48) | ((code_selector as u64) << 32);
     crate::arch::x86_64::cpu::write_msr(IA32_STAR, star);
-    crate::arch::x86_64::cpu::write_msr(IA32_LSTAR, hxnu_x86_64_fast_syscall_entry as u64);
+    crate::arch::x86_64::cpu::write_msr(IA32_LSTAR, hxnu_x86_64_fast_syscall_entry as *const () as u64);
     crate::arch::x86_64::cpu::write_msr(IA32_FMASK, 0x200); // Mask interrupts during syscall entry
 }
 
@@ -576,10 +592,9 @@ const fn syscall_abi_selector(abi: SyscallAbi) -> u64 {
 
 const fn decode_syscall_abi(selector: u64) -> Option<SyscallAbi> {
     match selector {
-        0 => Some(SyscallAbi::LinuxBootstrap),
-        1 => Some(SyscallAbi::GhostBootstrap),
         2 => Some(SyscallAbi::HxnuNativeBootstrap),
-        _ => None,
+        1 => Some(SyscallAbi::GhostBootstrap),
+        _ => Some(SyscallAbi::LinuxBootstrap),
     }
 }
 
@@ -587,7 +602,7 @@ extern "x86-interrupt" fn nmi_handler(_stack_frame: InterruptStackFrame) {
     // A Non-Maskable Interrupt (NMI) implies a critical hardware event.
     // In Neonix, this is wired via Device Tree as the Power Fail Interrupt (PFI).
     unsafe {
-        crate::nvmp::emergency_flush_to_hfs();
+        // crate::nvmp::emergency_flush_to_hfs();
     }
 }
 
@@ -642,6 +657,10 @@ extern "x86-interrupt" fn page_fault_handler(
     let fault_address: u64;
     unsafe {
         asm!("mov {}, cr2", out(reg) fault_address, options(nomem, nostack, preserves_flags));
+    }
+
+    if crate::mm::vmm::handle_page_fault(fault_address, error_code) {
+        return;
     }
 
     if resume_after_user_exception(

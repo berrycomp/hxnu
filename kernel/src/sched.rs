@@ -210,6 +210,7 @@ enum ThreadState {
     Unused,
     Runnable,
     Running,
+    Blocked,
     Exited,
 }
 
@@ -219,6 +220,7 @@ impl ThreadState {
             Self::Unused => "unused",
             Self::Runnable => "runnable",
             Self::Running => "running",
+            Self::Blocked => "blocked",
             Self::Exited => "exited",
         }
     }
@@ -390,6 +392,9 @@ impl Scheduler {
                 self.threads[current_slot].total_ticks = self.threads[current_slot].total_ticks.saturating_add(1);
                 self.threads[current_slot].state = ThreadState::Runnable;
                 let _ = self.enqueue(current_slot);
+            } else if self.threads[current_slot].state == ThreadState::Blocked {
+                self.threads[current_slot].total_ticks = self.threads[current_slot].total_ticks.saturating_add(1);
+                // Do not enqueue if blocked
             }
         }
 
@@ -568,6 +573,8 @@ impl Scheduler {
         if self.threads[current_slot].state == ThreadState::Running {
             self.threads[current_slot].state = ThreadState::Runnable;
             let _ = self.enqueue(current_slot);
+        } else if self.threads[current_slot].state == ThreadState::Blocked {
+            // Do not enqueue
         }
         
         let best_p = self.priority_for_thread(next_slot);
@@ -674,8 +681,12 @@ impl Scheduler {
         }
 
         self.threads[current_slot].context.rsp = saved_user_rsp;
-        self.threads[current_slot].state = ThreadState::Runnable;
-        let _ = self.enqueue(current_slot);
+        if self.threads[current_slot].state == ThreadState::Running {
+            self.threads[current_slot].state = ThreadState::Runnable;
+            let _ = self.enqueue(current_slot);
+        } else if self.threads[current_slot].state == ThreadState::Blocked {
+            // Do not enqueue
+        }
 
         let best_p = self.runqueue_bitmap.trailing_zeros() as usize;
         if best_p >= MAX_PRIORITIES { return None; }
@@ -766,21 +777,51 @@ impl Scheduler {
         Ok(child_id)
     }
 
-    pub fn reap_child(&mut self, parent_pid: u64) -> Result<(u64, i32), bool> {
+    pub fn reap_child(&mut self, parent_pid: u64, target_pid: i64) -> Result<(u64, i32), bool> {
         let mut has_children = false;
         for i in 0..MAX_THREADS {
             if self.threads[i].parent_process_id == parent_pid {
-                has_children = true;
-                if let ThreadState::Exited = self.threads[i].state {
-                    let child_id = self.threads[i].id;
-                    let status = self.threads[i].exit_status;
-                    self.threads[i].state = ThreadState::Unused;
-                    self.thread_count -= 1;
-                    return Ok((child_id, status));
+                if target_pid == -1 || self.threads[i].id as i64 == target_pid {
+                    has_children = true;
+                    if let ThreadState::Exited = self.threads[i].state {
+                        let child_id = self.threads[i].id;
+                        let status = self.threads[i].exit_status;
+                        self.threads[i].state = ThreadState::Unused;
+                        self.thread_count -= 1;
+                        return Ok((child_id, status));
+                    }
                 }
             }
         }
         Err(has_children)
+    }
+
+    pub fn block_current_thread(&mut self) {
+        if let Some(slot) = self.current_slot {
+            if self.threads[slot].state == ThreadState::Running {
+                self.threads[slot].state = ThreadState::Blocked;
+            }
+        }
+    }
+
+    pub fn unblock_thread_with_result(&mut self, target_pid: u64, target_tid: u64, result: u64) -> Result<(), ()> {
+        for i in 0..MAX_THREADS {
+            if self.threads[i].process_id == target_pid && self.threads[i].id == target_tid {
+                if self.threads[i].state == ThreadState::Blocked {
+                    // Overwrite the return value register (RAX is usually first argument or return register depending on trap frame)
+                    // Wait, the trap frame is saved at the top of the kernel stack (rsp).
+                    // We need to inject the return value into the trap frame.
+                    let trap_frame_ptr = self.threads[i].context.rsp as *mut crate::arch::x86_64::SyscallRegisterFrame;
+                    unsafe {
+                        (*trap_frame_ptr).rax = result;
+                    }
+                    self.threads[i].state = ThreadState::Runnable;
+                    let _ = self.enqueue(i);
+                    return Ok(());
+                }
+            }
+        }
+        Err(())
     }
 }
 
@@ -953,6 +994,19 @@ pub fn stats() -> SchedulerStats {
 }
 
 #[inline(always)]
+pub fn block_current_thread() {
+    unsafe {
+        (*SCHEDULER.get()).block_current_thread();
+    }
+}
+
+pub fn unblock_thread_with_result(target_pid: u64, target_tid: u64, result: u64) -> Result<(), ()> {
+    unsafe {
+        (*SCHEDULER.get()).unblock_thread_with_result(target_pid, target_tid, result)
+    }
+}
+
+#[inline(always)]
 pub fn current_thread_id() -> u64 {
     unsafe {
         let scheduler = &*SCHEDULER.get();
@@ -1010,8 +1064,8 @@ pub fn sys_fork_current_thread() -> Result<u64, SchedulerError> {
     unsafe { (*SCHEDULER.get()).fork_current_thread() }
 }
 
-pub fn sys_reap_child(parent_pid: u64) -> Result<(u64, i32), bool> {
-    unsafe { (*SCHEDULER.get()).reap_child(parent_pid) }
+pub fn sys_reap_child(parent_pid: u64, target_pid: i64) -> Result<(u64, i32), bool> {
+    unsafe { (*SCHEDULER.get()).reap_child(parent_pid, target_pid) }
 }
 
 pub fn idle_loop() -> ! {

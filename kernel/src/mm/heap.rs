@@ -6,7 +6,7 @@ use core::ptr::null_mut;
 
 use crate::mm::frame;
 
-const HEAP_PAGES: usize = 32;
+const HEAP_PAGES: usize = 2048;
 
 struct BumpAllocator {
     start: usize,
@@ -69,7 +69,7 @@ impl GlobalBumpAllocator {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct HeapStats {
     pub start: u64,
     pub size_bytes: u64,

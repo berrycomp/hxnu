@@ -5,7 +5,6 @@
 ///! Relies on the bare-metal HPS for zero-latency dispatching to prevent driver timeouts.
 
 use core::sync::atomic::{AtomicUsize, AtomicU32, AtomicU64, Ordering};
-use crate::supernova::SupernovaDriver;
 
 /// Represents an abstract asymmetric task in the Neonix Operating System context.
 pub struct AsymmetricTask {
@@ -17,15 +16,15 @@ pub struct AsymmetricTask {
 pub struct HardwareTask {
     /// The ID of the task.
     pub id: u32,
-    /// Indicates whether the task is targeted for GPU or CPU execution.
-    pub is_gpu_task: bool,
+    /// Target hardware execution lane (0=CPU, 1=GPU, 2=NPU).
+    pub target: u8,
 }
 
 impl HardwareTask {
     pub fn encode(&self) -> u64 {
         let valid = 1u64 << 63;
-        let gpu = if self.is_gpu_task { 1u64 << 32 } else { 0 };
-        valid | gpu | (self.id as u64)
+        let tgt = (self.target as u64) << 32;
+        valid | tgt | (self.id as u64)
     }
 
     pub fn decode(val: u64) -> Option<Self> {
@@ -34,9 +33,13 @@ impl HardwareTask {
         } else {
             Some(Self {
                 id: (val & 0xFFFFFFFF) as u32,
-                is_gpu_task: (val & (1u64 << 32)) != 0,
+                target: ((val >> 32) & 0xFF) as u8,
             })
         }
+    }
+
+    pub fn is_gpu_task(&self) -> bool {
+        self.target == 1
     }
 }
 
@@ -48,6 +51,8 @@ pub enum WorkloadType {
     GpuCompute,
     /// Accelerated SXRC payload offloaded to the GPU/Supernova driver.
     Sxrc(crate::sxrc_core::SxrcPayload),
+    /// Direct target lane specification (0=CPU, 1=GPU, 2=NPU).
+    DirectTarget(u8),
 }
 
 #[repr(C)]
@@ -65,8 +70,6 @@ pub struct SharedRingBuffer {
 
 /// The Heterogeneous Scheduler for managing asymmetric workloads.
 pub struct HeterogeneousScheduler {
-    /// The integrated Supernova driver for GPU and accelerator tasks.
-    supernova: SupernovaDriver,
     next_id: AtomicU32,
     /// Shared Queue for pending hardware tasks to be polled by the .hxext layer
     pub shared_buffer: SharedRingBuffer,
@@ -77,7 +80,6 @@ impl HeterogeneousScheduler {
     pub const fn new() -> Self {
         const INIT_NODE: Node = Node { sequence: AtomicUsize::new(0), data: AtomicU64::new(0) };
         HeterogeneousScheduler {
-            supernova: SupernovaDriver::new(),
             next_id: AtomicU32::new(1),
             shared_buffer: SharedRingBuffer {
                 buffer: [
@@ -106,7 +108,7 @@ impl HeterogeneousScheduler {
 
     /// Initializes the underlying hardware drivers.
     pub fn init(&self) {
-        self.supernova.init();
+        // Drivers (.hxext) are dynamically loaded now.
     }
 
     /// Submits a workload to the heterogeneous scheduler.
@@ -115,15 +117,16 @@ impl HeterogeneousScheduler {
     pub fn submit_workload(&self, workload: WorkloadType) -> Result<u32, &'static str> {
         let task_id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        let is_gpu = match workload {
-            WorkloadType::CpuAvx512 => false,
-            WorkloadType::GpuCompute => true,
-            WorkloadType::Sxrc(_) => true,
+        let target = match workload {
+            WorkloadType::CpuAvx512 => 0,
+            WorkloadType::GpuCompute => 1,
+            WorkloadType::Sxrc(_) => 1,
+            WorkloadType::DirectTarget(t) => t,
         };
 
         let hw_task = HardwareTask {
             id: task_id,
-            is_gpu_task: is_gpu,
+            target,
         };
 
         let mut pos = self.shared_buffer.tail.load(Ordering::Relaxed);
@@ -176,8 +179,9 @@ impl HeterogeneousScheduler {
                         self.shared_buffer.buffer[index].sequence.store(pos.wrapping_add(16), Ordering::Release);
                         
                         if let Some(task) = HardwareTask::decode(val) {
-                            if task.is_gpu_task {
-                                self.supernova.ring_doorbell(task.id);
+                            if task.is_gpu_task() {
+                                // TODO: LDR (Loader) mantığı ile .hxext (Supernova vb.) 
+                                // doorbell'ı çalınmalı.
                             }
                         }
                         pos = pos.wrapping_add(1);

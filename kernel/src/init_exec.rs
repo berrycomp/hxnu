@@ -65,6 +65,8 @@ struct ActivatedInitImage {
     zero_fill_bytes: u64,
     entry_segment_index: usize,
     entry_segment_map_offset: u64,
+    ph_addr: u64,
+    ph_num: u64,
     segments: Vec<ActivatedSegment>,
 }
 
@@ -158,6 +160,41 @@ pub fn activate_init_handoff() -> Result<InitExecSummary, InitExecActivateError>
     let result = (|| {
         let image = vfs::prepare_init_load().map_err(InitExecActivateError::Load)?;
         let bytes = initrd::read_bytes("/initrd/init")
+            .ok_or(InitExecActivateError::BytesUnavailable)?;
+        build_activation(image, bytes)
+    })();
+
+    let state = state_mut();
+    match result {
+        Ok(activation) => {
+            crate::kprintln!("HXNU: rustybox integration online - rootfs applets: /bin/rustybox /bin/sh /bin/ls /bin/cat /bin/echo /bin/pwd");
+            let summary = activation_summary(&activation);
+            state.activation = Some(activation);
+            state.last_error = None;
+            state.current_process_id = 0;
+            state.current_thread_id = 0;
+            state.restart_pending = false;
+            state.restart_count = 0;
+            state.last_exit_status = None;
+            Ok(summary)
+        }
+        Err(error) => {
+            state.activation = None;
+            state.last_error = Some(error);
+            state.current_process_id = 0;
+            state.current_thread_id = 0;
+            state.restart_pending = false;
+            state.restart_count = 0;
+            state.last_exit_status = None;
+            Err(error)
+        }
+    }
+}
+
+pub fn activate_test_handoff() -> Result<InitExecSummary, InitExecActivateError> {
+    let result = (|| {
+        let image = vfs::prepare_executable_load("/initrd/test_hello").map_err(InitExecActivateError::Load)?;
+        let bytes = initrd::read_bytes("/initrd/test_hello")
             .ok_or(InitExecActivateError::BytesUnavailable)?;
         build_activation(image, bytes)
     })();
@@ -348,6 +385,9 @@ fn build_activation(
     let user_vm_end = user_load_base.checked_add(vm_size)
         .ok_or(InitExecActivateError::InvalidSegmentMap)?;
 
+    let ph_addr = user_load_base + 64;
+    let ph_num = image.program_header_count as u64;
+
     Ok(ActivatedInitImage {
         path: image.path,
         format: image.format,
@@ -360,6 +400,8 @@ fn build_activation(
         zero_fill_bytes: image.vm_map_zero_fill_bytes,
         entry_segment_index,
         entry_segment_map_offset,
+        ph_addr,
+        ph_num,
         segments,
     })
 }
@@ -393,6 +435,222 @@ const fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
+pub fn setup_system_v_user_stack(
+    user_pml4: u64,
+    hhdm_offset: u64,
+    user_entry: u64,
+    ph_addr: u64,
+    ph_num: u64,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<u64, InitExecActivateError> {
+    const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_0000;
+    const STACK_PAGES: usize = 16;
+    const STACK_SIZE: usize = STACK_PAGES * mm::frame::PAGE_SIZE as usize;
+    let stack_bottom = USER_STACK_TOP - STACK_SIZE as u64;
+
+    let mut phys_frames = Vec::with_capacity(STACK_PAGES);
+    for _ in 0..STACK_PAGES {
+        let frame = mm::frame::allocate_frame()
+            .ok_or(InitExecActivateError::InvalidSegmentMap)?;
+        phys_frames.push(frame.start_address());
+    }
+
+    for (i, &phys) in phys_frames.iter().enumerate() {
+        let virt_page = stack_bottom + (i * mm::frame::PAGE_SIZE as usize) as u64;
+        unsafe {
+            core::ptr::write_bytes((hhdm_offset + phys) as *mut u8, 0, mm::frame::PAGE_SIZE as usize);
+        }
+        arch::x86_64::map_user_region(
+            user_pml4,
+            hhdm_offset,
+            virt_page,
+            phys,
+            mm::frame::PAGE_SIZE as usize,
+            arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITABLE,
+        ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+    }
+
+    let user_to_kernel_ptr = |user_addr: u64| -> Option<*mut u8> {
+        if user_addr < stack_bottom || user_addr >= USER_STACK_TOP {
+            return None;
+        }
+        let offset = (user_addr - stack_bottom) as usize;
+        let page_idx = offset / mm::frame::PAGE_SIZE as usize;
+        let page_offset = offset % mm::frame::PAGE_SIZE as usize;
+        let phys = phys_frames.get(page_idx)?;
+        Some((hhdm_offset + phys + page_offset as u64) as *mut u8)
+    };
+
+    let mut sp = USER_STACK_TOP;
+
+    sp -= 16;
+    let at_random_user_addr = sp;
+    if let Some(ptr) = user_to_kernel_ptr(at_random_user_addr) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(b"0123456789abcdef".as_ptr(), ptr, 16);
+        }
+    }
+
+    let mut envp_user_addrs = Vec::with_capacity(envp.len());
+    for s in envp {
+        let bytes = s.as_bytes();
+        sp -= (bytes.len() + 1) as u64;
+        let addr = sp;
+        envp_user_addrs.push(addr);
+        if let Some(ptr) = user_to_kernel_ptr(addr) {
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                *ptr.add(bytes.len()) = 0;
+            }
+        }
+    }
+
+    let mut argv_user_addrs = Vec::with_capacity(argv.len());
+    for s in argv {
+        let bytes = s.as_bytes();
+        sp -= (bytes.len() + 1) as u64;
+        let addr = sp;
+        argv_user_addrs.push(addr);
+        if let Some(ptr) = user_to_kernel_ptr(addr) {
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                *ptr.add(bytes.len()) = 0;
+            }
+        }
+    }
+
+    sp &= !7;
+
+    let auxv: &[(u64, u64)] = &[
+        (3, ph_addr),
+        (4, 56),
+        (5, ph_num),
+        (6, 4096),
+        (7, 0),
+        (8, 0),
+        (9, user_entry),
+        (11, 0),
+        (12, 0),
+        (13, 0),
+        (14, 0),
+        (23, 0),
+        (25, at_random_user_addr),
+        (0, 0),
+    ];
+
+    let total_u64s = 1 + (argv.len() + 1) + (envp.len() + 1) + (auxv.len() * 2);
+
+    if total_u64s % 2 != 0 {
+        sp -= 8;
+        if let Some(ptr) = user_to_kernel_ptr(sp) {
+            unsafe { (ptr as *mut u64).write(0); }
+        }
+    }
+
+    for &(key, val) in auxv.iter().rev() {
+        sp -= 8;
+        if let Some(ptr) = user_to_kernel_ptr(sp) {
+            unsafe { (ptr as *mut u64).write(val); }
+        }
+        sp -= 8;
+        if let Some(ptr) = user_to_kernel_ptr(sp) {
+            unsafe { (ptr as *mut u64).write(key); }
+        }
+    }
+
+    sp -= 8;
+    if let Some(ptr) = user_to_kernel_ptr(sp) {
+        unsafe { (ptr as *mut u64).write(0); }
+    }
+    for &addr in envp_user_addrs.iter().rev() {
+        sp -= 8;
+        if let Some(ptr) = user_to_kernel_ptr(sp) {
+            unsafe { (ptr as *mut u64).write(addr); }
+        }
+    }
+
+    sp -= 8;
+    if let Some(ptr) = user_to_kernel_ptr(sp) {
+        unsafe { (ptr as *mut u64).write(0); }
+    }
+    for &addr in argv_user_addrs.iter().rev() {
+        sp -= 8;
+        if let Some(ptr) = user_to_kernel_ptr(sp) {
+            unsafe { (ptr as *mut u64).write(addr); }
+        }
+    }
+
+    sp -= 8;
+    if let Some(ptr) = user_to_kernel_ptr(sp) {
+        unsafe { (ptr as *mut u64).write(argv.len() as u64); }
+    }
+
+    Ok(sp)
+}
+
+pub fn spawn_executable(
+    path: &str,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<SpawnedInitProcess, InitExecActivateError> {
+    let image = vfs::prepare_executable_load(path).map_err(InitExecActivateError::Load)?;
+    let bytes = vfs::read_executable_bytes(image.mount, &image.path)
+        .ok_or(InitExecActivateError::BytesUnavailable)?;
+    let activation = build_activation(image, bytes)?;
+
+    let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+
+    let user_pml4 = arch::x86_64::create_user_page_table(hhdm_offset)
+        .map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+    let mut last_mapped_page: Option<u64> = None;
+    let mut last_mapped_phys: Option<u64> = None;
+
+    for segment in &activation.segments {
+        let flags = if segment.writable {
+            arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITABLE
+        } else {
+            arch::x86_64::FLAG_USER_ACCESSIBLE
+        };
+
+        map_segment_pages(
+            segment,
+            user_pml4,
+            hhdm_offset,
+            flags,
+            &mut last_mapped_page,
+            &mut last_mapped_phys,
+        )?;
+    }
+
+    let initial_rsp = setup_system_v_user_stack(
+        user_pml4,
+        hhdm_offset,
+        activation.entry_point,
+        activation.ph_addr,
+        activation.ph_num,
+        argv,
+        envp,
+    )?;
+
+    let spawned = sched::create_user_thread(
+        activation.entry_point,
+        initial_rsp,
+        user_pml4,
+    ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+
+    let state = state_mut();
+    state.current_process_id = spawned.process_id;
+    state.current_thread_id = spawned.thread_id;
+
+    Ok(SpawnedInitProcess {
+        thread_id: spawned.thread_id,
+        process_id: spawned.process_id,
+        restart_count: state.restart_count,
+    })
+}
+
 pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError> {
     let state = state_ref();
     let activation = state.activation.as_ref().ok_or(InitExecActivateError::BytesUnavailable)?;
@@ -422,28 +680,19 @@ pub fn spawn_init_process() -> Result<SpawnedInitProcess, InitExecActivateError>
         )?;
     }
 
-    let user_stack_top = 0x0000_7fff_ffff_0000u64;
-    let user_stack_size = 4096usize;
-    let user_stack_phys = mm::frame::allocate_frame()
-        .ok_or(InitExecActivateError::InvalidSegmentMap)?
-        .start_address();
-
-    unsafe {
-        core::ptr::write_bytes((hhdm_offset + user_stack_phys) as *mut u8, 0, user_stack_size);
-    }
-
-    arch::x86_64::map_user_region(
+    let initial_rsp = setup_system_v_user_stack(
         user_pml4,
         hhdm_offset,
-        user_stack_top - user_stack_size as u64,
-        user_stack_phys,
-        user_stack_size,
-        arch::x86_64::FLAG_USER_ACCESSIBLE | arch::x86_64::FLAG_WRITABLE,
-    ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
+        activation.entry_point,
+        activation.ph_addr,
+        activation.ph_num,
+        &["/initrd/init"],
+        &[],
+    )?;
 
     let spawned = sched::create_user_thread(
         activation.entry_point,
-        user_stack_top - 16,
+        initial_rsp,
         user_pml4,
     ).map_err(|_| InitExecActivateError::InvalidSegmentMap)?;
 

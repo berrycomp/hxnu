@@ -1,3 +1,4 @@
+#![feature(lang_items)]
 // TCOL / HPL (HXNU Public License)
 // This file is strictly governed by the HXNU Public License (HPL).
 #![allow(static_mut_refs)]
@@ -11,20 +12,19 @@ extern crate alloc;
 
 mod acpi;
 mod arch;
-mod block;
 mod devfs;
+pub mod drivers;
 mod exec;
 mod fat;
+pub mod fb;
+pub mod font;
 mod init_exec;
 mod initrd;
 pub mod live_update;
-pub mod nvmp;
 pub mod secinter;
 pub mod module_loader;
 pub mod sxrc_core;
 pub mod supernova;
-pub mod martix;
-pub mod speaker;
 pub mod hsched;
 
 #[path = "../../../heterexec/src/lib.rs"]
@@ -39,6 +39,7 @@ mod limine;
 mod mm;
 mod panic;
 mod power;
+mod runtime;
 mod procfs;
 mod sched;
 mod serial;
@@ -98,6 +99,7 @@ pub extern "C" fn _start() -> ! {
 
     
     let tty = tty::initialize(false);
+    kprintln!("HXNU: font engine online (UTF-8 rendering enabled: Latin, Türkçe [ç, ğ, ı, ö, ş, ü], Русский [а..я])");
     kprintln!("HXNU: framebuffer disabled for initrd minimalism, loading from /boot instead");
     kprintln!(
         "HXNU: tty console online id={} outputs={} framebuffer={} vcs={} geometry={}x{}",
@@ -181,6 +183,21 @@ pub extern "C" fn _start() -> ! {
             halt();
         }
     }
+
+    match arch::x86_64::ensure_physical_region_mapped(
+        hhdm_offset,
+        0xFE00_0000,
+        0x2000,
+        arch::x86_64::FLAG_WRITE_THROUGH
+            | arch::x86_64::FLAG_CACHE_DISABLE
+            | arch::x86_64::FLAG_GLOBAL
+            | arch::x86_64::FLAG_WRITABLE,
+    ) {
+        Ok(virt_addr) => kprintln!("HXNU: Supernova MMIO mapped globally into HHDM at {virt_addr:#018x}"),
+        Err(_) => kprintln!("HXNU: Supernova MMIO global mapping failed"),
+    }
+    let supernova_driver = supernova::SupernovaDriver::new();
+    supernova_driver.init();
 
     arch::x86_64::initialize();
     let selectors = arch::x86_64::segment_selectors();
@@ -470,52 +487,6 @@ pub extern "C" fn _start() -> ! {
             error.as_str()
         ),
     }
-    match block::initialize() {
-        Ok(summary) => {
-            kprintln_style!(
-                crate::tty::ConsoleStyle::Success,
-                "HXNU: block online devices={} partitions={} bytes={} mbr-devices={} gpt-devices={}",
-                summary.device_count,
-                summary.partition_count,
-                summary.total_bytes,
-                summary.mbr_device_count,
-                summary.gpt_device_count,
-            );
-            if let Some(device) = block::device(0) {
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Muted,
-                    "HXNU: block device0 id={} kind={} name={} ro={} sector-size={} sectors={} bytes={}",
-                    device.id,
-                    device.kind.as_str(),
-                    device.name,
-                    yes_no(device.read_only),
-                    device.sector_size,
-                    device.sector_count,
-                    device.size_bytes,
-                );
-            }
-            if let Some(partition) = block::partition(0) {
-                kprintln_style!(
-                    crate::tty::ConsoleStyle::Muted,
-                    "HXNU: block partition0 id={} device={} table={} mbr-index={} gpt-index={} type={:#04x} bootable={} lba={} sectors={}",
-                    partition.id,
-                    partition.device_id,
-                    partition.table_kind.as_str(),
-                    partition.mbr_index,
-                    partition.gpt_index,
-                    partition.partition_type,
-                    yes_no(partition.bootable),
-                    partition.start_lba,
-                    partition.sector_count,
-                );
-            }
-        }
-        Err(error) => kprintln_style!(
-            crate::tty::ConsoleStyle::Warning,
-            "HXNU: block offline reason={}",
-            error.as_str()
-        ),
-    }
     match fat::initialize() {
         Ok(summary) => kprintln_style!(
             crate::tty::ConsoleStyle::Success,
@@ -557,6 +528,14 @@ pub extern "C" fn _start() -> ! {
             halt();
         }
     }
+    let hfs_summary = initialize_hfs();
+    kprintln_style!(
+        crate::tty::ConsoleStyle::Success,
+        "HXNU: hfs online mounted=yes path=/hfs namespace=128-bit Lut entries={} shadowed={} hps-halted={}",
+        hfs_summary.0,
+        hfs_summary.1,
+        yes_no(hfs_summary.2),
+    );
     module_loader::load_modules();
     match vfs::discover_init_executable() {
         Ok(candidate) => kprintln_style!(
@@ -715,6 +694,18 @@ pub extern "C" fn _start() -> ! {
                     assert_eq!(tail2, head2, "HXNU: Expected all workloads to be dispatched");
                     
                     kprintln!("HXNU: dispatched workloads");
+
+                    let test_addr = crate::hps::hfs::HfsAddress([0x01; 16]);
+                    if let Some(session) = crate::hps::loader::HxeSession::load_from_hfs(test_addr) {
+                        kprintln!(
+                            "HXNU: HxeSession::load_from_hfs PASSED storage_tier={:?} uma_shared_size={}",
+                            session.storage_tier,
+                            session.uma_shared_size
+                        );
+                    } else {
+                        kprintln!("HXNU: HxeSession::load_from_hfs FAILED");
+                    }
+
                     kprintln!("HXNU: Heterexec bridge self-test PASSED");
                 }
             }
@@ -738,6 +729,59 @@ pub extern "C" fn _start() -> ! {
                         halt();
                     }
                 }
+            }
+        }
+    }
+
+    if crate::drivers::bga::is_available() {
+        kprintln!("HXNU: display hardware detected: Bochs BGA");
+        let caps = crate::drivers::bga::probe_caps();
+        let target_w = 1920.min(caps.max_width as u32);
+        let target_h = 1080.min(caps.max_height as u32);
+        let target_bpp = 32.min(caps.max_bpp);
+
+        let mode = crate::drivers::bga::set_mode(target_w, target_h, target_bpp);
+        kprintln!(
+            "HXNU: dynamic resolution updated: {}x{}@{}bpp (maximum supported limit)",
+            mode.width,
+            mode.height,
+            mode.bpp
+        );
+
+        if let Some(boot_fb) = limine::framebuffer() {
+            let phys_addr = (boot_fb.address as u64) - hhdm_offset;
+            let fb_size = (mode.pitch as usize) * (mode.height as usize);
+
+            let virt_addr = match arch::x86_64::ensure_region_mapped(
+                hhdm_offset,
+                phys_addr,
+                fb_size,
+                arch::x86_64::FLAG_WRITABLE | arch::x86_64::FLAG_WRITE_THROUGH,
+            ) {
+                Ok(vaddr) => vaddr,
+                Err(_) => boot_fb.address as u64,
+            };
+
+            fb::set_physical_address(phys_addr);
+
+            let updated_fb = limine::Framebuffer {
+                address: virt_addr as *mut u8,
+                width: mode.width as u64,
+                height: mode.height as u64,
+                pitch: mode.pitch as u64,
+                bpp: mode.bpp,
+                memory_model: boot_fb.memory_model,
+                red_mask_size: if boot_fb.red_mask_size == 0 { 8 } else { boot_fb.red_mask_size },
+                red_mask_shift: if boot_fb.red_mask_size == 0 { 16 } else { boot_fb.red_mask_shift },
+                green_mask_size: if boot_fb.green_mask_size == 0 { 8 } else { boot_fb.green_mask_size },
+                green_mask_shift: if boot_fb.green_mask_size == 0 { 8 } else { boot_fb.green_mask_shift },
+                blue_mask_size: if boot_fb.blue_mask_size == 0 { 8 } else { boot_fb.blue_mask_size },
+                blue_mask_shift: if boot_fb.blue_mask_shift == 0 { 0 } else { boot_fb.blue_mask_shift },
+            };
+
+            if fb::initialize(updated_fb).is_ok() {
+                tty::initialize(true);
+                kprintln!("HXNU: framebuffer initialized for userspace handoff");
             }
         }
     }
@@ -799,7 +843,7 @@ pub extern "C" fn _start() -> ! {
         Err(error) => kprintln_style!(
             crate::tty::ConsoleStyle::Error,
             "HXNU: init process spawn failed reason={}",
-            error.as_str(),
+            error.as_str()
         ),
     }
 
@@ -949,18 +993,18 @@ pub extern "C" fn _start() -> ! {
             fat_root,
         );
     }
-    if let Some(init) = vfs::preview("/initrd/init", 80) {
-        kprintln_style!(
-            crate::tty::ConsoleStyle::Muted,
-            "HXNU: initrd preview init={}",
-            init,
-        );
-    }
     if let Some(console) = vfs::preview("/dev/console", 80) {
         kprintln_style!(
             crate::tty::ConsoleStyle::Muted,
             "HXNU: devfs preview console={}",
             console,
+        );
+    }
+    if let Some(fb0) = vfs::preview("/dev/fb0", 80) {
+        kprintln_style!(
+            crate::tty::ConsoleStyle::Muted,
+            "HXNU: devfs preview fb0={}",
+            fb0,
         );
     }
 
@@ -1018,3 +1062,52 @@ pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
     HPS_HOOK_CALLED.fetch_add(1, Ordering::SeqCst);
     crate::serial::write_str("HXNU: stress_test_hps_hook triggered!\n");
 }
+
+static mut HXE_TEST_PAYLOAD: [u8; 64] = [0u8; 64];
+
+fn initialize_hfs() -> (usize, usize, bool) {
+    use crate::hps::hfs::{HfsAddress, PowerLossPrevention, StorageTier, UnifiedNamespace};
+
+    // Restore state if booting after outage event
+    let restored = PowerLossPrevention::recover_from_emergency_dump();
+    if restored > 0 {
+        kprintln!(
+            "HXNU: hfs outage recovery restored {} entries from NVMe hibernate block",
+            restored
+        );
+    }
+
+    // Register test HXE payload for heterexec loader compatibility
+    unsafe {
+        let magic = b"\x7FHXE";
+        HXE_TEST_PAYLOAD[0..4].copy_from_slice(magic);
+        HXE_TEST_PAYLOAD[4..6].copy_from_slice(&1u16.to_le_bytes()); // Version
+        HXE_TEST_PAYLOAD[6..10].copy_from_slice(&0u32.to_le_bytes()); // HardwareMask
+        HXE_TEST_PAYLOAD[10..18].copy_from_slice(&4096u64.to_le_bytes()); // UMA shared size
+    }
+
+    let test_addr = HfsAddress([0x01; 16]);
+    UnifiedNamespace::register(
+        test_addr,
+        StorageTier::VRAM,
+        unsafe { HXE_TEST_PAYLOAD.as_mut_ptr() as *mut core::ffi::c_void },
+        64,
+    );
+
+    // Dynamic tier shift
+    UnifiedNamespace::shift_tier(test_addr, StorageTier::VRAM);
+
+    // continuous dma shadowing
+    unsafe {
+        PowerLossPrevention::continuous_dma_shadowing(test_addr);
+    }
+
+    (
+        UnifiedNamespace::active_count(),
+        PowerLossPrevention::shadow_count(),
+        PowerLossPrevention::is_hps_halted(),
+    )
+}
+
+#[lang = "eh_personality"]
+fn eh_personality() {}

@@ -18,14 +18,14 @@ pub enum ConsoleStyle {
 
 #[derive(Copy, Clone)]
 pub struct ConsoleGlyph {
-    pub byte: u8,
+    pub ch: char,
     pub style: ConsoleStyle,
 }
 
 impl ConsoleGlyph {
     pub const fn empty() -> Self {
         Self {
-            byte: b" "[0],
+            ch: ' ',
             style: ConsoleStyle::Default,
         }
     }
@@ -39,8 +39,8 @@ pub const VIRTUAL_CONSOLE_COUNT: usize = 4;
 
 const DEFAULT_COLUMNS: usize = 80;
 const DEFAULT_ROWS: usize = 25;
-const MAX_COLUMNS: usize = 128;
-const MAX_ROWS: usize = 64;
+const MAX_COLUMNS: usize = 160;
+const MAX_ROWS: usize = 70;
 const MAX_CELLS: usize = MAX_COLUMNS * MAX_ROWS;
 
 #[derive(Copy, Clone)]
@@ -137,28 +137,28 @@ impl VirtualConsole {
             .lines_written
             .saturating_add(text.bytes().filter(|byte| *byte == b'\n').count() as u64);
 
-        for byte in text.bytes() {
-            match byte {
-                b'\r' => {}
-                b'\n' => self.new_line(),
-                b'\t' => {
+        for ch in text.chars() {
+            match ch {
+                '\r' => {}
+                '\n' => self.new_line(),
+                '\t' => {
                     for _ in 0..4 {
-                        self.write_byte(style, b' ');
+                        self.write_char(style, ' ');
                     }
                 }
-                byte => self.write_byte(style, normalize_glyph_byte(byte)),
+                ch => self.write_char(style, ch),
             }
         }
     }
 
-    fn write_byte(&mut self, style: ConsoleStyle, byte: u8) {
+    fn write_char(&mut self, style: ConsoleStyle, ch: char) {
         if self.cursor_column >= self.columns {
             self.new_line();
         }
 
         let index = self.cursor_row * self.columns + self.cursor_column;
         if index < self.cells.len() {
-            self.cells[index] = ConsoleGlyph { byte, style };
+            self.cells[index] = ConsoleGlyph { ch, style };
         }
         self.cursor_column += 1;
     }
@@ -231,7 +231,13 @@ impl TtyConsole {
             self.outputs |= OUTPUT_FRAMEBUFFER;
         }
 
-        let (columns, rows) = (DEFAULT_COLUMNS, DEFAULT_ROWS);
+        let (mut columns, mut rows) = (DEFAULT_COLUMNS, DEFAULT_ROWS);
+        if framebuffer_output {
+            if let Some((fb_cols, fb_rows)) = crate::fb::console_dimensions() {
+                columns = fb_cols;
+                rows = fb_rows;
+            }
+        }
         self.columns = columns.min(MAX_COLUMNS).max(1);
         self.rows = rows.min(MAX_ROWS).max(1);
         self.bytes_written = 0;
@@ -269,7 +275,16 @@ impl TtyConsole {
         let active = self.active_console_id as usize;
         self.consoles[active].write_style(style, text);
         if outputs & OUTPUT_FRAMEBUFFER != 0 {
-            
+            let fb_style = match style {
+                ConsoleStyle::Default => crate::fb::ConsoleStyle::Default,
+                ConsoleStyle::Accent => crate::fb::ConsoleStyle::Accent,
+                ConsoleStyle::Success => crate::fb::ConsoleStyle::Success,
+                ConsoleStyle::Warning => crate::fb::ConsoleStyle::Warning,
+                ConsoleStyle::Error => crate::fb::ConsoleStyle::Error,
+                ConsoleStyle::Fatal => crate::fb::ConsoleStyle::Fatal,
+                ConsoleStyle::Muted => crate::fb::ConsoleStyle::Muted,
+            };
+            crate::fb::write_style(fb_style, text);
         }
 
         self.bytes_written = self.bytes_written.saturating_add(text.len() as u64);
@@ -314,7 +329,30 @@ impl TtyConsole {
     fn render_active_console(&self) {
         let active = self.active_console_id as usize;
         let console = &self.consoles[active];
-            }
+        let fb_cells: alloc::vec::Vec<crate::fb::ConsoleGlyph> = console
+            .cells
+            .iter()
+            .map(|cell| crate::fb::ConsoleGlyph {
+                ch: cell.ch,
+                style: match cell.style {
+                    ConsoleStyle::Default => crate::fb::ConsoleStyle::Default,
+                    ConsoleStyle::Accent => crate::fb::ConsoleStyle::Accent,
+                    ConsoleStyle::Success => crate::fb::ConsoleStyle::Success,
+                    ConsoleStyle::Warning => crate::fb::ConsoleStyle::Warning,
+                    ConsoleStyle::Error => crate::fb::ConsoleStyle::Error,
+                    ConsoleStyle::Fatal => crate::fb::ConsoleStyle::Fatal,
+                    ConsoleStyle::Muted => crate::fb::ConsoleStyle::Muted,
+                },
+            })
+            .collect();
+        crate::fb::render_console(
+            &fb_cells,
+            console.columns,
+            console.rows,
+            console.cursor_column,
+            console.cursor_row,
+        );
+    }
 
     fn show_log_console(&mut self) {
         let _ = self.switch_active_console(LOG_CONSOLE_ID);
@@ -376,10 +414,3 @@ const fn output_count(outputs: u8) -> u8 {
     (outputs & OUTPUT_SERIAL != 0) as u8 + (outputs & OUTPUT_FRAMEBUFFER != 0) as u8
 }
 
-const fn normalize_glyph_byte(byte: u8) -> u8 {
-    if byte >= 0x20 && byte <= 0x7e {
-        byte
-    } else {
-        b'?'
-    }
-}

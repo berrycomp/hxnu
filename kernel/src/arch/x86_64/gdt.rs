@@ -6,16 +6,16 @@ use core::mem::size_of;
 
 const KERNEL_CODE_SELECTOR: u16 = 0x28;
 const KERNEL_DATA_SELECTOR: u16 = 0x30;
-pub const USER_CODE_SELECTOR: u16 = 0x38;
-pub const USER_DATA_SELECTOR: u16 = 0x40;
+pub const USER_DATA_SELECTOR: u16 = 0x38;
+pub const USER_CODE_SELECTOR: u16 = 0x40;
 const TSS_SELECTOR: u16 = 0x48;
 
 const GDT_ENTRY_COUNT: usize = 11;
 
 const KERNEL_CODE_INDEX: usize = 5;
 const KERNEL_DATA_INDEX: usize = 6;
-const USER_CODE_INDEX: usize = 7;
-const USER_DATA_INDEX: usize = 8;
+const USER_DATA_INDEX: usize = 7;
+const USER_CODE_INDEX: usize = 8;
 const TSS_LOW_INDEX: usize = 9;
 const TSS_HIGH_INDEX: usize = 10;
 
@@ -219,8 +219,8 @@ pub fn initialize() {
         let gdt = &mut *GDT.0.get();
         gdt[KERNEL_CODE_INDEX] = 0x00af_9b00_0000_ffff;
         gdt[KERNEL_DATA_INDEX] = 0x00cf_9300_0000_ffff;
-        gdt[USER_CODE_INDEX] = 0x00af_fb00_0000_ffff;
         gdt[USER_DATA_INDEX] = 0x00cf_f300_0000_ffff;
+        gdt[USER_CODE_INDEX] = 0x00af_fb00_0000_ffff;
 
         let tss_ptr = TSS.0.get() as u64;
         let tss_limit = size_of::<TaskStateSegment>() as u64 - 1;
