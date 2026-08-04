@@ -1,15 +1,59 @@
+# ============================================================
+# HXNU Micro-Hybrid Kernel — .gitignore
+# TCOL / HPL (HXNU Public License)
+# ============================================================
+
+# ── Rust / Cargo build artifacts ────────────────────────────
 /target/
+**/target/
+kernel/*/target/
+Cargo.lock
+
+# ── Build output (ISO, initrd, staging) ─────────────────────
 /build/
+*.iso
+*.cpio
+*.img
+*.bin
+*.elf
+*.o
+
+# ── Vendored dependencies (managed via script) ───────────────
 /vendor/
-/.DS_Store
+
+# ── Agent workspaces & scratch (AI-generated, not source) ───
+/.agents/
 AGENTS.md
 AGENT.md
-.agents/
 prompt_draft.md
 plan_agents_setup.md
-scratch/*.py
-scratch/*.sh
-tmp/*.py
-tmp/*.sh
-.agents/*.py
-.agents/*.sh
+scratch/
+tmp/
+
+# ── Initrd: compiled/staged binaries (built, not source) ────
+initrd/init
+initrd/init_old
+initrd/lcl_daemon
+initrd/liblcl.so
+initrd/test_hello
+initrd/bin/
+
+# ── Logs ────────────────────────────────────────────────────
+*.log
+serial.log
+
+# ── Python cache ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── OS / editor artifacts ────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Neonix build output (cross-project) ─────────────────────
+../Neonix/build/

@@ -1,2 +1,0 @@
-cargo:rerun-if-changed=src/arch/x86_64/ap_trampoline.asm
-cargo:rerun-if-env-changed=YASM
