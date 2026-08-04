@@ -173,13 +173,17 @@ pub fn archive_bytes() -> Option<&'static [u8]> {
 }
 
 pub fn read(path: &str) -> Option<String> {
+    crate::kprintln!("DEBUG: initrd::read called on path={}", path);
     let state = unsafe { (&*INITRD.get()).as_ref()? };
     let normalized = normalize_vfs_path(path).ok()?;
 
     let entry = find_entry(state, &normalized)?;
     match entry.kind {
         InitrdEntryKind::Directory => Some(render_directory(state, &normalized)),
-        InitrdEntryKind::File => Some(String::from_utf8_lossy(entry.data).into_owned()),
+        InitrdEntryKind::File => {
+            crate::kprintln!("DEBUG: initrd::read is allocating String for file of size {}", entry.data.len());
+            Some(String::from_utf8_lossy(entry.data).into_owned())
+        }
     }
 }
 
@@ -211,9 +215,36 @@ pub fn read_bytes(path: &str) -> Option<&'static [u8]> {
     Some(entry.data)
 }
 
+/// Returns the VFS paths of all .hxext / .hxmd files present in the initrd.
+/// Non-generic to prevent release-mode dead-code elimination.
+#[inline(never)]
+pub fn get_module_paths() -> alloc::vec::Vec<alloc::string::String> {
+    let mut paths = alloc::vec::Vec::new();
+    let state = match unsafe { (&*INITRD.get()).as_ref() } {
+        Some(s) => s,
+        None => {
+            crate::kprintln_style!(crate::tty::ConsoleStyle::Warning, "HXNU: get_module_paths: INITRD not initialized");
+            return paths;
+        }
+    };
+    crate::kprintln_style!(crate::tty::ConsoleStyle::Default, "HXNU: get_module_paths: scanning {} entries", state.entries.len());
+    for entry in &state.entries {
+        crate::kprintln_style!(crate::tty::ConsoleStyle::Default, "HXNU: entry path={} file={}", entry.path, entry.kind == InitrdEntryKind::File);
+        if entry.kind == InitrdEntryKind::File
+            && (entry.path.ends_with(".hxext") || entry.path.ends_with(".hxmd"))
+        {
+            crate::kprintln_style!(crate::tty::ConsoleStyle::Success, "HXNU: module found: {}", entry.path);
+            paths.push(entry.path.clone());
+        }
+    }
+    paths
+}
+
+
 fn find_entry<'a>(state: &'a InitrdState, path: &str) -> Option<&'a InitrdEntry> {
     state.entries.iter().find(|entry| entry.path == path)
 }
+
 
 fn render_directory(state: &InitrdState, path: &str) -> String {
     let mut text = String::new();

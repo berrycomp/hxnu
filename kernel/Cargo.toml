@@ -14,4 +14,4 @@ power-reset-self-test = []
 heterexec-self-test = []
 
 [dependencies]
-hps = { path = "../../heterexec" }
+hps = { package = "heterexec", path = "../../heterexec" }
