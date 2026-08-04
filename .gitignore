@@ -57,3 +57,10 @@ Thumbs.db
 
 # ── Neonix build output (cross-project) ─────────────────────
 ../Neonix/build/
+
+# ── Test media / driver test assets ──────────────────────────
+test.wav
+test.mp3
+test.ogg
+*.test.wav
+*.test.bin
