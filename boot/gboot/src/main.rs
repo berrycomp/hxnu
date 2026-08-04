@@ -1,3 +1,6 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
+
 // Neonix G-Boot Architecture - Iteration 13
 #![no_std]
 #![no_main]
