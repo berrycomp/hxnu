@@ -9,8 +9,9 @@
 kernel/*/target/
 Cargo.lock
 
-# ── Build output (ISO, initrd, staging) ─────────────────────
+# ── Build output (ISO, initrd, staging, sysroot) ────────────
 /build/
+initrd.cpio
 *.iso
 *.cpio
 *.img

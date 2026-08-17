@@ -8,6 +8,7 @@ pub struct LclMessage {
     pub tid: u64,
     pub number: u64,
     pub args: [u64; 6],
+    pub abi: u64,
 }
 pub struct LclQueue {
     pub messages: [Option<LclMessage>; 64],
@@ -365,7 +366,7 @@ pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::SyscallRegisterFram
             crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
             let pid = sched::current_process_id();
             let tid = sched::current_thread_id();
-            enqueue_lcl_message(LclMessage { pid, tid, number: trap_frame.rax, args: [trap_frame.rdi, trap_frame.rsi, trap_frame.rdx, trap_frame.r10, trap_frame.r8, trap_frame.r9] });
+            enqueue_lcl_message(LclMessage { pid, tid, number: trap_frame.rax, args: [trap_frame.rdi, trap_frame.rsi, trap_frame.rdx, trap_frame.r10, trap_frame.r8, trap_frame.r9], abi: trap_frame.r12 });
             
             // Suspend thread and wait for LCL return
             sched::block_current_thread();
@@ -384,7 +385,7 @@ pub fn dispatch(abi: SyscallAbi, number: u64, args: [u64; 6]) -> SyscallOutcome 
             crate::tty::write_str("[LCL Handler] Intercepted int 0x80\n");
             let pid = sched::current_process_id();
             let tid = sched::current_thread_id();
-            enqueue_lcl_message(LclMessage { pid, tid, number, args });
+            enqueue_lcl_message(LclMessage { pid, tid, number, args, abi: 3 });
             sched::block_current_thread();
             SyscallOutcome { value: 0, action: SyscallAction::YieldThread }
         }
@@ -1667,7 +1668,7 @@ fn machine_str(machine_bytes: &[u8], machine_len: usize) -> &str {
 fn lcl_receive(args: [u64; 6]) -> SyscallOutcome {
     let ptr = args[0] as usize;
     if let Some(msg) = dequeue_lcl_message() {
-        let mut data = [0u64; 9];
+        let mut data = [0u64; 10];
         data[0] = msg.number;
         data[1] = msg.args[0];
         data[2] = msg.args[1];
@@ -1677,6 +1678,7 @@ fn lcl_receive(args: [u64; 6]) -> SyscallOutcome {
         data[6] = msg.args[5];
         data[7] = msg.pid;
         data[8] = msg.tid;
+        data[9] = msg.abi;
         let data_bytes = unsafe { core::slice::from_raw_parts(&data as *const _ as *const u8, core::mem::size_of_val(&data)) };
         if crate::uaccess::copyout(data_bytes, ptr).is_ok() {
             return SyscallOutcome::success(1);
