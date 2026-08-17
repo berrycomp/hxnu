@@ -5,11 +5,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR_VERSION="${LIMINE_VERSION:-9.2.0}"
 LIMINE_DIR="${ROOT}/vendor/limine-${VENDOR_VERSION}"
 ISO_ROOT="${ROOT}/build/iso"
-KERNEL_PATH="${ROOT}/target/x86_64-unknown-none/release/hxnu-kernel"
 
 "${ROOT}/scripts/prepare-limine.sh"
 "${ROOT}/scripts/build-initrd.sh"
-cargo build --release -p hxnu-kernel
+"${ROOT}/scripts/build-kernel.sh"
+
+KERNEL_PATH="$("${ROOT}/scripts/build-kernel.sh" --print-path)"
 
 rm -rf "${ISO_ROOT}"
 mkdir -p "${ISO_ROOT}/boot/limine"

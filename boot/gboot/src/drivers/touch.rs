@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// TCOL v1.1 / HPL (HXNU Public License)
+// This file is strictly governed by the Tile Conservative Open License (TCOL v1.1).
 
 /// The FSM State for hardware drivers
 #[derive(PartialEq)]
@@ -29,7 +29,7 @@ pub struct I2cRegs {
 }
 
 #[cfg(target_arch = "aarch64")]
-static mut TOUCH_ADDR: u32 = 0xFEAB0000;
+const TOUCH_ADDR: usize = 0xFEAB0000;
 
 /// Touch Controller Driver Struct
 pub struct TouchDriver {
@@ -48,7 +48,7 @@ impl TouchDriver {
     #[cfg(target_arch = "aarch64")]
     pub fn init(&mut self) -> FsmState {
         self.state = FsmState::Polling;
-        let regs = unsafe { core::ptr::read_volatile(&TOUCH_ADDR) as *mut I2cRegs };
+        let regs = TOUCH_ADDR as *mut I2cRegs;
         let mut ready = false;
         unsafe {
             // Set i2c_con to enable

@@ -1,3 +1,6 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
+
 #![no_std]
 #![no_main]
 

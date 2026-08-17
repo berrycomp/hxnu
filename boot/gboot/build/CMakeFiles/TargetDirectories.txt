@@ -1,0 +1,3 @@
+/mnt/KINGSTON/Berturk/Projects/hxnu/boot/gboot/build/CMakeFiles/gboot.dir
+/mnt/KINGSTON/Berturk/Projects/hxnu/boot/gboot/build/CMakeFiles/edit_cache.dir
+/mnt/KINGSTON/Berturk/Projects/hxnu/boot/gboot/build/CMakeFiles/rebuild_cache.dir

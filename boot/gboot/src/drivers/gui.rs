@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// TCOL v1.1 / HPL (HXNU Public License)
+// This file is strictly governed by the Tile Conservative Open License (TCOL v1.1).
 
 /// The FSM State for hardware drivers
 #[derive(PartialEq)]
@@ -29,7 +29,7 @@ pub struct Vop2Regs {
 }
 
 #[cfg(target_arch = "aarch64")]
-static mut GUI_ADDR: u32 = 0xFDD90000;
+const GUI_ADDR: usize = 0xFDD90000;
 
 /// GUI Driver Struct
 pub struct GuiDriver {
@@ -48,7 +48,7 @@ impl GuiDriver {
     #[cfg(target_arch = "aarch64")]
     pub fn init(&mut self) -> FsmState {
         self.state = FsmState::Polling;
-        let regs = unsafe { core::ptr::read_volatile(&GUI_ADDR) as *mut Vop2Regs };
+        let regs = GUI_ADDR as *mut Vop2Regs;
         let mut ready = false;
         unsafe {
             // Write enable to sys_ctrl

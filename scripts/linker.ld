@@ -10,14 +10,16 @@ SECTIONS
 {
     . = 0x200000;
 
+    /* Multiboot2 Header MUST be the absolute first section and 8-byte aligned */
+    .multiboot_header : ALIGN(8)
+    {
+        KEEP(*(.multiboot_header))
+    }
+
+    /* Xen Notes (If you really need them for bare-metal, keep them here) */
     .note.Xen : ALIGN(4)
     {
         KEEP(*(.note.Xen))
-    }
-
-    .multiboot_header : ALIGN(4K)
-    {
-        KEEP(*(.multiboot_header))
     }
 
     .text : ALIGN(4K)

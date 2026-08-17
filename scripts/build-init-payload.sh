@@ -38,6 +38,10 @@ compiler_repo_root() {
         printf '%s\n' "${HXNU_COMPILER_REPO}"
         return
     fi
+    if [ -d "${ROOT}/../Compilers/hxnu-rustc-compiler-x86_64" ]; then
+        printf '%s\n' "${ROOT}/../Compilers/hxnu-rustc-compiler-x86_64"
+        return
+    fi
     printf '%s\n' "${DEFAULT_COMPILER_REPO}"
 }
 
@@ -78,6 +82,10 @@ resolve_hxnu_cargo_runner() {
 
     local compiler_root
     compiler_root="$(compiler_repo_root)"
+    if [ -x "${compiler_root}/target/debug/hxnu-cargo" ] && hxnu_rustc_ready_for_binary "${compiler_root}/target/debug/hxnu-cargo"; then
+        printf 'binary:%s\n' "${compiler_root}/target/debug/hxnu-cargo"
+        return 0
+    fi
     if [ -f "${compiler_root}/Cargo.toml" ] && [ -f "${compiler_root}/crates/hxnu-cargo/Cargo.toml" ]; then
         printf 'cargo-run:%s\n' "${compiler_root}"
         return 0
@@ -92,9 +100,11 @@ artifact_path() {
 
 build_with_hxnu_runner() {
     local runner="$1"
+    local rustflags="-C code-model=small -C relocation-model=static -C link-arg=-T${ROOT}/user/init-zero/linker.ld -C link-arg=--no-pie -C force-frame-pointers=yes"
     local -a args=(
         build
-        --manifest-path "${ROOT}/Cargo.toml"
+        --manifest-path "${ROOT}/user/init-zero/Cargo.toml"
+        --target-dir "${ROOT}/target"
         --release
         --target "${TARGET_TRIPLE}"
         -p "${PACKAGE_NAME}"
@@ -109,7 +119,7 @@ build_with_hxnu_runner() {
     case "${runner}" in
         binary:*)
             local binary="${runner#binary:}"
-            "${binary}" "${args[@]}"
+            RUSTFLAGS="${rustflags}" "${binary}" "${args[@]}"
             ;;
         cargo-run:*)
             local compiler_root="${runner#cargo-run:}"
@@ -117,7 +127,7 @@ build_with_hxnu_runner() {
             (
                 cd "${compiler_root}"
                 cargo build -p hxnu-rustc -p hxnu-cargo
-                "${hxnu_cargo_bin}" "${args[@]}"
+                RUSTFLAGS="${rustflags}" "${hxnu_cargo_bin}" "${args[@]}"
             )
             ;;
         *)

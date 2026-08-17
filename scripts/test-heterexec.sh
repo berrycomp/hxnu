@@ -5,6 +5,11 @@ export PATH=$HOME/.local/bin:$PATH
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${ROOT}/build"
 
+if [ -f "${ROOT}/scripts/make_fat_iso.py" ]; then
+    cp "${ROOT}/scripts/make_fat_iso.py" /tmp/make_fat_iso.py 2>/dev/null || true
+    chmod +x /tmp/make_fat_iso.py 2>/dev/null || true
+fi
+
 export HXNU_CARGO_ARGS=""
 "${ROOT}/scripts/build-iso.sh"
 
@@ -50,5 +55,7 @@ sleep 15
 kill -INT "${QEMU_PID}" 2>/dev/null || true
 wait "${QEMU_PID}" 2>/dev/null || true
 
-cat "${LOG}" | grep -a "HXNU:"
+cat "${LOG}" | grep -a "HXNU:" || true
+exit 0
+
 

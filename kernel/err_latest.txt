@@ -1,0 +1,606 @@
+warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2024 which implies `resolver = "3"`
+  |
+  = note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+  = note: to use the edition 2024 resolver, specify `workspace.resolver = "3"` in the workspace root's manifest
+  = note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> /home/eilhanzy/Projects/heterexec/src/topology.rs:1:1
+  |
+1 | #![no_std]
+  | ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> /home/eilhanzy/Projects/heterexec/src/lib.rs:86:5
+   |
+86 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `extern` fn uses type `fn()`, which is not FFI-safe
+  --> /home/eilhanzy/Projects/heterexec/src/lib.rs:76:165
+   |
+76 | ...y::SharedTopologyTree) -> fn() {
+   |                              ^^^^ not FFI-safe
+   |
+   = help: consider using an `extern fn(...) -> ...` function pointer instead
+   = note: this function pointer has Rust-specific calling convention
+   = note: `#[warn(improper_ctypes_definitions)]` on by default
+
+warning: `hps` (lib) generated 3 warnings
+    Checking hxnu-kernel v0.1.0 (/home/eilhanzy/Projects/hxnu/kernel)
+warning: the feature `lang_items` is internal to the compiler or standard library
+ --> kernel/src/main.rs:1:12
+  |
+1 | #![feature(lang_items)]
+  |            ^^^^^^^^^^
+  |
+  = note: using it is strongly discouraged
+  = note: `#[warn(internal_features)]` on by default
+
+warning: unused import: `CONTEXT_KIND_USER`
+  --> kernel/src/arch/x86_64/mod.rs:39:5
+   |
+39 |     CONTEXT_KIND_USER,
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `allocate_page_table_frame`, `ensure_region_mapped`, and `write_cr3`
+  --> kernel/src/arch/x86_64/mod.rs:46:108
+   |
+46 | ...rnel_page, map_kernel_region, ensure_region_mapped, allocate_page_table_frame, read_cr3, write_cr3, FLAG_USER_ACCESSIBLE, FLAG_WR...
+   |                                  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^            ^^^^^^^^^
+
+warning: unused import: `VmMapPlanEntry`
+  --> kernel/src/init_exec.rs:13:36
+   |
+13 | use crate::vfs::{ExecutableFormat, VmMapPlanEntry};
+   |                                    ^^^^^^^^^^^^^^
+
+warning: the `#![feature]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/lib.rs:1:1
+  |
+1 | #![feature(linkage)]
+  | ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/lib.rs:3:1
+  |
+3 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/topology.rs:1:1
+  |
+1 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/neoio/mod.rs:3:1
+  |
+3 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: unused variable: `hhdm_offset`
+   --> kernel/src/arch/x86_64/early_map.rs:165:34
+    |
+165 | pub fn allocate_page_table_frame(hhdm_offset: u64) -> Result<u64, MapError> {
+    |                                  ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_hhdm_offset`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:19:13
+   |
+19 |             asm!("hlt", options(nomem, nostack, preserves_flags));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/nvmp.rs:15:1
+   |
+15 | pub unsafe fn emergency_flush_to_hfs() -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:27:5
+   |
+27 |     asm!("cli", options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:46:9
+   |
+46 |         asm!("hlt", options(nomem, nostack, preserves_flags));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+ --> kernel/src/speaker.rs:9:5
+  |
+9 |     asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+  |
+  = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+ --> kernel/src/speaker.rs:8:1
+  |
+8 | unsafe fn outb(port: u16, val: u8) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/speaker.rs:16:5
+   |
+16 |     asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/speaker.rs:14:1
+   |
+14 | unsafe fn inb(port: u16) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning: variable does not need to be mutable
+  --> kernel/src/speaker.rs:42:13
+   |
+42 |         let mut tmp = inb(0x61);
+   |             ----^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/../../../heterexec/src/lib.rs:63:5
+   |
+63 |     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/../../../heterexec/src/lib.rs:62:1
+   |
+62 | unsafe fn outb(port: u16, val: u8) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/../../../heterexec/src/lib.rs:86:5
+   |
+86 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `bus`
+ --> kernel/src/neoio/iommu.rs:8:32
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                ^^^ help: if this is intentional, prefix it with an underscore: `_bus`
+
+warning: unused variable: `device`
+ --> kernel/src/neoio/iommu.rs:8:41
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_device`
+
+warning: unused variable: `function`
+ --> kernel/src/neoio/iommu.rs:8:53
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/neoio_bridge.rs:13:5
+   |
+13 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unreachable pattern
+   --> kernel/src/syscall.rs:334:9
+    |
+334 |         _ => SyscallOutcome::errno(ENOSYS),
+    |         ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> kernel/src/syscall.rs:334:9
+    |
+326 |         SyscallAbi::LinuxBootstrap => posix_compat::dispatch_linux_bootstrap(number, args),
+    |         -------------------------- matches some of the same values
+327 |         SyscallAbi::GhostBootstrap => posix_compat::dispatch_ghost_bootstrap(number, args),
+    |         -------------------------- matches some of the same values
+328 |         SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(number, args),
+    |         ------------------------------- matches some of the same values
+329 |         SyscallAbi::PosixLcl => {
+    |         -------------------- matches some of the same values
+...
+334 |         _ => SyscallOutcome::errno(ENOSYS),
+    |         ^ collectively making this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `console`
+   --> kernel/src/tty.rs:316:13
+    |
+316 |         let console = &self.consoles[active];
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_console`
+
+warning: unnecessary `unsafe` block
+   --> kernel/src/main.rs:698:17
+    |
+698 |                 unsafe {
+    |                 ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `thread_id`
+    --> kernel/src/main.rs:1018:22
+     |
+1018 | pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
+     |                      ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_thread_id`
+
+warning: unused variable: `is_gpu`
+    --> kernel/src/main.rs:1018:38
+     |
+1018 | pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
+     |                                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_gpu`
+
+warning: function `write_cr3` is never used
+   --> kernel/src/arch/x86_64/early_map.rs:111:8
+    |
+111 | pub fn write_cr3(value: u64) {
+    |        ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `path` is never read
+  --> kernel/src/init_exec.rs:57:5
+   |
+56 | struct ActivatedInitImage {
+   |        ------------------ field in this struct
+57 |     path: String,
+   |     ^^^^
+
+warning: fields `index`, `virtual_end`, `file_bytes`, `memory_bytes`, `readable`, and `executable` are never read
+  --> kernel/src/init_exec.rs:72:5
+   |
+71 | struct ActivatedSegment {
+   |        ---------------- fields in this struct
+72 |     index: usize,
+   |     ^^^^^
+73 |     virtual_start: u64,
+74 |     virtual_end: u64,
+   |     ^^^^^^^^^^^
+...
+77 |     file_bytes: u64,
+   |     ^^^^^^^^^^
+78 |     memory_bytes: u64,
+   |     ^^^^^^^^^^^^
+79 |     readable: bool,
+   |     ^^^^^^^^
+80 |     writable: bool,
+81 |     executable: bool,
+   |     ^^^^^^^^^^
+
+warning: fields `format`, `image_type`, `machine`, `entry_segment_index`, and `entry_segment_map_offset` are never read
+  --> kernel/src/init_exec.rs:88:9
+   |
+86 | pub struct InitExecSummary {
+   |            --------------- fields in this struct
+87 |     pub armed: bool,
+88 |     pub format: ExecutableFormat,
+   |         ^^^^^^
+89 |     pub image_type: u16,
+   |         ^^^^^^^^^^
+90 |     pub machine: u16,
+   |         ^^^^^^^
+...
+97 |     pub entry_segment_index: usize,
+   |         ^^^^^^^^^^^^^^^^^^^
+98 |     pub entry_segment_map_offset: u64,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `InitExecSummary` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `render_status` is never used
+   --> kernel/src/init_exec.rs:191:8
+    |
+191 | pub fn render_status() -> String {
+    |        ^^^^^^^^^^^^^
+
+warning: function `yes_no` is never used
+   --> kernel/src/init_exec.rs:392:10
+    |
+392 | const fn yes_no(value: bool) -> &'static str {
+    |          ^^^^^^
+
+warning: constant `SUPERNOVA_MMIO_BASE` is never used
+  --> kernel/src/supernova.rs:13:7
+   |
+13 | const SUPERNOVA_MMIO_BASE: *mut SupernovaHardware = 0xFE00_0000 as *mut SupernovaHardware;
+   |       ^^^^^^^^^^^^^^^^^^^
+
+warning: fields `id` and `workload_type` are never read
+  --> kernel/src/hsched.rs:12:5
+   |
+11 | pub struct AsymmetricTask {
+   |            -------------- fields in this struct
+12 |     id: u32,
+   |     ^^
+13 |     workload_type: WorkloadType,
+   |     ^^^^^^^^^^^^^
+
+warning: constant `INIT_NODE` is never used
+  --> kernel/src/hsched.rs:78:15
+   |
+78 |         const INIT_NODE: Node = Node { sequence: AtomicUsize::new(0), data: AtomicU64::new(0) };
+   |               ^^^^^^^^^
+
+warning: struct `Framebuffer` is never constructed
+   --> kernel/src/limine.rs:174:12
+    |
+174 | pub struct Framebuffer {
+    |            ^^^^^^^^^^^
+
+warning: function `framebuffer` is never used
+   --> kernel/src/limine.rs:437:8
+    |
+437 | pub fn framebuffer() -> Option<Framebuffer> {
+    |        ^^^^^^^^^^^
+
+warning: function `clone_space` is never used
+  --> kernel/src/mm/vmm.rs:12:8
+   |
+12 | pub fn clone_space(parent_pml4: u64) -> u64 {
+   |        ^^^^^^^^^^^
+
+warning: fields `flags`, `fd`, and `offset` are never read
+  --> kernel/src/mm/vmm.rs:84:9
+   |
+80 | pub struct Vma {
+   |            --- fields in this struct
+...
+84 |     pub flags: u64,
+   |         ^^^^^
+85 |     pub fd: i64,
+   |         ^^
+86 |     pub offset: u64,
+   |         ^^^^^^
+   |
+   = note: `Vma` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `find_free_vma_address` is never used
+   --> kernel/src/mm/vmm.rs:140:4
+    |
+140 | fn find_free_vma_address(vmm: &ProcessVmm, len: u64) -> u64 {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `sys_brk` is never used
+   --> kernel/src/mm/vmm.rs:157:8
+    |
+157 | pub fn sys_brk(addr: u64) -> u64 {
+    |        ^^^^^^^
+
+warning: function `sys_mmap` is never used
+   --> kernel/src/mm/vmm.rs:170:8
+    |
+170 | pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: i64, offset: u64) -> i64 {
+    |        ^^^^^^^^
+
+warning: function `sys_mprotect` is never used
+   --> kernel/src/mm/vmm.rs:196:8
+    |
+196 | pub fn sys_mprotect(addr: u64, len: u64, prot: u64) -> i64 {
+    |        ^^^^^^^^^^^^
+
+warning: function `sys_munmap` is never used
+   --> kernel/src/mm/vmm.rs:210:8
+    |
+210 | pub fn sys_munmap(addr: u64, len: u64) -> i64 {
+    |        ^^^^^^^^^^
+
+warning: function `halt_forever` is never used
+  --> kernel/src/panic.rs:68:4
+   |
+68 | fn halt_forever() -> ! {
+   |    ^^^^^^^^^^^^
+
+warning: field `exit_status` is never read
+   --> kernel/src/sched.rs:166:9
+    |
+153 | struct Thread {
+    |        ------ field in this struct
+...
+166 |     pub exit_status: i32,
+    |         ^^^^^^^^^^^
+    |
+    = note: `Thread` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: methods `fork_current_thread` and `reap_child` are never used
+   --> kernel/src/sched.rs:722:12
+    |
+252 | impl Scheduler {
+    | -------------- methods in this implementation
+...
+722 |     pub fn fork_current_thread(&mut self) -> Result<u64, SchedulerError> {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+769 |     pub fn reap_child(&mut self, parent_pid: u64, target_pid: i64) -> Result<(u64, i32), bool> {
+    |            ^^^^^^^^^^
+
+warning: function `current_parent_process_id` is never used
+   --> kernel/src/sched.rs:982:8
+    |
+982 | pub fn current_parent_process_id() -> u64 {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `sys_fork_current_thread` is never used
+    --> kernel/src/sched.rs:1011:8
+     |
+1011 | pub fn sys_fork_current_thread() -> Result<u64, SchedulerError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `sys_reap_child` is never used
+    --> kernel/src/sched.rs:1015:8
+     |
+1015 | pub fn sys_reap_child(parent_pid: u64, target_pid: i64) -> Result<(u64, i32), bool> {
+     |        ^^^^^^^^^^^^^^
+
+warning: fields `number` and `args` are never read
+ --> kernel/src/syscall.rs:7:9
+  |
+6 | pub struct LclMessage {
+  |            ---------- fields in this struct
+7 |     pub number: u64,
+  |         ^^^^^^
+8 |     pub args: [u64; 6],
+  |         ^^^^
+
+warning: field `tail` is never read
+  --> kernel/src/syscall.rs:13:9
+   |
+10 | pub struct LclQueue {
+   |            -------- field in this struct
+...
+13 |     pub tail: usize,
+   |         ^^^^
+
+warning: constant `MAX_OPEN_FILES` is never used
+   --> kernel/src/syscall.rs:102:7
+    |
+102 | const MAX_OPEN_FILES: usize = 64;
+    |       ^^^^^^^^^^^^^^
+
+warning: variant `PosixLcl` is never constructed
+   --> kernel/src/syscall.rs:122:5
+    |
+117 | pub enum SyscallAbi {
+    |          ---------- variant in this enum
+...
+122 |     PosixLcl,
+    |     ^^^^^^^^
+    |
+    = note: `SyscallAbi` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: fields `path` and `path_len` are never read
+   --> kernel/src/syscall.rs:265:9
+    |
+263 | pub struct OpenFile {
+    |            -------- fields in this struct
+264 |     pub ref_count: usize,
+265 |     pub path: [u8; 128],
+    |         ^^^^
+266 |     pub path_len: usize,
+    |         ^^^^^^^^
+    |
+    = note: `OpenFile` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `syscall_handler` is never used
+   --> kernel/src/syscall.rs:298:8
+    |
+298 | pub fn syscall_handler(trap_frame: &mut crate::arch::x86_64::SyscallRegisterFrame) -> SyscallOutcome {
+    |        ^^^^^^^^^^^^^^^
+
+warning: struct `stat` is never constructed
+   --> kernel/src/syscall.rs:341:16
+    |
+341 |     pub struct stat {
+    |                ^^^^
+
+warning: function `sys_stat` is never used
+   --> kernel/src/syscall.rs:381:12
+    |
+381 |     pub fn sys_stat(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^
+
+warning: function `sys_lseek` is never used
+   --> kernel/src/syscall.rs:417:12
+    |
+417 |     pub fn sys_lseek(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^^
+
+warning: function `sys_ioctl` is never used
+   --> kernel/src/syscall.rs:451:12
+    |
+451 |     pub fn sys_ioctl(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^^
+
+warning: function `sys_pipe` is never used
+   --> kernel/src/syscall.rs:463:12
+    |
+463 |     pub fn sys_pipe(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^
+
+warning: function `sys_dup` is never used
+   --> kernel/src/syscall.rs:522:12
+    |
+522 |     pub fn sys_dup(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^
+
+warning: function `sys_dup2` is never used
+   --> kernel/src/syscall.rs:554:12
+    |
+554 |     pub fn sys_dup2(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^
+
+warning: function `sys_fork` is never used
+   --> kernel/src/syscall.rs:591:12
+    |
+591 |     pub fn sys_fork(_args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^
+
+warning: function `sys_wait4` is never used
+   --> kernel/src/syscall.rs:598:12
+    |
+598 |     pub fn sys_wait4(args: [u64; 6]) -> SyscallOutcome {
+    |            ^^^^^^^^^
+
+warning: fields `byte` and `style` are never read
+  --> kernel/src/tty.rs:21:9
+   |
+20 | pub struct ConsoleGlyph {
+   |            ------------ fields in this struct
+21 |     pub byte: u8,
+   |         ^^^^
+22 |     pub style: ConsoleStyle,
+   |         ^^^^^
+   |
+   = note: `ConsoleGlyph` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: direct cast of function item into an integer
+   --> kernel/src/arch/x86_64/interrupts.rs:303:84
+    |
+303 |     crate::arch::x86_64::cpu::write_msr(IA32_LSTAR, hxnu_x86_64_fast_syscall_entry as u64);
+    |                                                                                    ^^^^^^
+    |
+    = note: `#[warn(function_casts_as_integer)]` on by default
+help: first cast to a pointer `as *const ()`
+    |
+303 |     crate::arch::x86_64::cpu::write_msr(IA32_LSTAR, hxnu_x86_64_fast_syscall_entry as *const () as u64);
+    |                                                                                    ++++++++++++
+
+warning: `extern` fn uses type `fn()`, which is not FFI-safe
+  --> kernel/src/../../../heterexec/src/lib.rs:76:165
+   |
+76 | ...ern "C" fn() -> *const topology::SharedTopologyTree) -> fn() {
+   |                                                            ^^^^ not FFI-safe
+   |
+   = help: consider using an `extern fn(...) -> ...` function pointer instead
+   = note: this function pointer has Rust-specific calling convention
+   = note: `#[warn(improper_ctypes_definitions)]` on by default
+
+For more information about this error, try `rustc --explain E0133`.
+warning: `hxnu-kernel` (bin "hxnu-kernel") generated 68 warnings (run `cargo fix --bin "hxnu-kernel" -p hxnu-kernel` to apply 16 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s

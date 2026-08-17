@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// TCOL-COM (Tile Conservative Open License - Commercial IP)
+// This file contains hardware IP simulation logic governed by the TCOL-COM license.
 
 /// The FSM State for hardware drivers
 #[derive(PartialEq)]
@@ -31,7 +31,7 @@ pub struct UartRegs {
 }
 
 #[cfg(target_arch = "aarch64")]
-static mut ALVEO_ADDR: u32 = 0xFDAB0000;
+const ALVEO_ADDR: usize = 0xFEB50000;
 
 /// Alveo 5G Modem Driver Struct
 pub struct AlveoDriver {
@@ -50,7 +50,7 @@ impl AlveoDriver {
     #[cfg(target_arch = "aarch64")]
     pub fn init(&mut self) -> FsmState {
         self.state = FsmState::Polling;
-        let regs = unsafe { core::ptr::read_volatile(&ALVEO_ADDR) as *mut UartRegs };
+        let regs = ALVEO_ADDR as *mut UartRegs;
         unsafe {
             // Set lcr to DLAB (0x80)
             core::ptr::write_volatile(&mut (*regs).lcr, 0x00000080);

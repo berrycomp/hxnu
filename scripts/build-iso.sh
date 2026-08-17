@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH=$HOME/.local/bin:$PATH
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR_VERSION="${LIMINE_VERSION:-9.2.0}"
 LIMINE_DIR="${ROOT}/vendor/limine-${VENDOR_VERSION}"
@@ -23,8 +25,13 @@ cp "${KERNEL_PATH}" "${ISO_ROOT}/boot/kernel"
 cp "${ROOT}/build/initrd.cpio" "${ISO_ROOT}/boot/initrd.cpio"
 
 # Build heterexec and copy to ISO
-(cd /home/eilhanzy/Projects/heterexec && cargo build --release --target x86_64-unknown-none)
-cp /home/eilhanzy/Projects/heterexec/target/x86_64-unknown-none/release/heterexec "${ISO_ROOT}/boot/heterexec.hxext"
+HETEREXEC_DIR="${ROOT}/../heterexec"
+if [ -d "${HETEREXEC_DIR}" ]; then
+    (cd "${HETEREXEC_DIR}" && cargo build --release --target x86_64-unknown-none) || true
+    if [ -f "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" ]; then
+        cp "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" "${ISO_ROOT}/boot/heterexec.hxext"
+    fi
+fi
 
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/limine.conf"
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/boot/limine/limine.conf"

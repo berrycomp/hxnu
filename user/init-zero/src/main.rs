@@ -1,3 +1,6 @@
+// TCOL / HPL (HXNU Public License)
+// This file is strictly governed by the HXNU Public License (HPL).
+
 #![no_std]
 #![no_main]
 
@@ -14,6 +17,7 @@ const HXNU_SYS_PROCESS_SELF: u64 = 0x484e_0003;
 const HXNU_SYS_UPTIME_NSEC: u64 = 0x484e_0004;
 const HXNU_SYS_SCHED_YIELD: u64 = 0x484e_0005;
 const HXNU_SYS_ABI_VERSION: u64 = 0x484e_0006;
+const HXNU_SYS_SPAWN: u64 = 0x484e_000c;
 #[cfg(feature = "exit-immediate")]
 const HXNU_SYS_EXIT_GROUP: u64 = 0x484e_00ff;
 
@@ -45,6 +49,26 @@ pub extern "C" fn _start() -> ! {
     );
     log_bytes(line.as_bytes());
 
+    let path = b"/bin/rustybox\0";
+    let arg0 = b"rustybox\0";
+    let arg1 = b"sh\0";
+    let arg2 = b"-c\0";
+    let arg3 = b"echo 'HXNU: rustybox integration online' && rustybox ls -la /\0";
+
+    let argv_ptrs: [*const u8; 4] = [
+        arg0.as_ptr(),
+        arg1.as_ptr(),
+        arg2.as_ptr(),
+        arg3.as_ptr(),
+    ];
+
+    let _ = syscall3(
+        HXNU_SYS_SPAWN,
+        path.as_ptr() as u64,
+        argv_ptrs.as_ptr() as u64,
+        4,
+    );
+
     maybe_trigger_fault_smoke();
     maybe_trigger_exit_smoke();
 
@@ -73,6 +97,10 @@ fn syscall1(number: u64, arg0: u64) -> i64 {
 
 fn syscall2(number: u64, arg0: u64, arg1: u64) -> i64 {
     syscall(number, [arg0, arg1, 0, 0, 0, 0])
+}
+
+fn syscall3(number: u64, arg0: u64, arg1: u64, arg2: u64) -> i64 {
+    syscall(number, [arg0, arg1, arg2, 0, 0, 0])
 }
 
 fn syscall(number: u64, args: [u64; 6]) -> i64 {

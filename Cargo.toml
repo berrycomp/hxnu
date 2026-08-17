@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "kernel",
+    "boot/gboot",
 ]
 resolver = "2"
 

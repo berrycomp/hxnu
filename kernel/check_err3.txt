@@ -1,0 +1,533 @@
+warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2024 which implies `resolver = "3"`
+  |
+  = note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+  = note: to use the edition 2024 resolver, specify `workspace.resolver = "3"` in the workspace root's manifest
+  = note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> /home/eilhanzy/Projects/heterexec/src/topology.rs:1:1
+  |
+1 | #![no_std]
+  | ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> /home/eilhanzy/Projects/heterexec/src/lib.rs:86:5
+   |
+86 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `extern` fn uses type `fn()`, which is not FFI-safe
+  --> /home/eilhanzy/Projects/heterexec/src/lib.rs:76:165
+   |
+76 | ...y::SharedTopologyTree) -> fn() {
+   |                              ^^^^ not FFI-safe
+   |
+   = help: consider using an `extern fn(...) -> ...` function pointer instead
+   = note: this function pointer has Rust-specific calling convention
+   = note: `#[warn(improper_ctypes_definitions)]` on by default
+
+warning: `hps` (lib) generated 3 warnings
+    Checking hxnu-kernel v0.1.0 (/home/eilhanzy/Projects/hxnu/kernel)
+error[E0658]: lang items are subject to change
+    --> kernel/src/main.rs:1083:1
+     |
+1083 | #[lang = "eh_personality"]
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: add `#![feature(lang_items)]` to the crate attributes to enable
+     = note: this compiler was built on 2026-03-19; consider upgrading it if it is out of date
+
+warning: unused import: `CONTEXT_KIND_USER`
+  --> kernel/src/arch/x86_64/mod.rs:39:5
+   |
+39 |     CONTEXT_KIND_USER,
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `allocate_page_table_frame`, `ensure_region_mapped`, and `write_cr3`
+  --> kernel/src/arch/x86_64/mod.rs:46:108
+   |
+46 | ...rnel_page, map_kernel_region, ensure_region_mapped, allocate_page_table_frame, read_cr3, write_cr3, FLAG_USER_ACCESSIBLE, FLAG_WR...
+   |                                  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^            ^^^^^^^^^
+
+warning: unused import: `VmMapPlanEntry`
+  --> kernel/src/init_exec.rs:13:36
+   |
+13 | use crate::vfs::{ExecutableFormat, VmMapPlanEntry};
+   |                                    ^^^^^^^^^^^^^^
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1022:3
+     |
+1022 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1022 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1030:3
+     |
+1030 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1030 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1038:3
+     |
+1038 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1038 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1050:3
+     |
+1050 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1050 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1062:3
+     |
+1062 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1062 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1067:3
+     |
+1067 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1067 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1078:3
+     |
+1078 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1078 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: unsafe attribute used without unsafe
+    --> kernel/src/main.rs:1084:3
+     |
+1084 | #[no_mangle]
+     |   ^^^^^^^^^ usage of unsafe attribute
+     |
+help: wrap the attribute in `unsafe(...)`
+     |
+1084 | #[unsafe(no_mangle)]
+     |   +++++++         +
+
+error: `#[no_mangle]` cannot be used on internal language items
+    --> kernel/src/main.rs:1084:1
+     |
+1084 | #[no_mangle]
+     | ^^^^^^^^^^^^
+1085 | pub extern "C" fn rust_eh_personality() {
+     | --------------------------------------- should be the internal language item
+     |
+     = note: Rustc requires this item to have a specific mangled name.
+     = note: If you are trying to prevent mangling to ease debugging, many
+     = note: debuggers support a command such as `rbreak rust_eh_personality` to
+     = note: match `.*rust_eh_personality.*` instead of `break rust_eh_personality` on a specific name
+
+warning: the `#![feature]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/lib.rs:1:1
+  |
+1 | #![feature(linkage)]
+  | ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/lib.rs:3:1
+  |
+3 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/../../../heterexec/src/topology.rs:1:1
+  |
+1 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: the `#![no_std]` attribute can only be used at the crate root
+ --> kernel/src/neoio/mod.rs:3:1
+  |
+3 | #![no_std]
+  | ^^^^^^^^^^
+
+warning: unused variable: `hhdm_offset`
+   --> kernel/src/arch/x86_64/early_map.rs:165:34
+    |
+165 | pub fn allocate_page_table_frame(hhdm_offset: u64) -> Result<u64, MapError> {
+    |                                  ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_hhdm_offset`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:19:13
+   |
+19 |             asm!("hlt", options(nomem, nostack, preserves_flags));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/nvmp.rs:15:1
+   |
+15 | pub unsafe fn emergency_flush_to_hfs() -> ! {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:27:5
+   |
+27 |     asm!("cli", options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/nvmp.rs:46:9
+   |
+46 |         asm!("hlt", options(nomem, nostack, preserves_flags));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+ --> kernel/src/speaker.rs:9:5
+  |
+9 |     asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+  |
+  = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+ --> kernel/src/speaker.rs:8:1
+  |
+8 | unsafe fn outb(port: u16, val: u8) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/speaker.rs:16:5
+   |
+16 |     asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/speaker.rs:14:1
+   |
+14 | unsafe fn inb(port: u16) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning: variable does not need to be mutable
+  --> kernel/src/speaker.rs:42:13
+   |
+42 |         let mut tmp = inb(0x61);
+   |             ----^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> kernel/src/../../../heterexec/src/lib.rs:63:5
+   |
+63 |     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of inline assembly
+   |
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> kernel/src/../../../heterexec/src/lib.rs:62:1
+   |
+62 | unsafe fn outb(port: u16, val: u8) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/../../../heterexec/src/lib.rs:86:5
+   |
+86 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `bus`
+ --> kernel/src/neoio/iommu.rs:8:32
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                ^^^ help: if this is intentional, prefix it with an underscore: `_bus`
+
+warning: unused variable: `device`
+ --> kernel/src/neoio/iommu.rs:8:41
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_device`
+
+warning: unused variable: `function`
+ --> kernel/src/neoio/iommu.rs:8:53
+  |
+8 | pub fn reconfigure_iommu_group(bus: u8, device: u8, function: u8) {
+  |                                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/neoio_bridge.rs:13:5
+   |
+13 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unreachable pattern
+   --> kernel/src/syscall.rs:301:9
+    |
+301 |         _ => SyscallOutcome::errno(ENOSYS),
+    |         ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> kernel/src/syscall.rs:301:9
+    |
+294 |         SyscallAbi::LinuxBootstrap => posix_compat::dispatch_linux_bootstrap(number, args),
+    |         -------------------------- matches some of the same values
+295 |         SyscallAbi::GhostBootstrap => posix_compat::dispatch_ghost_bootstrap(number, args),
+    |         -------------------------- matches some of the same values
+296 |         SyscallAbi::HxnuNativeBootstrap => dispatch_hxnu_bootstrap(number, args),
+    |         ------------------------------- matches some of the same values
+297 |         SyscallAbi::PosixLcl => {
+    |         -------------------- matches some of the same values
+...
+301 |         _ => SyscallOutcome::errno(ENOSYS),
+    |         ^ collectively making this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `console`
+   --> kernel/src/tty.rs:316:13
+    |
+316 |         let console = &self.consoles[active];
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_console`
+
+warning: unnecessary `unsafe` block
+   --> kernel/src/main.rs:697:17
+    |
+697 |                 unsafe {
+    |                 ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `thread_id`
+    --> kernel/src/main.rs:1017:22
+     |
+1017 | pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
+     |                      ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_thread_id`
+
+warning: unused variable: `is_gpu`
+    --> kernel/src/main.rs:1017:38
+     |
+1017 | pub fn test_hps_hook(thread_id: u64, is_gpu: bool) {
+     |                                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_gpu`
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1025:9
+     |
+1025 |         *dest.add(i) = *src.add(i);
+     |         ^^^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+    --> kernel/src/main.rs:1023:1
+     |
+1023 | pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::mut_ptr::<impl *mut T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1025:10
+     |
+1025 |         *dest.add(i) = *src.add(i);
+     |          ^^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1025:24
+     |
+1025 |         *dest.add(i) = *src.add(i);
+     |                        ^^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::const_ptr::<impl *const T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1025:25
+     |
+1025 |         *dest.add(i) = *src.add(i);
+     |                         ^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1033:9
+     |
+1033 |         *s.add(i) = c as u8;
+     |         ^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+    --> kernel/src/main.rs:1031:1
+     |
+1031 | pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::mut_ptr::<impl *mut T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1033:10
+     |
+1033 |         *s.add(i) = c as u8;
+     |          ^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1041:17
+     |
+1041 |         let a = *s1.add(i);
+     |                 ^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+    --> kernel/src/main.rs:1039:1
+     |
+1039 | pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::const_ptr::<impl *const T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1041:18
+     |
+1041 |         let a = *s1.add(i);
+     |                  ^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1042:17
+     |
+1042 |         let b = *s2.add(i);
+     |                 ^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::const_ptr::<impl *const T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1042:18
+     |
+1042 |         let b = *s2.add(i);
+     |                  ^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1054:13
+     |
+1054 |             *dest.add(i) = *src.add(i);
+     |             ^^^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+    --> kernel/src/main.rs:1051:1
+     |
+1051 | pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::mut_ptr::<impl *mut T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1054:14
+     |
+1054 |             *dest.add(i) = *src.add(i);
+     |              ^^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1054:28
+     |
+1054 |             *dest.add(i) = *src.add(i);
+     |                            ^^^^^^^^^^^ dereference of raw pointer
+     |
+     = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `core::ptr::const_ptr::<impl *const T>::add` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1054:29
+     |
+1054 |             *dest.add(i) = *src.add(i);
+     |                             ^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `memcpy` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1057:9
+     |
+1057 |         memcpy(dest, src, n);
+     |         ^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+warning[E0133]: call to unsafe function `memcmp` is unsafe and requires unsafe block
+    --> kernel/src/main.rs:1064:5
+     |
+1064 |     memcmp(s1, s2, n)
+     |     ^^^^^^^^^^^^^^^^^ call to unsafe function
+     |
+     = note: consult the function's documentation for information on how to avoid undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+    --> kernel/src/main.rs:1063:1
+     |
+1063 | pub unsafe extern "C" fn bcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+
+Some errors have detailed explanations: E0133, E0658.
+For more information about an error, try `rustc --explain E0133`.
+warning: `hxnu-kernel` (bin "hxnu-kernel") generated 41 warnings
+error: could not compile `hxnu-kernel` (bin "hxnu-kernel") due to 10 previous errors; 41 warnings emitted

@@ -1,0 +1,15 @@
+# TCOL v1.1 / HPL (HXNU Public License)
+# This file is strictly governed by the Tile Conservative Open License (TCOL v1.1).
+# Cargo configuration for G-Boot AArch64 bare-metal target (aarch64-hxnu-none)
+
+[build]
+target = "aarch64-hxnu-none.json"
+rustflags = [
+    "-C", "link-arg=-L/mnt/KINGSTON/Berturk/Projects/hxnu/boot/gboot",
+    "-C", "link-arg=-L/mnt/KINGSTON/Berturk/Projects/hxnu/boot/gboot/scripts",
+    "-C", "link-arg=-Tscripts/linker_rk3588.ld",
+]
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+json-target-spec = true

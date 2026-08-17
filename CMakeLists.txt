@@ -1,5 +1,5 @@
-# TCOL / HPL (HXNU Public License)
-# This file is strictly governed by the HXNU Public License (HPL).
+# TCOL v1.1 / HPL (HXNU Public License)
+# This file is strictly governed by the Tile Conservative Open License (TCOL v1.1).
 
 cmake_minimum_required(VERSION 3.20)
 project(HXNU_Kernel LANGUAGES C CXX)
@@ -35,7 +35,7 @@ add_custom_command(
         -C relocation-model=static
         ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs 
         -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs
     COMMENT "Compiling: HXNU Kernel (Cargo bypassed, absolute memory linker active)."
 )
 
@@ -49,38 +49,70 @@ add_custom_command(
     COMMENT "Linking: G-Boot Kexec Sequential Memory Layout Applied."
 )
 
-option(GBOOT_TARGET_KERNEL "Target Kernel (HXNU or LINUX)" "HXNU")
+# =============================================================================
+# G-Boot AArch64 Bare-Metal Payload Target (RK3588S / aarch64-hxnu-none)
+# =============================================================================
 
-if(GBOOT_TARGET_KERNEL STREQUAL "LINUX")
-    set(GBOOT_CFG "--cfg" "feature=\"load_linux\"")
+set(GBOOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/boot/gboot")
+set(GBOOT_TARGET_SPEC "${GBOOT_DIR}/aarch64-hxnu-none.json")
+set(GBOOT_LINKER_SCRIPT "${GBOOT_DIR}/scripts/linker_rk3588.ld")
+set(GBOOT_CARGO_TOML "${GBOOT_DIR}/Cargo.toml")
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CARGO_BUILD_FLAG "")
+    set(GBOOT_CARGO_OUT_DIR "${GBOOT_DIR}/target/aarch64-hxnu-none/debug")
 else()
-    set(GBOOT_CFG "--cfg" "feature=\"load_hxnu\"")
+    set(CARGO_BUILD_FLAG "--release")
+    set(GBOOT_CARGO_OUT_DIR "${GBOOT_DIR}/target/aarch64-hxnu-none/release")
 endif()
 
+set(GBOOT_CARGO_ELF "${GBOOT_CARGO_OUT_DIR}/gboot")
+set(GBOOT_FINAL_ELF "${CMAKE_CURRENT_BINARY_DIR}/gboot.elf")
+set(GBOOT_FINAL_BIN "${CMAKE_CURRENT_BINARY_DIR}/gboot.bin")
+
+find_program(OBJCOPY_BIN
+    NAMES rust-objcopy aarch64-linux-gnu-objcopy llvm-objcopy objcopy
+    HINTS "$ENV{HOME}/.cargo/bin" "/usr/bin" "/usr/local/bin"
+)
+
+if(NOT OBJCOPY_BIN)
+    message(WARNING "Cross-arch objcopy not found! Defaulting to 'rust-objcopy'.")
+    set(OBJCOPY_BIN "rust-objcopy")
+endif()
+
+message(STATUS "G-Boot payload extractor tool: ${OBJCOPY_BIN}")
+
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
-    COMMAND ${RUST_COMPILER} 
-        --edition 2021 
-        --target ${KERNEL_TARGET} 
-        --crate-type staticlib 
-        -C opt-level=3 
-        -C panic=abort
-        -C relocation-model=static
-        ${GBOOT_CFG}
-        ${CMAKE_CURRENT_SOURCE_DIR}/boot/gboot/src/main.rs 
-        -o ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/boot/gboot/src/main.rs
-    COMMENT "Compiling: G-Boot Bootloader (Target: ${GBOOT_TARGET_KERNEL})"
+    OUTPUT ${GBOOT_CARGO_ELF}
+    COMMAND ${CMAKE_COMMAND} -E env "RUSTC_BOOTSTRAP=1"
+        cargo build ${CARGO_BUILD_FLAG}
+        --manifest-path ${GBOOT_CARGO_TOML}
+        --target-dir ${GBOOT_DIR}/target
+        -Z build-std=core,compiler_builtins
+        --target ${GBOOT_TARGET_SPEC}
+    WORKING_DIRECTORY ${GBOOT_DIR}
+    DEPENDS
+        ${GBOOT_CARGO_TOML}
+        ${GBOOT_TARGET_SPEC}
+        ${GBOOT_LINKER_SCRIPT}
+        ${GBOOT_DIR}/src/main.rs
+        ${GBOOT_DIR}/src/rk3588_regs.rs
+        ${GBOOT_DIR}/src/pcie_ep.rs
+        ${GBOOT_DIR}/src/handover.rs
+    COMMENT "Compiling: G-Boot AArch64 Bare-Metal Payload (aarch64-hxnu-none)"
     VERBATIM
 )
 
-add_custom_target(gboot ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/gboot.o)
-
 add_custom_command(
-    TARGET gboot POST_BUILD
-    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/gboot.elf ${CMAKE_CURRENT_BINARY_DIR}/gboot.o
-    COMMENT "Linking: G-Boot ELF Generated."
+    OUTPUT ${GBOOT_FINAL_ELF} ${GBOOT_FINAL_BIN}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GBOOT_CARGO_ELF} ${GBOOT_FINAL_ELF}
+    COMMAND ${OBJCOPY_BIN} -O binary ${GBOOT_FINAL_ELF} ${GBOOT_FINAL_BIN}
+    DEPENDS ${GBOOT_CARGO_ELF}
+    COMMENT "Extracting: Flashable G-Boot Binary Payload (gboot.bin) via ${OBJCOPY_BIN}"
+    VERBATIM
 )
+
+add_custom_target(gboot ALL DEPENDS ${GBOOT_FINAL_ELF} ${GBOOT_FINAL_BIN})
 
 # Linux Compatibility Layer (LCL) Module
 add_custom_command(
@@ -153,6 +185,3 @@ add_custom_command(
 )
 
 add_custom_target(heterexec ALL DEPENDS ${HETEREXEC_OUTPUT})
-
-
-
