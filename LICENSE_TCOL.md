@@ -74,7 +74,7 @@ The Neonix/HXNU Ecosystem is strictly designed under a deterministic, zero-trust
 If any provision of this License is held to be unenforceable or invalid, that provision will be enforced to the maximum extent possible, and the other provisions will remain in full force and effect.
 
 ## 13. ENTIRE AGREEMENT
-This License represents the complete agreement concerning the subject matter hereof. It overrides and supersedes all prior agreements or understandings. No modifications to this License are valid unless explicitly sanctioned in writing by BerryComp Labs.
+This License represents the complete agreement concerning the subject matter hereof. It overrides and supersedes all prior agreements or understandings. No modifications to this License are valid unless explicitly sanctioned in writing by Middle Eastern Calculation Machinary Ltd.
 
 ---
 **END OF TERMS AND CONDITIONS**
