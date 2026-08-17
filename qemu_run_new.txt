@@ -1,0 +1,118 @@
+[0.000112406] HXNU: x86_64 early bootstrap
+[0.002648608] HXNU: log clock source = tsc-fallback (estimated)
+[0.003489359] HXNU: Limine protocol handshake ok
+[0.004034591] HXNU: HHDM offset = 0xffff800000000000
+[0.005222920] HXNU: framebuffer disabled for initrd minimalism, loading from /boot instead
+[0.006258698] HXNU: tty console online id=0 outputs=1 framebuffer=no vcs=4 geometry=80x25
+[0.007376727] HXNU: memmap entries = 21
+[0.007883812] HXNU: first usable region = base 0x0000000000052000, size 308 KiB
+[0.008948006] HXNU: usable memory = 518708 KiB
+[0.009513921] HXNU: frame regions = 4
+[0.009934907] HXNU: allocatable frames = 129600
+[0.010452315] HXNU: allocatable memory = 518400 KiB
+[0.011144141] HXNU: bootstrap frame = 0x0000000000100000
+[0.011773363] HXNU: allocated frames = 1
+[0.012353375] HXNU: heap start = 0xffff800000101000
+[0.012918069] HXNU: heap size = 8192 KiB
+[0.013436365] HXNU: boxed value = 0x48584e55
+[0.014553802] HXNU: vec len = 5, sum = 14
+[0.015044163] HXNU: heap used = 104 bytes
+[0.015506034] HXNU: heap allocations = 2
+[0.016488088] HXNU: x86_64 descriptor tables loaded cs=0x0028 ds=0x0030 es=0x0030 fs=0x0030 gs=0x0030 ss=0x0030
+[0.021146758] HXNU: cpu local-apic=yes x2apic=no tsc-deadline=no invariant-tsc=no nx=yes hypervisor=yes initial-apic-id=0
+[0.023284470] HXNU: cpuid vendor=amd vendor-id=AuthenticAMD max-basic=0xd max-extended=0x8000000a
+[0.025258901] HXNU: cpuid brand QEMU Virtual CPU version 2.5+
+[0.026523339] HXNU: cpuid topology leaf=0x0b x2apic-id=0 smt-shift=0 core-shift=0 threads/core=1 logical/package=1 smt-id=0 core-id=0 package-id=0
+[0.028927414] HXNU: cpuid topo level=0 type=smt shift=0 logical=1 x2apic-id=0
+[0.030093321] HXNU: cpuid topo level=1 type=core shift=0 logical=1 x2apic-id=0
+[0.031352024] HXNU: apic base=0xfee00000 enabled=yes x2apic-mode=no bsp=yes
+[0.093020627] HXNU: apic timer interrupt tick=1
+[0.094121303] HXNU: apic timer online vector=0x20 divide=16 initial-count=1000000 ticks=1
+[0.095630829] HXNU: acpi rsdp response @ 0x000f6500
+[0.098915689] HXNU: acpi online revision=0 oem=BOCHS rsdp=0x000f6500 root=RSDT @ 0x1ffe2344
+[0.100381962] HXNU: acpi tables total=5 valid=5 invalid=0 madt=yes fadt=yes
+[0.101692576] HXNU: acpi madt lapic=0xfee00000 flags=0x00000001 cpus-enabled=1/1 ioapics=1 iso=5 x2apic-cpus=0
+[0.103374448] HXNU: acpi cpu0 uid=0 apic=0 mode=xapic enabled=yes online-capable=no
+[0.104650726] HXNU: acpi ioapic0 id=0 addr=0xfec00000 gsi-base=0
+[0.105627489] HXNU: acpi iso0 source=0 gsi=2 flags=0x0000
+[0.107004148] HXNU: smp topology bsp-apic=0 bsp-index=0 cpus=1 enabled=1 online=1 aps=0 bringup-targets=0 x2apic=0
+[0.108762166] HXNU: smp current cpu0 uid=0 apic=0 mode=xapic bsp=yes online=yes
+[0.110115996] HXNU: acpi fadt revision=3 length=244 profile=unspecified sci=9 smi-cmd=0xb2
+[0.111530802] HXNU: acpi power reset=yes hw-reduced=no pm1a-ctl=0x604 pm1b-ctl=0x0
+[0.112905093] HXNU: acpi reset-reg space=system-io width=8 offset=0 access=0 addr=0xcf9 value=0x0f
+[0.114345577] HXNU: acpi boot-arch flags=0x0002 acpi-enable=0x02 acpi-disable=0x03
+[0.115792721] HXNU: procfs online directories=2 files=6 entries=8
+[0.116815956] HXNU: devfs online directories=2 nodes=8 entries=10
+[0.122099519] HXNU: initrd online modules=1 directories=2 files=5 entries=7 bytes=1951744 path=/boot/initrd.cpio label=initrd
+[0.124810509] HXNU: block online devices=1 partitions=0 bytes=1951744 mbr-devices=0 gpt-devices=0
+[0.126360624] HXNU: block device0 id=0 kind=initrd-archive name=initrd0 ro=yes sector-size=512 sectors=3812 bytes=1951744
+[0.128262498] HXNU: fat offline reason=no FAT16/32 partition found
+[0.129555389] HXNU: vfs online mounts=3 root-entries=3 directories=5
+[0.130625244] HXNU: Searching for .hxext and .hxmd modules...
+[0.131653474] DEBUG: vfs::read called on path=/boot
+[0.133542879] DEBUG: vfs::read called on path=/
+[0.135392213] HXNU: No .hxext or .hxmd modules found.
+[0.138205138] HXNU: init candidate path=/initrd/init mount=initrd format=elf size=647024 executable=yes
+[0.142368156] HXNU: init load-prep path=/initrd/init mount=initrd format=elf size=647024 executable=yes entry=0x0000000000202ad0 machine=0x003e type=0x0002 ph=9 load=4 load-base=0x0000000000200000 load-offset=0x0000000000000000 load-file=24179 load-mem=24571 load-w=2 load-x=1 align=4096 vm-map=4 vm-bytes=36864 vm-zero=392 vm-start=0x0000000000200000 vm-end=0x0000000000209000 interp=<none> interp-src=<none> interp-ok=no interp-arg=<none>
+[0.149161430] HXNU: init vm-map[0] idx=1 off=0x0000000000000000 vaddr=0x0000000000200000..0x0000000000201ac8 map=0x0000000000200000..0x0000000000202000 page-off=0 file=6856 mem=6856 zero=0 align=4096 perms=r--
+[0.152554700] HXNU: tty virtual consoles online active=tty0 total=4 geometry=80x25 switch-smoke=yes
+[0.154071330] HXNU: running exception self-test = breakpoint
+[0.155042025] HXNU: exception breakpoint rip=0xffffffff80004d2a rsp=0xffff80001fee2830
+[0.156344499] HXNU: breakpoint handler returned
+[0.157107624] DEBUG: activate_init_handoff started
+[0.157889434] DEBUG: heap stats 1: HeapStats { start: 18446603336222248960, size_bytes: 8388608, used_bytes: 4220, allocation_count: 11 }
+[0.160742245] DEBUG: prepare_init_load finished
+[0.161518875] DEBUG: calling build_activation
+[0.162287550] DEBUG: heap stats 2: HeapStats { start: 18446603336222248960, size_bytes: 8388608, used_bytes: 6156, allocation_count: 13 }
+[0.165481686] DEBUG: activate_init_handoff result=true
+[0.166544511] HXNU: init activation armed=yes entry=0x0000000000202ad0 vm=0x0000000000200000..0x0000000000209000 segments=4 bytes=36864 zero=392
+[0.185758907] HXNU: scheduler tick=1 current=kernel-bootstrap role=bootstrap id=1 switches=1
+[0.200363843] HXNU: scheduler tick=2 current=kernel-idle role=idle id=2 switches=2
+[0.215044629] HXNU: scheduler tick=3 current=kernel-bootstrap role=bootstrap id=1 switches=3
+[0.217155849] HXNU: scheduler bootstrap online source=local-apic-periodic vector=0x20 divide=16 initial-count=250000 ticks=3 threads=2 runqueue=1 current=kernel-bootstrap#1 pid=1 ppid=0 role=bootstrap switches=3 bootstrap-id=1 idle-id=2
+[0.222398749] HXNU: create_user_thread slot=2 init_stack_base=0xffffffff80054010 before_init rsp=0x0000000000000000
+[0.224219260] HXNU: init_user_thread stack_base=0xffffffff80054010 len=0x4000 aligned_end=0xffffffff80058010 rsp=0xffffffff80057f70 rsp0=0xffffffff80058010
+[0.226534794] HXNU: create_user_thread after_init rsp=0xffffffff80057f70
+[0.227818805] HXNU: init process spawned pid=3 thread_id=3 restart-count=0
+[0.230999288] HXNU: create_user_thread slot=3 init_stack_base=0xffffffff80058010 before_init rsp=0x0000000000000000
+[0.232709502] HXNU: init_user_thread stack_base=0xffffffff80058010 len=0x4000 aligned_end=0xffffffff8005c010 rsp=0xffffffff8005bf70 rsp0=0xffffffff8005c010
+[0.235010347] HXNU: create_user_thread after_init rsp=0xffffffff8005bf70
+[0.236113835] HXNU: test_hello process spawned pid=4 thread_id=4
+[0.237365767] HXNU: tty stats id=0 outputs=1 bytes=6686 lines=76
+[0.238417307] HXNU: scheduler stats threads=4 runqueue=3 current=kernel-bootstrap#1 pid=1 ppid=0 state=running ticks=3 switches=3 bootstrap-id=1 idle-id=2
+HXNU: linux syscall write() compatibility smoke
+[0.242398285] DEBUG: vfs::read called on path=/proc/version
+[0.245411528] HXNU: syscall bootstrap abi=linux-x86_64-bootstrap write=48 openat=3 read=17 close=0 getpid=1 getppid=0 gettid=1 sched_yield=0 clock_gettime=0 monotonic=0.244455596 uname=0 machine=x86_64 exit-captured=yes exit-status=17
+HXNU: ghost syscall write() compatibility smoke
+[0.250140794] DEBUG: vfs::read called on path=/proc/version
+[0.251871728] HXNU: syscall bootstrap abi=ghost-bootstrap write=48 open=3 read=17 close=0 getpid=1 gettid=1 yield=0 uptime-ns=251180161 uname=0 machine=x86_64 exit-captured=yes exit-status=19
+HXNU: native syscall log_write() bootstrap smoke
+[0.255605657] DEBUG: vfs::read called on path=/proc/version
+[0.256923893] HXNU: syscall bootstrap abi=hxnu-native-bootstrap log_write=49 open=3 read=17 close=0 process_self=1 thread_self=1 sched_yield=0 uptime-ns=256681136 abi-version=0x10000 exit-captured=yes exit-status=23
+HXNU: int 0x80 linux syscall self-test
+[0.261511782] DEBUG: vfs::read called on path=/proc/version
+[0.262676283] DEBUG: vfs::read called on path=/proc/version
+[0.263750948] DEBUG: vfs::read called on path=/proc/version
+[0.264940757] HXNU: syscall entry self-test int=0x80 linux_write=39 linux_openat=3 linux_read=17 linux_close=0 linux_getpid=1 ghost_open=3 ghost_read=17 ghost_close=0 ghost_gettid=1 hxnu_open=3 hxnu_read=17 hxnu_close=0 hxnu_abi_version=0x10000
+[0.268626623] DEBUG: vfs::read called on path=/
+[0.269858390] HXNU: vfs preview root=dev initrd proc
+[0.270712683] DEBUG: vfs::read called on path=/proc/version
+[0.271893390] HXNU: procfs preview version=HXNU 2608 x86_64
+[0.272849951] DEBUG: vfs::read called on path=/proc/uptime
+[0.274098553] HXNU: procfs preview uptime=0.274052636 0.274052636
+[0.275834815] DEBUG: vfs::read called on path=/proc/schedstat
+[0.277236079] HXNU: procfs preview schedstat=threads 4
+[0.278087634] DEBUG: vfs::read called on path=/dev
+[0.280693618] HXNU: devfs preview root=console
+[0.281435838] DEBUG: vfs::read called on path=/initrd
+[0.282572256] DEBUG: initrd::read called on path=/initrd
+[0.284930525] HXNU: initrd preview root=boot
+[0.285632711] DEBUG: vfs::read called on path=/boot
+[0.286448709] DEBUG: vfs::read called on path=/dev/console
+[0.287679440] HXNU: devfs preview console=path /dev/console
+[0.288441307] HXNU: Rust kernel skeleton online
+heterexec initialized via HXNU
+HPS: Found shared buffer
+HXNU: stress_test_hps_hook triggered!
+[0.290733531] HXNU: HPS_HOOK_CALLED=1
+qemu-system-x86_64: terminating on signal 15 from pid 977485 (timeout)

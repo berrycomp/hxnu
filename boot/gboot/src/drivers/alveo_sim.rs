@@ -1,3 +1,4 @@
+// TCOL / HPL (HXNU Public License)
 // TCOL-COM (Tile Conservative Open License - Commercial IP)
 // This file contains hardware IP simulation logic governed by the TCOL-COM license.
 
