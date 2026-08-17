@@ -6,12 +6,12 @@ This Turkish Conservative Open License ("TCOL" or "License") is a custom, patent
 By exercising any rights granted under this License, you (the "Licensee") accept and agree to be bound by its terms and conditions.
 
 ## 1. DEFINITIONS
-1.1. **"BerryComp Labs"** refers to the original creators, licensors, and right-holders of this software ecosystem.
+1.1. **"Middle Eastern Calculation Machinary Ltd"** refers to the original creators, licensors, and right-holders of this software ecosystem.
 1.2. **"Chief Architect"** refers to Efe İlhan Yüce, the original architect and visionary of the software.
 1.3. **"Covered Software"** refers to the original source code, any modifications, or any compiled binaries distributed under this License, including but not limited to the HXNU kernel, HPS, HFS, SECinter, LCL, and related modules.
-1.4. **"Proprietary Technologies"** specifically refers to BerryComp's patented or proprietary methodologies, including but not limited to the "Ray-Tree Paradigm", the "MaRTix Core" acceleration mechanisms, and the "SXRC" (Lossless Entropy Routing) algorithms.
+1.4. **"Proprietary Technologies"** specifically refers to Middle Eastern Calculation Machinary Ltd's patented or proprietary methodologies, including but not limited to the "Ray-Tree Paradigm", the "MaRTix Core" acceleration mechanisms, and the "SXRC" (Lossless Entropy Routing) algorithms.
 1.5. **"Modification"** means any alteration, addition, or deletion to the Covered Software in source code or binary form.
-1.6. **"Contributor"** means BerryComp Labs and any individual or legal entity that creates, contributes to the creation of, or modifies the Covered Software.
+1.6. **"Contributor"** means Middle Eastern Calculation Machinary Ltd and any individual or legal entity that creates, contributes to the creation of, or modifies the Covered Software.
 1.7. **"Larger Work"** means a work that combines Covered Software with other material, in a separate file or files, that is not governed by the terms of this License.
 1.8. **"Distribution"** means any act of transferring, lending, renting, sharing, or otherwise making the Covered Software or Modifications available to third parties.
 
@@ -22,9 +22,9 @@ b) Distribute the Covered Software or your Modifications, in Source Code or Exec
 c) Create Larger Works incorporating the Covered Software.
 
 ## 3. GRANT OF PATENT LICENSE & BERRYCOMP EXCLUSIVITY
-The Covered Software intricately incorporates BerryComp Labs' Proprietary Technologies. 
+The Covered Software intricately incorporates Middle Eastern Calculation Machinary Ltd' Proprietary Technologies. 
 3.1. **Patent Grant:** Subject to the strict limitations in Section 3.2, each Contributor grants You a worldwide, royalty-free, non-exclusive, revocable patent license to make, use, sell, offer for sale, and import the Covered Software.
-3.2. **Commercial Exploitation Restriction:** Despite the aforementioned grant, the direct commercial exploitation, monetization, or standalone offering of BerryComp's Proprietary Technologies (specifically the "Ray-Tree Paradigm" and "SXRC" entropy routing algorithms) is STRICTLY PROHIBITED without explicit, written prior permission and a separate commercial licensing agreement from BerryComp Labs.
+3.2. **Commercial Exploitation Restriction:** Despite the aforementioned grant, the direct commercial exploitation, monetization, or standalone offering of Middle Eastern Calculation Machinary Ltd's Proprietary Technologies (specifically the "Ray-Tree Paradigm" and "SXRC" entropy routing algorithms) is STRICTLY PROHIBITED without explicit, written prior permission and a separate commercial licensing agreement from Middle Eastern Calculation Machinary Ltd.
 3.3. **Patent Retaliation:** If You institute patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Covered Software or Proprietary Technologies constitute direct or contributory patent infringement, any patent licenses granted to You under this License shall terminate immediately as of the date such litigation is filed.
 
 ## 4. WEAK COPYLEFT (FILE-BASED OPEN SOURCE)
@@ -36,7 +36,7 @@ The Covered Software intricately incorporates BerryComp Labs' Proprietary Techno
 Any Distribution of the Covered Software, whether in source, binary, modified, or unmodified form, MUST include clear and prominent attribution.
 5.1. **Preservation of Notices:** You must ensure that all copyright notices, patent notices, trademark notices, and attribution notices present in the Source Code form of the Covered Software are retained intact.
 5.2. **User Interface / End-User Attribution:** Any user interface, documentation, splash screen, or "About" screen of a product utilizing the Covered Software MUST explicitly display the following text: 
-   "This software incorporates components of the Neonix/HXNU Ecosystem, originally designed by the Chief Architect at BerryComp Labs."
+   "This software incorporates components of the Neonix/HXNU Ecosystem, originally designed by the Chief Architect at Middle Eastern Calculation Machinary Ltd."
 5.3. **Binary Distribution:** If You distribute the Covered Software in Executable form, You must include a copy of this License and the attribution notice in the documentation or other materials provided with the distribution.
 
 ## 6. ZERO-TRUST ARCHITECTURE, INTEGRITY, AND PROHIBITION OF BACKDOORS
@@ -46,7 +46,7 @@ The Neonix/HXNU Ecosystem is strictly designed under a deterministic, zero-trust
    i. **TCK Article 243:** Unauthorized Access to Information Systems (Bilişim sistemine girme).
    ii. **TCK Article 244:** Interfering with Systems, Spoiling, Destroying, or Changing Data (Sistemi engelleme, bozma, verileri yok etme veya değiştirme).
    iii. **TCK Article 245/A:** Prohibited Devices or Programs (Yasak cihaz veya programlar).
-6.3. **Prosecution and Civil Action:** BerryComp Labs, the Chief Architect, or any affected party reserves the unalienable right to immediately initiate criminal prosecution under the aforementioned TCK articles, alongside severe civil lawsuits for damages, against any entity or individual discovered to have intentionally compromised the deterministic integrity of the Covered Software. Ignorance of this clause shall not be accepted as a valid legal defense.
+6.3. **Prosecution and Civil Action:** Middle Eastern Calculation Machinary Ltd, the Chief Architect, or any affected party reserves the unalienable right to immediately initiate criminal prosecution under the aforementioned TCK articles, alongside severe civil lawsuits for damages, against any entity or individual discovered to have intentionally compromised the deterministic integrity of the Covered Software. Ignorance of this clause shall not be accepted as a valid legal defense.
 
 ## 7. DATA PRIVACY AND TELEMETRY
 7.1. **KVKK Compliance:** Any collection, processing, transmission, or storage of telemetry, hardware usage metrics, or user data derived from or facilitated by the Covered Software must strictly comply with the Turkish Personal Data Protection Law (Kişisel Verilerin Korunması Kanunu - KVKK) No. 6698, as well as applicable international equivalents (e.g., GDPR).
@@ -57,7 +57,7 @@ The Neonix/HXNU Ecosystem is strictly designed under a deterministic, zero-trust
 8.2. **Risk Assumption:** You are solely responsible for determining the appropriateness of using or redistributing the Covered Software and assume any risks associated with Your exercise of permissions under this License. The entire risk as to the quality and performance of the Covered Software is with You.
 
 ## 9. LIMITATION OF LIABILITY
-9.1. **Exclusion of Damages:** Under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall BerryComp Labs, the Chief Architect, or any Contributor be liable to You for damages.
+9.1. **Exclusion of Damages:** Under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall Middle Eastern Calculation Machinary Ltd, the Chief Architect, or any Contributor be liable to You for damages.
 9.2. **Scope of Exclusion:** This limitation includes any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this License or out of the use or inability to use the Covered Software (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, hardware degradation, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
 
 ## 10. GOVERNING LAW AND JURISDICTION

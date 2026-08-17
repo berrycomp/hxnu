@@ -66,7 +66,7 @@ HXNU native syscall ABI'yi (`HxSYS_*`) kullanacak.
 
 ## nxutils Roadmap
 
-1. **Fork**: rustybox MIT → `nxutils` repo (BerryComp Labs)
+1. **Fork**: rustybox MIT → `nxutils` repo (Middle Eastern Calculation Machinary Ltd)
 2. **Lisans**: TCOL (MIT attribution header korunur)
 3. **Syscall katmanı**: `src/syscall.rs` — doğrudan HxSYS_*
 4. **İlk araçlar**: sh, cat, ls, echo, pwd, play
