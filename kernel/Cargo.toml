@@ -14,4 +14,5 @@ power-reset-self-test = []
 heterexec-self-test = []
 
 [dependencies]
-hps = { package = "heterexec", path = "../../heterexec" }
+# hps: provided via #[path] include in main.rs; see docs. Dependency removed to
+# eliminate a duplicate-symbol collision that --allow-multiple-definition was masking.

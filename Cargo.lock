@@ -7,12 +7,5 @@ name = "gboot"
 version = "0.1.0"
 
 [[package]]
-name = "heterexec"
-version = "0.1.0"
-
-[[package]]
 name = "hxnu-kernel"
 version = "2608.0.0-rc.1"
-dependencies = [
- "heterexec",
-]

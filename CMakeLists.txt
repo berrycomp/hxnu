@@ -20,35 +20,165 @@ else()
     set(RUST_COMPILER "rustc")
 endif()
 
-# Kernel Target Definition
-set(KERNEL_TARGET "x86_64-unknown-none")
-set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/linker.ld")
+# -----------------------------------------------------------------------------
+# Toolchain pin.
+#
+# rust-toolchain.toml only applies inside the source tree. CMake invokes rustc
+# from the build directory, where rustup falls back to the default toolchain --
+# stable -- and every #![feature] then fails with E0554. Pin it explicitly for
+# every rustc invocation below.
+# -----------------------------------------------------------------------------
+set(HXNU_RUST_TOOLCHAIN "nightly-2026-03-20" CACHE STRING "rustup toolchain used for all rustc calls")
+set(RUSTC_ENV ${CMAKE_COMMAND} -E env "RUSTUP_TOOLCHAIN=${HXNU_RUST_TOOLCHAIN}")
 
-# Compiling the Core Kernel (Bypassing Cargo)
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
-    COMMAND ${RUST_COMPILER} 
-        --edition 2021 
-        --target ${KERNEL_TARGET} 
-        --crate-type staticlib 
-        -C opt-level=3 
-        -C panic=abort
-        -C relocation-model=static
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs 
-        -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs
-    COMMENT "Compiling: HXNU Kernel (Cargo bypassed, absolute memory linker active)."
+# Kernel target: the HXNU custom target spec, not the stock triple.
+set(KERNEL_TARGET_SPEC "${CMAKE_CURRENT_SOURCE_DIR}/x86_64-hxnu-none.json")
+set(KERNEL_TARGET_NAME "x86_64-hxnu-none")
+set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/kernel/linker/x86_64.ld")
+
+# Flags shared by every rustc call. codegen-units=1 is what makes the build
+# byte-reproducible; strip=debuginfo is what keeps the image at parity with the
+# old cargo output (552 KB rather than 1.4 MB). Do not change either casually.
+set(HXNU_RUSTFLAGS
+    -C opt-level=s
+    -C codegen-units=1
+    -C panic=abort
+    -C strip=debuginfo
 )
 
-add_custom_target(hxnu_kernel DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o)
+# -----------------------------------------------------------------------------
+# Stage 1: sysroot.
+#
+# A custom target spec has no precompiled core, so core, compiler_builtins and
+# alloc are built for it here. This is the work `cargo -Z build-std` used to do.
+# Built once and reused; delete the build directory to force a rebuild.
+# -----------------------------------------------------------------------------
+set(HXNU_SYSROOT "${CMAKE_CURRENT_BINARY_DIR}/sysroot")
+set(HXNU_SYSROOT_LIB "${HXNU_SYSROOT}/lib/rustlib/${KERNEL_TARGET_NAME}/lib")
 
-# Post-Build Hex / ELF Generation for G-Boot
-# (This step links the object into the final immutable executable)
-add_custom_command(
-    TARGET hxnu_kernel POST_BUILD
-    COMMAND ld -n -T ${LINKER_SCRIPT} -o ${CMAKE_CURRENT_BINARY_DIR}/hxnu.elf ${CMAKE_CURRENT_BINARY_DIR}/hxnu_kernel.o
-    COMMENT "Linking: G-Boot Kexec Sequential Memory Layout Applied."
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -E env "RUSTUP_TOOLCHAIN=${HXNU_RUST_TOOLCHAIN}" rustc --print sysroot
+    OUTPUT_VARIABLE RUST_SYSROOT OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+set(RUST_LIB_SRC "${RUST_SYSROOT}/lib/rustlib/src/rust/library")
+
+if(NOT EXISTS "${RUST_LIB_SRC}/core/src/lib.rs")
+    message(FATAL_ERROR
+        "rust-src component missing. Install it with:\n"
+        "  rustup component add rust-src --toolchain ${HXNU_RUST_TOOLCHAIN}")
+endif()
+
+set(SYSROOT_CORE  "${HXNU_SYSROOT_LIB}/libcore.rlib")
+set(SYSROOT_CB    "${HXNU_SYSROOT_LIB}/libcompiler_builtins.rlib")
+set(SYSROOT_ALLOC "${HXNU_SYSROOT_LIB}/liballoc.rlib")
+
+add_custom_command(
+    OUTPUT ${SYSROOT_CORE}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${HXNU_SYSROOT_LIB}
+    COMMAND ${RUSTC_ENV} ${RUST_COMPILER} -Zunstable-options --edition 2024
+        --crate-type rlib --crate-name core --target ${KERNEL_TARGET_SPEC}
+        ${HXNU_RUSTFLAGS}
+        ${RUST_LIB_SRC}/core/src/lib.rs -o ${SYSROOT_CORE}
+    COMMENT "Sysroot 1/3: core (${KERNEL_TARGET_NAME})"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT ${SYSROOT_CB}
+    COMMAND ${RUSTC_ENV} ${RUST_COMPILER} -Zunstable-options --edition 2024
+        --crate-type rlib --crate-name compiler_builtins --target ${KERNEL_TARGET_SPEC}
+        --cfg "feature=\"compiler-builtins\"" --cfg "feature=\"mem\""
+        --extern core=${SYSROOT_CORE}
+        ${HXNU_RUSTFLAGS}
+        ${RUST_LIB_SRC}/compiler-builtins/compiler-builtins/src/lib.rs -o ${SYSROOT_CB}
+    DEPENDS ${SYSROOT_CORE}
+    COMMENT "Sysroot 2/3: compiler_builtins (mem intrinsics)"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT ${SYSROOT_ALLOC}
+    COMMAND ${RUSTC_ENV} ${RUST_COMPILER} -Zunstable-options --edition 2024
+        --crate-type rlib --crate-name alloc --target ${KERNEL_TARGET_SPEC}
+        --extern core=${SYSROOT_CORE} --extern compiler_builtins=${SYSROOT_CB}
+        ${HXNU_RUSTFLAGS}
+        ${RUST_LIB_SRC}/alloc/src/lib.rs -o ${SYSROOT_ALLOC}
+    DEPENDS ${SYSROOT_CORE} ${SYSROOT_CB}
+    COMMENT "Sysroot 3/3: alloc"
+    VERBATIM
+)
+
+add_custom_target(hxnu_sysroot DEPENDS ${SYSROOT_CORE} ${SYSROOT_CB} ${SYSROOT_ALLOC})
+
+# -----------------------------------------------------------------------------
+# Stage 2: AP trampoline.
+#
+# ap_boot.rs does include_bytes!(concat!(env!("OUT_DIR"), "/ap_trampoline.bin")),
+# which cargo's build.rs used to satisfy. Without cargo, OUT_DIR must be set and
+# the blob placed there by hand. Same yasm-or-prebuilt fallback build.rs had.
+# -----------------------------------------------------------------------------
+set(AP_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/kernel-out")
+set(AP_BLOB "${AP_OUT_DIR}/ap_trampoline.bin")
+set(AP_ASM "${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/arch/x86_64/ap_trampoline.asm")
+set(AP_PREBUILT "${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/arch/x86_64/ap_trampoline.bin")
+
+find_program(YASM_BIN yasm)
+if(YASM_BIN)
+    add_custom_command(
+        OUTPUT ${AP_BLOB}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AP_OUT_DIR}
+        COMMAND ${YASM_BIN} -f bin -o ${AP_BLOB} ${AP_ASM}
+        DEPENDS ${AP_ASM}
+        COMMENT "Assembling: AP trampoline (yasm)"
+        VERBATIM
+    )
+else()
+    message(STATUS "yasm not found -- using the prebuilt AP trampoline blob")
+    add_custom_command(
+        OUTPUT ${AP_BLOB}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AP_OUT_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AP_PREBUILT} ${AP_BLOB}
+        DEPENDS ${AP_PREBUILT}
+        COMMENT "Staging: AP trampoline (prebuilt blob, yasm absent)"
+        VERBATIM
+    )
+endif()
+
+add_custom_target(ap_trampoline DEPENDS ${AP_BLOB})
+
+# -----------------------------------------------------------------------------
+# Stage 3: the kernel.
+#
+# rustc links directly against the linker script; there is no separate `ld`
+# step. Producing an object and linking it afterwards with GNU ld -- what this
+# file used to do -- bypassed the script that fixes the boot layout.
+# -----------------------------------------------------------------------------
+set(KERNEL_ELF "${CMAKE_CURRENT_BINARY_DIR}/hxnu-kernel")
+
+file(GLOB_RECURSE KERNEL_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/*.rs")
+
+add_custom_command(
+    OUTPUT ${KERNEL_ELF}
+    COMMAND ${CMAKE_COMMAND} -E env
+        "RUSTUP_TOOLCHAIN=${HXNU_RUST_TOOLCHAIN}"
+        "OUT_DIR=${AP_OUT_DIR}"
+        ${RUST_COMPILER} -Zunstable-options --edition 2024
+        --target ${KERNEL_TARGET_SPEC} --sysroot ${HXNU_SYSROOT}
+        --crate-name hxnu_kernel --crate-type bin
+        ${HXNU_RUSTFLAGS}
+        -C force-frame-pointers=yes
+        -C link-arg=-T${LINKER_SCRIPT}
+        -C link-arg=--no-pie
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernel/src/main.rs -o ${KERNEL_ELF}
+    DEPENDS ${KERNEL_SOURCES} ${LINKER_SCRIPT} ${KERNEL_TARGET_SPEC}
+            ${SYSROOT_CORE} ${SYSROOT_CB} ${SYSROOT_ALLOC} ${AP_BLOB}
+    COMMENT "Compiling: HXNU kernel (${KERNEL_TARGET_NAME}, cargo-free)"
+    VERBATIM
+)
+
+add_custom_target(hxnu_kernel ALL DEPENDS ${KERNEL_ELF})
+add_dependencies(hxnu_kernel hxnu_sysroot ap_trampoline)
 
 # =============================================================================
 # G-Boot AArch64 Bare-Metal Payload Target (RK3588S / aarch64-hxnu-none)
@@ -186,3 +316,24 @@ add_custom_command(
 )
 
 add_custom_target(heterexec ALL DEPENDS ${HETEREXEC_OUTPUT})
+
+# =============================================================================
+# Sequential ordering.
+#
+# Required, not a preference. Three reasons, all specific to this tree:
+#
+#   1. heterexec/src/lib.rs is compiled both into the kernel (via #[path]) and
+#      standalone as heterexec.hxext. Concurrent builds contend on the same
+#      target directory and can read a source file mid-write.
+#   2. The ABI between those two artifacts carries no version check, so a
+#      deterministic order is what keeps them consistent.
+#   3. Each stage embeds the previous one: initrd packs heterexec, the ISO packs
+#      the initrd and the kernel. Built out of order, an image can ship a stale
+#      module.
+#
+# Build with -j1. Do not raise codegen-units to compensate; that is what makes
+# the output byte-reproducible.
+# =============================================================================
+
+add_dependencies(heterexec hxnu_kernel)
+add_dependencies(initrd heterexec)
