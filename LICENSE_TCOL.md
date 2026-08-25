@@ -1,7 +1,7 @@
 # Turkish Conservative Open License (TCOL)
 Version 1.1
 
-This Turkish Conservative Open License ("TCOL" or "License") is a custom, patent-fortified, hybrid license combining the file-based copyleft principles of the Mozilla Public License 2.0 (MPL 2.0) and the explicit patent protections of the Apache License 2.0. It is uniquely tailored to govern the Neonix/HXNU Ecosystem and its related proprietary technologies.
+This Turkish Conservative Open License ("TCOL" or "License") is a custom, patent-fortified, hybrid license combining the file-based copyleft principles of the Mozilla Public License 2.0 (MPL 2.0) and the explicit patent protections of the Apache License 2.0. It is uniquely tailored to govern the Covered Software and its related proprietary technologies.
 
 By exercising any rights granted under this License, you (the "Licensee") accept and agree to be bound by its terms and conditions.
 
@@ -36,11 +36,11 @@ The Covered Software intricately incorporates Middle Eastern Calculation Machina
 Any Distribution of the Covered Software, whether in source, binary, modified, or unmodified form, MUST include clear and prominent attribution.
 5.1. **Preservation of Notices:** You must ensure that all copyright notices, patent notices, trademark notices, and attribution notices present in the Source Code form of the Covered Software are retained intact.
 5.2. **User Interface / End-User Attribution:** Any user interface, documentation, splash screen, or "About" screen of a product utilizing the Covered Software MUST explicitly display the following text: 
-   "This software incorporates components of the Neonix/HXNU Ecosystem, originally designed by the Chief Architect at Middle Eastern Calculation Machinary Ltd."
+   "This software incorporates components of the Covered Software, originally designed by the Chief Architect at Middle Eastern Calculation Machinary Ltd."
 5.3. **Binary Distribution:** If You distribute the Covered Software in Executable form, You must include a copy of this License and the attribution notice in the documentation or other materials provided with the distribution.
 
 ## 6. ZERO-TRUST ARCHITECTURE, INTEGRITY, AND PROHIBITION OF BACKDOORS
-The Neonix/HXNU Ecosystem is strictly designed under a deterministic, zero-trust, bare-metal architecture. The security of the HPS and the SECinter layers is paramount.
+The the Covered Software Ecosystem is strictly designed under a deterministic, zero-trust, bare-metal architecture. The security of the HPS and the SECinter layers is paramount.
 6.1. **Prohibition of Malicious Code and Backdoors:** Any Contributor, distributor, or modifier of the Covered Software is strictly prohibited from intentionally introducing backdoors, undocumented remote-access protocols, malicious telemetry, rootkits, or any software logic designed to bypass the SECinter security layer or HPS scheduler firewalls.
 6.2. **Criminal Liability under the Turkish Penal Code (TCK):** The deliberate insertion of such malicious structures, backdoors, or logic bombs into the Covered Software shall be deemed an act of cyber-terrorism and a direct violation of the Turkish Penal Code (Türk Ceza Kanunu - TCK). Specifically, such actions shall be prosecuted under:
    i. **TCK Article 243:** Unauthorized Access to Information Systems (Bilişim sistemine girme).
