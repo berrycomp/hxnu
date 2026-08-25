@@ -1,6 +1,6 @@
 # HXNU
 
-HXNU is the new Rust-based kernel line for Neonix. The old `heartix/kernel` tree taking refferances the legacy reference implementation; new kernel bring-up starts here.
+HXNU is the new Rust-based kernel line for Neonix and Pardus. The old `heartix/kernel` tree taking refferances the legacy reference implementation; new kernel bring-up starts here.
 
 ## Current Scope
 
