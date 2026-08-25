@@ -30,26 +30,50 @@ pub static mut LCL_QUEUE: LclQueue = LclQueue {
     tail: 0,
 };
 
+static LCL_QUEUE_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn lock_lcl() {
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)); }
+    while LCL_QUEUE_LOCK.compare_exchange_weak(false, true, core::sync::atomic::Ordering::Acquire, core::sync::atomic::Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+fn unlock_lcl() {
+    LCL_QUEUE_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)); }
+}
+
 pub fn enqueue_lcl_message(msg: LclMessage) {
+    lock_lcl();
     unsafe {
         LCL_QUEUE.messages[LCL_QUEUE.head] = Some(msg);
         LCL_QUEUE.head = (LCL_QUEUE.head + 1) % 64;
     }
+    unlock_lcl();
 }
 
 pub fn dequeue_lcl_message() -> Option<LclMessage> {
-    unsafe {
+    lock_lcl();
+    let msg = unsafe {
         if LCL_QUEUE.head == LCL_QUEUE.tail {
             if LCL_QUEUE.messages[LCL_QUEUE.tail].is_none() {
-                return None;
+                None
+            } else {
+                let m = LCL_QUEUE.messages[LCL_QUEUE.tail].take();
+                LCL_QUEUE.tail = (LCL_QUEUE.tail + 1) % 64;
+                m
             }
+        } else {
+            let m = LCL_QUEUE.messages[LCL_QUEUE.tail].take();
+            if m.is_some() {
+                LCL_QUEUE.tail = (LCL_QUEUE.tail + 1) % 64;
+            }
+            m
         }
-        let msg = LCL_QUEUE.messages[LCL_QUEUE.tail].take();
-        if msg.is_some() {
-            LCL_QUEUE.tail = (LCL_QUEUE.tail + 1) % 64;
-        }
-        msg
-    }
+    };
+    unlock_lcl();
+    msg
 }
 
 use core::cmp::min;
@@ -157,6 +181,7 @@ const EINVAL: i64 = 22;
 const ENOSYS: i64 = 38;
 const ERANGE: i64 = 34;
 const ENOENT: i64 = 2;
+const ENOMEM: i64 = 12;
 const EISDIR: i64 = 21;
 const EMFILE: i64 = 24;
 
@@ -311,25 +336,40 @@ const MAX_SYSTEM_FILES: usize = 128;
 
 #[derive(Clone)]
 pub struct OpenFile {
+    pub is_used: bool,
     pub ref_count: usize,
     pub path: [u8; 128],
     pub path_len: usize,
     pub offset: usize,
-    pub content: [u8; 4096],
+    pub content: [u8; 65536],
     pub content_len: usize,
 }
 
-struct GlobalOpenFileTable(UnsafeCell<[Option<OpenFile>; MAX_SYSTEM_FILES]>);
+impl OpenFile {
+    const fn empty() -> Self {
+        Self {
+            is_used: false,
+            ref_count: 0,
+            path: [0; 128],
+            path_len: 0,
+            offset: 0,
+            content: [0; 65536],
+            content_len: 0,
+        }
+    }
+}
+
+struct GlobalOpenFileTable(UnsafeCell<[OpenFile; MAX_SYSTEM_FILES]>);
 
 unsafe impl Sync for GlobalOpenFileTable {}
 
 impl GlobalOpenFileTable {
     const fn new() -> Self {
-        const INIT_OPT: Option<OpenFile> = None;
+        const INIT_OPT: OpenFile = OpenFile::empty();
         Self(UnsafeCell::new([INIT_OPT; MAX_SYSTEM_FILES]))
     }
 
-    fn get(&self) -> *mut [Option<OpenFile>; MAX_SYSTEM_FILES] {
+    fn get(&self) -> *mut [OpenFile; MAX_SYSTEM_FILES] {
         self.0.get()
     }
 }
@@ -496,7 +536,10 @@ pub mod posix_compat {
                 let new_page = (new_brk + 4095) & !4095;
 
                 if new_page > old_page {
-                    let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+                    let hhdm_offset = match crate::limine::hhdm_offset() {
+                        Some(o) => o,
+                        None => return SyscallOutcome::errno(super::ENOMEM),
+                    };
                     let current_pml4 = crate::arch::x86_64::read_cr3();
                     let mut page = old_page;
                     while page < new_page {
@@ -538,7 +581,10 @@ pub mod posix_compat {
                 v
             };
 
-            let hhdm_offset = crate::limine::hhdm_offset().unwrap();
+            let hhdm_offset = match crate::limine::hhdm_offset() {
+                        Some(o) => o,
+                        None => return SyscallOutcome::errno(super::ENOMEM),
+                    };
             let current_pml4 = crate::arch::x86_64::read_cr3();
 
             let num_pages = aligned_len / 4096;
@@ -603,10 +649,8 @@ pub mod posix_compat {
         };
 
         let global_table = unsafe { &mut *FILE_TABLE.get() };
-        let open = match &mut global_table[global_idx] {
-            Some(f) => f,
-            None => return SyscallOutcome::errno(EBADF),
-        };
+        let open = &mut global_table[global_idx];
+        if !open.is_used { return SyscallOutcome::errno(EBADF); }
 
         if open.offset >= open.content_len {
             return SyscallOutcome::success(0);
@@ -716,15 +760,13 @@ pub mod posix_compat {
             None => return SyscallOutcome::errno(super::EBADF),
         };
         let global_table = unsafe { &mut *super::FILE_TABLE.get() };
-        let open = match &mut global_table[global_idx] {
-            Some(f) => f,
-            None => return SyscallOutcome::errno(super::EBADF),
-        };
+        let open = &mut global_table[global_idx];
+        if !open.is_used { return SyscallOutcome::errno(super::EBADF); }
 
         let new_offset = match whence {
             0 => offset, // SEEK_SET
             1 => open.offset as i64 + offset, // SEEK_CUR
-            2 => open.content.len() as i64 + offset, // SEEK_END
+            2 => open.content_len as i64 + offset, // SEEK_END
             _ => return SyscallOutcome::errno(super::EINVAL),
         };
 
@@ -742,7 +784,8 @@ pub mod posix_compat {
             return SyscallOutcome::errno(super::EBADF);
         }
         let table = crate::sched::process_fd_table();
-        if table[fd as usize].is_none() {
+        let global_table = unsafe { &mut *super::FILE_TABLE.get() };
+        if !global_table[table[fd as usize].unwrap_or(9999)].is_used {
             return SyscallOutcome::errno(super::EBADF);
         }
         SyscallOutcome::success(0)
@@ -759,7 +802,7 @@ pub mod posix_compat {
         let mut w_fd = -1;
 
         for i in 0..super::MAX_SYSTEM_FILES {
-            if global_table[i].is_none() {
+            if !global_table[i].is_used {
                 if r_idx == -1 {
                     r_idx = i as i32;
                 } else if w_idx == -1 {
@@ -789,12 +832,26 @@ pub mod posix_compat {
             return SyscallOutcome::errno(super::EMFILE);
         }
 
-        global_table[r_idx as usize] = Some(super::OpenFile {
-            ref_count: 1, path: { let mut p = [0u8; 128]; let s = b"pipe:read"; p[..s.len()].copy_from_slice(s); p }, path_len: 9, offset: 0, content: [0u8; 4096], content_len: 0
-        });
-        global_table[w_idx as usize] = Some(super::OpenFile {
-            ref_count: 1, path: { let mut p = [0u8; 128]; let s = b"pipe:write"; p[..s.len()].copy_from_slice(s); p }, path_len: 10, offset: 0, content: [0u8; 4096], content_len: 0
-        });
+        {
+            let f = &mut global_table[r_idx as usize];
+            f.is_used = true;
+            f.ref_count = 1;
+            let s = b"pipe:read";
+            f.path[..s.len()].copy_from_slice(s);
+            f.path_len = s.len();
+            f.offset = 0;
+            f.content_len = 0;
+        }
+        {
+            let f = &mut global_table[w_idx as usize];
+            f.is_used = true;
+            f.ref_count = 1;
+            let s = b"pipe:write";
+            f.path[..s.len()].copy_from_slice(s);
+            f.path_len = s.len();
+            f.offset = 0;
+            f.content_len = 0;
+        }
 
         table[r_fd as usize] = Some(r_idx as usize);
         table[w_fd as usize] = Some(w_idx as usize);
@@ -831,7 +888,8 @@ pub mod posix_compat {
 
         table[newfd as usize] = Some(global_idx);
         let global_table = unsafe { &mut *super::FILE_TABLE.get() };
-        if let Some(open) = &mut global_table[global_idx] {
+        let open = &mut global_table[global_idx];
+        if open.is_used {
             open.ref_count += 1;
         }
         crate::sched::set_process_fd_table(table);
@@ -857,18 +915,20 @@ pub mod posix_compat {
 
         if let Some(old_g_idx) = table[newfd as usize] {
             let global_table = unsafe { &mut *super::FILE_TABLE.get() };
-            if let Some(open) = &mut global_table[old_g_idx] {
+            let open = &mut global_table[old_g_idx];
+            if open.is_used {
                 if open.ref_count > 1 {
                     open.ref_count -= 1;
                 } else {
-                    global_table[old_g_idx] = None;
+                    open.is_used = false;
                 }
             }
         }
 
         table[newfd as usize] = Some(global_idx);
         let global_table = unsafe { &mut *super::FILE_TABLE.get() };
-        if let Some(open) = &mut global_table[global_idx] {
+        let open = &mut global_table[global_idx];
+        if open.is_used {
             open.ref_count += 1;
         }
         crate::sched::set_process_fd_table(table);
@@ -1522,15 +1582,17 @@ fn alloc_open_file(path: &str, content: &[u8]) -> Result<i64, i64> {
     let global_table = unsafe { &mut *FILE_TABLE.get() };
     let mut global_idx = -1;
     for i in 0..MAX_SYSTEM_FILES {
-        if global_table[i].is_none() {
-            global_table[i] = Some(OpenFile {
-                ref_count: 1,
-                path: { let mut b = [0u8; 128]; let l = core::cmp::min(path.len(), 128); b[..l].copy_from_slice(&path.as_bytes()[..l]); b },
-                path_len: core::cmp::min(path.len(), 128),
-                offset: 0,
-                content: { let mut b = [0u8; 4096]; let l = core::cmp::min(content.len(), 4096); b[..l].copy_from_slice(&content[..l]); b },
-                content_len: core::cmp::min(content.len(), 4096),
-            });
+        if !global_table[i].is_used {
+            let f = &mut global_table[i];
+            f.is_used = true;
+            f.ref_count = 1;
+            let p_l = core::cmp::min(path.len(), 128);
+            f.path[..p_l].copy_from_slice(&path.as_bytes()[..p_l]);
+            f.path_len = p_l;
+            f.offset = 0;
+            let c_l = core::cmp::min(content.len(), 65536);
+            f.content[..c_l].copy_from_slice(&content[..c_l]);
+            f.content_len = c_l;
             global_idx = i as i32;
             break;
         }
@@ -1552,7 +1614,8 @@ fn read_open_file(fd: i32, destination_ptr: usize, count: usize) -> Result<i64, 
     let global_idx = table[fd as usize].ok_or(EBADF)?;
     
     let global_table = unsafe { &mut *FILE_TABLE.get() };
-    let open = global_table[global_idx].as_mut().ok_or(EBADF)?;
+    let open = &mut global_table[global_idx];
+    if !open.is_used { return Err(EBADF); }
     
     if count == 0 {
         return Ok(0);
@@ -1579,11 +1642,12 @@ fn close_open_file(fd: i32) -> Result<i64, i64> {
     sched::set_process_fd_table(table);
     
     let global_table = unsafe { &mut *FILE_TABLE.get() };
-    if let Some(open) = &mut global_table[global_idx] {
+    let open = &mut global_table[global_idx];
+    if open.is_used {
         if open.ref_count > 1 {
             open.ref_count -= 1;
         } else {
-            global_table[global_idx] = None;
+            open.is_used = false;
         }
     }
     Ok(0)
@@ -1594,11 +1658,12 @@ fn purge_open_files_for_process(_process_id: u64) {
     for fd in 3..sched::MAX_PROCESS_FDS {
         if let Some(global_idx) = table[fd] {
             let global_table = unsafe { &mut *FILE_TABLE.get() };
-            if let Some(open) = &mut global_table[global_idx] {
+            let open = &mut global_table[global_idx];
+            if open.is_used {
                 if open.ref_count > 1 {
                     open.ref_count -= 1;
                 } else {
-                    global_table[global_idx] = None;
+                    open.is_used = false;
                 }
             }
             table[fd] = None;

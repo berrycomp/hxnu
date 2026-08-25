@@ -27,7 +27,7 @@ qemu-system-x86_64 \
     -drive if=pflash,format=raw,readonly=on,file="${UEFI_CODE}" \
     -drive if=pflash,format=raw,file="${UEFI_VARS}" \
     -drive file=fat:rw:"${ISO_ROOT}",format=raw,media=disk \
-    -no-reboot \
+    -no-reboot -d int -D qemu.log \
     -no-shutdown > test.log 2>&1 &
 
 QEMU_PID=$!

@@ -21,14 +21,6 @@ if [ -d "${SOURCE_DIR}" ]; then
     cp -R "${SOURCE_DIR}/." "${STAGE_DIR}/"
 fi
 
-HETEREXEC_DIR="${ROOT}/../heterexec"
-if [ -d "${HETEREXEC_DIR}" ]; then
-    (cd "${HETEREXEC_DIR}" && cargo build -Z build-std=core --release --target x86_64-unknown-none) || true
-    mkdir -p "${STAGE_DIR}/boot"
-    if [ -f "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" ]; then
-        cp "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" "${STAGE_DIR}/boot/heterexec.hxext"
-    fi
-fi
 
 if "${ROOT}/scripts/build-init-payload.sh"; then
     INIT_PAYLOAD="$("${ROOT}/scripts/build-init-payload.sh" --print-path)"

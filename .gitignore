@@ -1,67 +1,27 @@
-# ============================================================
-# HXNU Micro-Hybrid Kernel — .gitignore
-# TCOL / HPL (HXNU Public License)
-# ============================================================
-
-# ── Rust / Cargo build artifacts ────────────────────────────
-/target/
-**/target/
-kernel/*/target/
-Cargo.lock
-
-# ── Build output (ISO, initrd, staging, sysroot) ────────────
-/build/
-initrd.cpio
-*.iso
-*.cpio
-*.img
-*.bin
-*.elf
-*.o
-
-# ── Vendored dependencies (managed via script) ───────────────
-/vendor/
-
-# ── Agent workspaces & scratch (AI-generated, not source) ───
-/.agents/
-AGENTS.md
-AGENT.md
-prompt_draft.md
-plan_agents_setup.md
-scratch/
-tmp/
-
-# ── Initrd: compiled/staged binaries (built, not source) ────
-initrd/init
-initrd/init_old
-initrd/lcl_daemon
-initrd/liblcl.so
-initrd/test_hello
-initrd/bin/
-
-# ── Logs ────────────────────────────────────────────────────
-*.log
-serial.log
-
-# ── Python cache ─────────────────────────────────────────────
-__pycache__/
-*.pyc
-*.pyo
-
-# ── OS / editor artifacts ────────────────────────────────────
-.DS_Store
-Thumbs.db
+# Build and IDE
+build/
+target/
+.cache/
 .vscode/
-*.swp
-*.swo
-*~
+.idea/
 
-# ── Neonix build output (cross-project) ─────────────────────
-../Neonix/build/
+# Logs and outputs
+*.log
+*.txt
+!CMakeLists.txt
+qemu_output*
+qemu_run*
 
-# ── Test media / driver test assets ──────────────────────────
-test.wav
-test.mp3
-test.ogg
-*.test.wav
-*.test.bin
+# Patch and script files
+*.py
+!scripts/*.py
+*.patch
+
+# Binaries and ISOs
+*.iso
+*.bin
+*.out
+
+# SXRC (To be integrated later)
+*sxrc*
+*SXRC*

@@ -24,14 +24,6 @@ mkdir -p "${ISO_ROOT}/EFI/BOOT"
 cp "${KERNEL_PATH}" "${ISO_ROOT}/boot/kernel"
 cp "${ROOT}/build/initrd.cpio" "${ISO_ROOT}/boot/initrd.cpio"
 
-# Build heterexec and copy to ISO
-HETEREXEC_DIR="${ROOT}/../heterexec"
-if [ -d "${HETEREXEC_DIR}" ]; then
-    (cd "${HETEREXEC_DIR}" && cargo build --release --target x86_64-unknown-none) || true
-    if [ -f "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" ]; then
-        cp "${HETEREXEC_DIR}/target/x86_64-unknown-none/release/heterexec" "${ISO_ROOT}/boot/heterexec.hxext"
-    fi
-fi
 
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/limine.conf"
 cp "${ROOT}/boot/limine.conf" "${ISO_ROOT}/boot/limine/limine.conf"

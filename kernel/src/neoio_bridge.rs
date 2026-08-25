@@ -4,13 +4,12 @@
 /// Provides a zero-copy FFI interface for .hxext kernel modules (like HPS)
 /// to access the internal hardware topology (Flattened Device Tree / ACPI nodes).
 
-use crate::neoio::{NEOIO_MANAGER, SharedTopologyTree};
+use crate::neoio::{NEOIO_MANAGER, NeoDeviceTree};
 
 /// FFI interface for .hxext modules to get a pointer to the shared topology tree.
 /// HPS uses this to discover GPUs, NPUs, and AVX-512 capabilities dynamically.
 #[unsafe(no_mangle)]
-pub extern "C" fn hps_get_topology_tree() -> *const SharedTopologyTree {
-    unsafe {
-        &raw const NEOIO_MANAGER.shared_tree as *const SharedTopologyTree
-    }
+pub extern "C" fn hps_get_topology_tree() -> *const NeoDeviceTree {
+    NEOIO_MANAGER.get_tree_ptr()
 }
+
