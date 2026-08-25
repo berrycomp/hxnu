@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// THOL (Turkish Hybrid Open License)
+// This file is strictly governed by the Turkish Hybrid Open License (THOL).
 #[cfg(test)]
 mod tests {
     use super::*;

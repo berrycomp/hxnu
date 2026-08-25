@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// TCOL v1.1 / HPL (HXNU Public License)
+// THOL (Turkish Hybrid Open License)
+// TCOL v1.1 / HPL (Turkish Hybrid Open License)
 // This file is strictly governed by the Tile Conservative Open License (TCOL v1.1).
 
 //! # Neonix G-Boot Architecture - Rockchip RK3588S AArch64 Bare-Metal Entry Point

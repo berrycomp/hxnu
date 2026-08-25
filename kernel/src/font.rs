@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// THOL (Turkish Hybrid Open License)
+// This file is strictly governed by the Turkish Hybrid Open License (THOL).
 
 /// 5x7 bitmap font patterns for ASCII (0x20..0x7E)
 static BASIC_ASCII: [[u8; 7]; 95] = [

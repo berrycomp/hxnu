@@ -1,5 +1,5 @@
-// TCOL / HPL (HXNU Public License)
-// This file is strictly governed by the HXNU Public License (HPL).
+// THOL (Turkish Hybrid Open License)
+// This file is strictly governed by the Turkish Hybrid Open License (THOL).
 const FNV1A32_OFFSET_BASIS: u32 = 0x811c_9dc5;
 const FNV1A32_PRIME: u32 = 0x0100_0193;
 
